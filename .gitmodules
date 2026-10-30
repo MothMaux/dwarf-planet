@@ -2,10 +2,6 @@
 	path = linux
 	url = https://github.com/analogdevicesinc/linux
 	branch = xlnx/release/v6.12.y-2026r1
-[submodule "hdl"]
-	path = hdl
-	url = https://github.com/analogdevicesinc/hdl
-	branch = hdl_2026_r1
 [submodule "br2-external"]
 	path = br2-external
 	url = https://github.com/analogdevicesinc/br2-external.git
@@ -18,3 +14,6 @@
 	path = buildroot
 	url = https://github.com/analogdevicesinc/buildroot.git
 	branch = adi-2026.02-y
+[submodule "hdl"]
+	path = hdl
+	url = https://github.com/mothmaux/hdl.git
