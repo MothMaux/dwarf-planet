@@ -19,6 +19,9 @@ Firmware License : [![Many Licenses](https://img.shields.io/badge/license-LGPL2+
 
 ```
 
+For errors about `xsct` when building, ensure that Vitis / Vitis Unified XX is installed and sourced. Vitis HLS is not the same.
+For improper usage errors, uninstall the apt package xsct which is a different package for x11
+
 Due to incompatibility between the AMD/Xilinx GCC toolchain supplied with Vivado/Vitis and Buildroot,
 this project uses the Buildroot external toolchain infrastructure with the Arm GNU toolchain
 (arm-none-linux-gnueabihf), which is downloaded and set up automatically during the build.

@@ -98,13 +98,13 @@ build/uboot-env.bin: build/uboot-env.txt
 
 linux/arch/arm/boot/zImage: TOOLCHAIN
 	$(TOOLS_PATH) $(MAKE) -C linux ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) zynq_$(TARGET)_defconfig
-	$(TOOLS_PATH) $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) uImage UIMAGE_LOADADDR=0x8000
+	$(TOOLS_PATH) $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) zImage UIMAGE_LOADADDR=0x8000
 
 
-.PHONY: linux/arch/arm/boot/uImage
+.PHONY: linux/arch/arm/boot/zImage
 
 
-build/zImage: linux/arch/arm/boot/uImage | build
+build/zImage: linux/arch/arm/boot/zImage | build
 	cp $< $@
 
 ### Device Tree ###
@@ -211,7 +211,7 @@ sdimg: build/
 	cp build/sdk/fsbl/Release/fsbl.elf 	$(SDIMGDIR)/fsbl.elf  
 	cp build/sdk/system_top/hw/system_top.bit 	$(SDIMGDIR)/system_top.bit
 	cp build/u-boot.elf 			$(SDIMGDIR)/u-boot.elf
-	cp $(CURDIR)/linux/arch/arm/boot/uImage	$(SDIMGDIR)/uImage
+	cp $(CURDIR)/linux/arch/arm/boot/zImage	$(SDIMGDIR)/zImage
 	cp build/zynq-$(TARGET).dtb 	$(SDIMGDIR)/devicetree.dtb
 	cp build/uboot-env.txt  		$(SDIMGDIR)/uEnv.txt
 	cp build/rootfs.cpio.gz  		$(SDIMGDIR)/ramdisk.image.gz
