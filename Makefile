@@ -32,7 +32,7 @@ $(error "      3] export VIVADO_VERSION=v20xx.x")
 endif
 
 TARGET ?= pluto
-SUPPORTED_TARGETS:=pluto sidekiqz2
+SUPPORTED_TARGETS:=pluto libre nano e200 fishball7010 fishball7020
 
 # Include target specific constants
 -include scripts/$(TARGET).mk
@@ -98,13 +98,13 @@ build/uboot-env.bin: build/uboot-env.txt
 
 linux/arch/arm/boot/zImage: TOOLCHAIN
 	$(TOOLS_PATH) $(MAKE) -C linux ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) zynq_$(TARGET)_defconfig
-	$(TOOLS_PATH) $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) zImage UIMAGE_LOADADDR=0x8000
+	$(TOOLS_PATH) $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) uImage UIMAGE_LOADADDR=0x8000
 
 
-.PHONY: linux/arch/arm/boot/zImage
+.PHONY: linux/arch/arm/boot/uImage
 
 
-build/zImage: linux/arch/arm/boot/zImage | build
+build/zImage: linux/arch/arm/boot/uImage | build
 	cp $< $@
 
 ### Device Tree ###
@@ -187,14 +187,43 @@ build/$(TARGET).dfu: build/$(TARGET).itb
 	$(dfu-suffix-recipe)
 
 clean-build:
+	rm -f $(notdir $(wildcard build/*))
 	rm -rf build/*
+	rm -rf build_sdimg
 
 clean:
 	$(MAKE) -C u-boot clean
 	$(MAKE) -C linux clean
 	test -d $(BUILDROOT_DIR) && $(MAKE) -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) clean || true
 	$(MAKE) -C hdl clean
+	rm -f $(notdir $(wildcard build/*))
 	rm -rf build/*
+	rm -rf build_sdimg
+
+overclock: build/sdk/fsbl/Release/fsbl.elf
+	test -n "$(OVERCLOCK_CPU_MULT)"  # Check environment veriable OVERCLOCK_CPU_MULT for overclock.
+	test -n "$(OVERCLOCK_DDR_MULT)"  # Check environment veriable OVERCLOCK_DDR_MULT for overclock.
+	bash -c "source $(VIVADO_SETTINGS) && ./overclock.sh $(OVERCLOCK_CPU_MULT) $(OVERCLOCK_DDR_MULT)"
+
+SDIMGDIR = $(CURDIR)/build_sdimg
+sdimg: build/
+	mkdir $(SDIMGDIR)
+	cp build/sdk/fsbl/Release/fsbl.elf 	$(SDIMGDIR)/fsbl.elf  
+	cp build/sdk/system_top/hw/system_top.bit 	$(SDIMGDIR)/system_top.bit
+	cp build/u-boot.elf 			$(SDIMGDIR)/u-boot.elf
+	cp $(CURDIR)/linux/arch/arm/boot/uImage	$(SDIMGDIR)/uImage
+	cp build/zynq-$(TARGET).dtb 	$(SDIMGDIR)/devicetree.dtb
+	cp build/uboot-env.txt  		$(SDIMGDIR)/uEnv.txt
+	cp build/rootfs.cpio.gz  		$(SDIMGDIR)/ramdisk.image.gz
+	mkimage -A arm -T ramdisk -C gzip -d $(SDIMGDIR)/ramdisk.image.gz $(SDIMGDIR)/uramdisk.image.gz
+	touch 	$(SDIMGDIR)/boot.bif
+	echo "img : {[bootloader] $(SDIMGDIR)/fsbl.elf  $(SDIMGDIR)/system_top.bit  $(SDIMGDIR)/u-boot.elf}" >  $(SDIMGDIR)/boot.bif
+	bash -c "source $(VIVADO_SETTINGS) && bootgen -image $(SDIMGDIR)/boot.bif -o i $(SDIMGDIR)/BOOT.bin"
+	rm $(SDIMGDIR)/fsbl.elf
+	rm $(SDIMGDIR)/system_top.bit
+	rm $(SDIMGDIR)/u-boot.elf
+	rm $(SDIMGDIR)/ramdisk.image.gz 
+	rm $(SDIMGDIR)/boot.bif
 
 zip-all: $(TARGETS)
 	zip -j build/$(ZIP_ARCHIVE_PREFIX)-fw-$(VERSION).zip $^

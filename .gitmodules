@@ -17,3 +17,4 @@
 [submodule "hdl"]
 	path = hdl
 	url = https://github.com/mothmaux/hdl.git
+	branch = main
