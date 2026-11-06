@@ -2,3 +2,7 @@
 	path = hdl
 	url = https://github.com/mothmaux/hdl.git
 	branch = main
+[submodule "buildroot"]
+	path = buildroot
+	url = https://github.com/mothmaux/buildroot.git
+	branch = master
