@@ -241,6 +241,7 @@ dtb-$(CONFIG_ARCH_ZYNQ) += \
 	zynq-coraz7s.dtb \
 	zynq-m2k.dtb \
 	zynq-pluto-sdr.dtb \
+	zynq-libre-sdr.dtb \
 	zynq-sidekiqz2.dtb \
 	zynq-syzygy-hub.dtb \
 	zynq-topic-miami.dtb \

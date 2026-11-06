@@ -9,6 +9,9 @@
 #ifndef __CONFIG_ZYNQ_COMMON_H
 #define __CONFIG_ZYNQ_COMMON_H
 
+/* TODO Define LibreSDR PS Clock Frequency to 50MHz in dts */
+// #define CONFIG_ZYNQ_PS_CLK_FREQ	50000000UL
+
 /* Cache options */
 #ifndef CONFIG_SYS_L2CACHE_OFF
 # define CFG_SYS_PL310_BASE		0xf8f02000
