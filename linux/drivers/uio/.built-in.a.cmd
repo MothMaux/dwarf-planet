@@ -1,0 +1,1 @@
+savedcmd_drivers/uio/built-in.a := rm -f drivers/uio/built-in.a;  printf "drivers/uio/%s " uio_core.o uio_dmabuf.o uio_pdrv_genirq.o uio_dmem_genirq.o uio_xilinx_apm.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/uio/built-in.a

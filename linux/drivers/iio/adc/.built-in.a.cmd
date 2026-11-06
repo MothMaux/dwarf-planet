@@ -1,0 +1,1 @@
+savedcmd_drivers/iio/adc/built-in.a := rm -f drivers/iio/adc/built-in.a;  printf "drivers/iio/adc/%s " adm1177.o cf_axi_adc_core.o ad9361.o ad9361_conv.o admc_adc.o admc_speed.o admc_ctrl.o ad_adc.o xilinx-xadc-core.o xilinx-xadc-events.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/iio/adc/built-in.a

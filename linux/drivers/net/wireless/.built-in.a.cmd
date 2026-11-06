@@ -1,0 +1,1 @@
+savedcmd_drivers/net/wireless/built-in.a := rm -f drivers/net/wireless/built-in.a;  printf "drivers/net/wireless/%s " microchip/built-in.a purelifi/built-in.a quantenna/built-in.a ralink/built-in.a realtek/built-in.a silabs/built-in.a virtual/built-in.a | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/net/wireless/built-in.a

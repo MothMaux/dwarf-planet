@@ -1,0 +1,1 @@
+savedcmd_drivers/iio/jesd204/built-in.a := rm -f drivers/iio/jesd204/built-in.a;  printf "drivers/iio/jesd204/%s " adi-iio-fakedev.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/iio/jesd204/built-in.a

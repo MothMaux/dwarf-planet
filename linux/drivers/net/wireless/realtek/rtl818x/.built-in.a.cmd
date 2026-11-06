@@ -1,0 +1,1 @@
+savedcmd_drivers/net/wireless/realtek/rtl818x/built-in.a := rm -f drivers/net/wireless/realtek/rtl818x/built-in.a;  printf "drivers/net/wireless/realtek/rtl818x/%s " rtl8187/built-in.a | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/net/wireless/realtek/rtl818x/built-in.a

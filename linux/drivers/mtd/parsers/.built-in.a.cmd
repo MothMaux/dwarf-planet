@@ -1,0 +1,1 @@
+savedcmd_drivers/mtd/parsers/built-in.a := rm -f drivers/mtd/parsers/built-in.a;  printf "drivers/mtd/parsers/%s " cmdlinepart.o ofpart_core.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/mtd/parsers/built-in.a

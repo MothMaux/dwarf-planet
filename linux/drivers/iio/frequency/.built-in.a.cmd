@@ -1,0 +1,1 @@
+savedcmd_drivers/iio/frequency/built-in.a := rm -f drivers/iio/frequency/built-in.a;  printf "drivers/iio/frequency/%s " cf_axi_dds.o cf_axi_dds_buffer_stream.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/iio/frequency/built-in.a

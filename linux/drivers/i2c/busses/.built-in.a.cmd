@@ -1,0 +1,1 @@
+savedcmd_drivers/i2c/busses/built-in.a := rm -f drivers/i2c/busses/built-in.a;  printf "drivers/i2c/busses/%s " i2c-cadence.o i2c-gpio.o i2c-xiic.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/i2c/busses/built-in.a

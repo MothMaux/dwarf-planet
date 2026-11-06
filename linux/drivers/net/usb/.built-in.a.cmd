@@ -1,0 +1,1 @@
+savedcmd_drivers/net/usb/built-in.a := rm -f drivers/net/usb/built-in.a;  printf "drivers/net/usb/%s " r8152.o lan78xx.o asix_devices.o asix_common.o ax88172a.o ax88179_178a.o cdc_ether.o dm9601.o smsc75xx.o smsc95xx.o rndis_host.o usbnet.o r8153_ecm.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/net/usb/built-in.a

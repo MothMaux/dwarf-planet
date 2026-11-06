@@ -1,0 +1,1 @@
+savedcmd_drivers/usb/serial/built-in.a := rm -f drivers/usb/serial/built-in.a;  printf "drivers/usb/serial/%s " usb-serial.o generic.o bus.o ftdi_sio.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/usb/serial/built-in.a

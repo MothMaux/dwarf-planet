@@ -1,0 +1,1 @@
+savedcmd_drivers/misc/built-in.a := rm -f drivers/misc/built-in.a;  printf "drivers/misc/%s " adi-axi-tdd.o eeprom/built-in.a cb710/built-in.a ti-st/built-in.a lis3lv02d/built-in.a mathworks/built-in.a sram.o sram-exec.o cardreader/built-in.a keba/built-in.a | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/misc/built-in.a

@@ -1,0 +1,1 @@
+savedcmd_drivers/irqchip/built-in.a := rm -f drivers/irqchip/built-in.a;  printf "drivers/irqchip/%s " irqchip.o irq-gic.o irq-gic-common.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/irqchip/built-in.a

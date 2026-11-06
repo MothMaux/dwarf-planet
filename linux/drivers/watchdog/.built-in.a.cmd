@@ -1,0 +1,1 @@
+savedcmd_drivers/watchdog/built-in.a := rm -f drivers/watchdog/built-in.a;  printf "drivers/watchdog/%s " watchdog_core.o watchdog_dev.o cadence_wdt.o of_xilinx_wdt.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/watchdog/built-in.a

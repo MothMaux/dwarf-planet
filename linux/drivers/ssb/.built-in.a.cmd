@@ -1,0 +1,1 @@
+savedcmd_drivers/ssb/built-in.a := rm -f drivers/ssb/built-in.a;  printf "drivers/ssb/%s " main.o scan.o driver_chipcommon.o driver_chipcommon_pmu.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/ssb/built-in.a
