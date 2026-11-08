@@ -1,1 +1,0 @@
-savedcmd_drivers/net/wireless/realtek/rtlwifi/rtl8192cu/built-in.a := rm -f drivers/net/wireless/realtek/rtlwifi/rtl8192cu/built-in.a;  printf "drivers/net/wireless/realtek/rtlwifi/rtl8192cu/%s " dm.o hw.o led.o mac.o phy.o rf.o sw.o table.o trx.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/net/wireless/realtek/rtlwifi/rtl8192cu/built-in.a

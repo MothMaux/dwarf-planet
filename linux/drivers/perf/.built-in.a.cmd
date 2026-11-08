@@ -1,1 +1,0 @@
-savedcmd_drivers/perf/built-in.a := rm -f drivers/perf/built-in.a;  printf "drivers/perf/%s " arm_pmu.o arm_pmu_platform.o arm_v7_pmu.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/perf/built-in.a

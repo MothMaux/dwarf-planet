@@ -1,1 +1,0 @@
-savedcmd_drivers/mtd/chips/built-in.a := rm -f drivers/mtd/chips/built-in.a;  printf "drivers/mtd/chips/%s " chipreg.o cfi_probe.o cfi_util.o cfi_cmdset_0002.o gen_probe.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/mtd/chips/built-in.a

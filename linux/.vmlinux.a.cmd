@@ -1,1 +1,0 @@
-savedcmd_vmlinux.a := rm -f vmlinux.a; arm-none-linux-gnueabihf-ar cDPrST vmlinux.a ./built-in.a  arch/arm/lib/lib.a  lib/lib.a; arm-none-linux-gnueabihf-ar mPiT $$(arm-none-linux-gnueabihf-ar t vmlinux.a | sed -n 1p) vmlinux.a $$(arm-none-linux-gnueabihf-ar t vmlinux.a | grep -F -f ./scripts/head-object-list.txt)

@@ -1,8 +1,0 @@
-zynq-pluto-sdr-revb.o: arch/arm/boot/dts/xilinx/zynq-pluto-sdr-revb.dts \
- arch/arm/boot/dts/xilinx/zynq-pluto-sdr.dtsi \
- arch/arm/boot/dts/xilinx/zynq.dtsi \
- arch/arm/boot/dts/xilinx/zynq-7000.dtsi \
- scripts/dtc/include-prefixes/dt-bindings/gpio/gpio.h \
- scripts/dtc/include-prefixes/dt-bindings/interrupt-controller/irq.h \
- scripts/dtc/include-prefixes/dt-bindings/input/input.h \
- scripts/dtc/include-prefixes/dt-bindings/input/linux-event-codes.h

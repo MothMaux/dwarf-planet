@@ -1,1 +1,0 @@
-savedcmd_drivers/media/platform/mediatek/vcodec/decoder/built-in.a := rm -f drivers/media/platform/mediatek/vcodec/decoder/built-in.a;  arm-none-linux-gnueabihf-ar cDPrST drivers/media/platform/mediatek/vcodec/decoder/built-in.a

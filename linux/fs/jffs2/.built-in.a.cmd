@@ -1,1 +1,0 @@
-savedcmd_fs/jffs2/built-in.a := rm -f fs/jffs2/built-in.a;  printf "fs/jffs2/%s " compr.o dir.o file.o ioctl.o nodelist.o malloc.o read.o nodemgmt.o readinode.o write.o scan.o gc.o symlink.o build.o erase.o background.o fs.o writev.o super.o debug.o wbuf.o compr_rtime.o compr_zlib.o | xargs arm-none-linux-gnueabihf-ar cDPrST fs/jffs2/built-in.a

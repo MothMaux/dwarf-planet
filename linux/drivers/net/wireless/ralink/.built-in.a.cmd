@@ -1,1 +1,0 @@
-savedcmd_drivers/net/wireless/ralink/built-in.a := rm -f drivers/net/wireless/ralink/built-in.a;  printf "drivers/net/wireless/ralink/%s " rt2x00/built-in.a | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/net/wireless/ralink/built-in.a

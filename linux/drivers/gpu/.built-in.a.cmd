@@ -1,1 +1,0 @@
-savedcmd_drivers/gpu/built-in.a := rm -f drivers/gpu/built-in.a;  printf "drivers/gpu/%s " host1x/built-in.a drm/built-in.a vga/built-in.a | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/gpu/built-in.a

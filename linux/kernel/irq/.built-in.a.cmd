@@ -1,1 +1,0 @@
-savedcmd_kernel/irq/built-in.a := rm -f kernel/irq/built-in.a;  printf "kernel/irq/%s " irqdesc.o handle.o manage.o spurious.o resend.o chip.o dummychip.o devres.o autoprobe.o irqdomain.o proc.o cpuhotplug.o pm.o ipi.o affinity.o | xargs arm-none-linux-gnueabihf-ar cDPrST kernel/irq/built-in.a

@@ -1,1 +1,0 @@
-savedcmd_drivers/mtd/nand/raw/built-in.a := rm -f drivers/mtd/nand/raw/built-in.a;  printf "drivers/mtd/nand/raw/%s " ingenic/built-in.a | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/mtd/nand/raw/built-in.a

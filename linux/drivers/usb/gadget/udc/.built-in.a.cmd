@@ -1,1 +1,0 @@
-savedcmd_drivers/usb/gadget/udc/built-in.a := rm -f drivers/usb/gadget/udc/built-in.a;  printf "drivers/usb/gadget/udc/%s " core.o trace.o udc-xilinx.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/usb/gadget/udc/built-in.a

@@ -1,1 +1,0 @@
-savedcmd_arch/arm/vfp/built-in.a := rm -f arch/arm/vfp/built-in.a;  printf "arch/arm/vfp/%s " vfpmodule.o vfphw.o vfpsingle.o vfpdouble.o | xargs arm-none-linux-gnueabihf-ar cDPrST arch/arm/vfp/built-in.a

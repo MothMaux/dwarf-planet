@@ -1,1 +1,0 @@
-savedcmd_arch/arm/mach-zynq/built-in.a := rm -f arch/arm/mach-zynq/built-in.a;  printf "arch/arm/mach-zynq/%s " common.o efuse.o slcr.o pm.o headsmp.o platsmp.o | xargs arm-none-linux-gnueabihf-ar cDPrST arch/arm/mach-zynq/built-in.a

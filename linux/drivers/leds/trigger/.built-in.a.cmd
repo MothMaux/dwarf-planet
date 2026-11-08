@@ -1,1 +1,0 @@
-savedcmd_drivers/leds/trigger/built-in.a := rm -f drivers/leds/trigger/built-in.a;  printf "drivers/leds/trigger/%s " ledtrig-timer.o ledtrig-oneshot.o ledtrig-heartbeat.o ledtrig-cpu.o ledtrig-default-on.o | xargs arm-none-linux-gnueabihf-ar cDPrST drivers/leds/trigger/built-in.a

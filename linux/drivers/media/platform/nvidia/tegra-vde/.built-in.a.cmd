@@ -1,1 +1,0 @@
-savedcmd_drivers/media/platform/nvidia/tegra-vde/built-in.a := rm -f drivers/media/platform/nvidia/tegra-vde/built-in.a;  arm-none-linux-gnueabihf-ar cDPrST drivers/media/platform/nvidia/tegra-vde/built-in.a
