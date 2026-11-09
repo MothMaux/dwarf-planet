@@ -15,10 +15,8 @@ VIVADO_SETTINGS ?= /opt/Xilinx/$(VIVADO_VERSION)/Vivado/settings64.sh
 VSUBDIRS = hdl br2-external linux u-boot
 
 VERSION:=$(shell git describe --abbrev=4 --dirty --always --tags)
-LATEST_TAG:=$(shell git describe --abbrev=0 --tags)
 UBOOT_VERSION=$(shell echo -n "PlutoSDR " && cd u-boot && git describe --abbrev=0 --dirty --always --tags)
 HAVE_VIVADO= $(shell bash -c "source $(VIVADO_SETTINGS) > /dev/null 2>&1 && vivado -version > /dev/null 2>&1 && echo 1 || echo 0")
-XSA_URL ?= http://github.com/analogdevicesinc/plutosdr-fw/releases/download/${LATEST_TAG}/system_top.xsa
 
 ifeq (1, ${HAVE_VIVADO})
 	VIVADO_INSTALL= $(shell bash -c "source $(VIVADO_SETTINGS) > /dev/null 2>&1 && vivado -version | head -1 | awk '{print $$2}'")
@@ -141,7 +139,7 @@ build/$(TARGET).itb: u-boot/tools/mkimage build/zImage build/rootfs.cpio.gz $(TA
 
 build/system_top.xsa:  | build
 ifeq (1, ${HAVE_VIVADO})
-	bash -c "source $(VIVADO_SETTINGS) && $(MAKE) -C hdl/projects/$(TARGET) && cp hdl/projects/$(TARGET)/$(TARGET).sdk/system_top.xsa $@"
+	bash -c "source $(VIVADO_SETTINGS) && $(MAKE) TARGET= -C hdl/projects/$(TARGET) && cp hdl/projects/$(TARGET)/$(TARGET).sdk/system_top.xsa $@"
 	unzip -l $@ | grep -q ps7_init || cp hdl/projects/$(TARGET)/$(TARGET).srcs/sources_1/bd/system/ip/system_sys_ps7_0/ps7_init* build/
 else ifneq ($(XSA_FILE),)
 	cp $(XSA_FILE) $@
