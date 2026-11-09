@@ -1,0 +1,6 @@
+device-fw 9972d
+hdl dev_prj_2018_r1-3140-g49b74d
+br2-external 9972d-dirty
+linux 9972d-dirty
+u-boot 9972d-dirty
+buildroot 2026.02-3-3-g77be2
