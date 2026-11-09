@@ -83,3 +83,5 @@ linux/.config.old
 linux/include/generated/rustc_cfg
 linux/include/generated/autoconf.h
 linux/include/config/auto.conf
+linux/.config
+br2-external/board/adi/libre/VERSIONS

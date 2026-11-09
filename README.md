@@ -12,9 +12,9 @@ Firmware License : [![Many Licenses](https://img.shields.io/badge/license-LGPL2+
  sudo apt-get install git build-essential fakeroot libncurses5-dev libssl-dev ccache
  sudo apt-get install dfu-util u-boot-tools device-tree-compiler mtools
  sudo apt-get install bc python3 cpio zip unzip rsync file wget
- git clone --recursive https://github.com/analogdevicesinc/plutosdr-fw.git
+ git clone --recursive https://github.com/mothmaux/dwarf-planet.git
  cd plutosdr-fw
- export VIVADO_SETTINGS=/opt/Xilinx/2025.1/Vivado/settings64.sh
+ export VIVADO_SETTINGS=/tools/Xilinx/2025.1/Vivado/settings64.sh
  make
 
 ```
@@ -40,10 +40,13 @@ This toolchain is used to build: Buildroot, Linux and u-boot
 
 * Build targets
 
-    The default build target is `pluto`. The Epiq Solutions Sidekiq Z2 is supported via the same
-    parametrized build system:
+    PlutoSDR : pluto (default)
+    LibreSDR : libre
+    AntSDR   : ant
+    NanoSDR  : nano
+    
 ```bash
- make TARGET=sidekiqz2
+ make TARGET=libre
 ```
 
  * Updating your local repository 
@@ -122,4 +125,8 @@ This toolchain is used to build: Buildroot, Linux and u-boot
      | zynq-pluto-sdr-revb.dtb | Device Tree Blob for Rev.B|     
      | zynq-pluto-sdr-revc.dtb | Device Tree Blob for Rev.C|
  
+* To add a board layout:
+add target to list in ~/makefile
 
+add defconfig in ~/br2-external/configs/*_defconfig
+add board project files in ~/br2-external/buildroot/boards
