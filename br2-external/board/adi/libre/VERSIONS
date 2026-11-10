@@ -1,6 +1,0 @@
-device-fw c633-dirty
-hdl dev_prj_2018_r1-3140-g49b74d
-br2-external c633-dirty
-linux c633-dirty
-u-boot c633-dirty
-buildroot 2026.02-3-3-g77be2

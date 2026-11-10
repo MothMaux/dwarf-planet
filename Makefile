@@ -10,7 +10,7 @@ TOOLS_PATH = PATH="$(BUILDROOT_DIR)/output/host/bin:$(BUILDROOT_DIR)/output/host
 TOOLCHAIN = $(BUILDROOT_DIR)/output/host/bin/$(CROSS_COMPILE)gcc
 
 NCORES = $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
-VIVADO_SETTINGS ?= /opt/Xilinx/$(VIVADO_VERSION)/Vivado/settings64.sh
+VIVADO_SETTINGS ?= /tools/Xilinx/$(VIVADO_VERSION)/Vivado/settings64.sh
 
 VSUBDIRS = hdl br2-external linux u-boot
 
@@ -139,7 +139,9 @@ build/$(TARGET).itb: u-boot/tools/mkimage build/zImage build/rootfs.cpio.gz $(TA
 
 build/system_top.xsa:  | build
 ifeq (1, ${HAVE_VIVADO})
-	bash -c "source $(VIVADO_SETTINGS) && $(MAKE) TARGET= -C hdl/projects/$(TARGET) && cp hdl/projects/$(TARGET)/$(TARGET).sdk/system_top.xsa $@"
+	bash -c "source $(VIVADO_SETTINGS)"
+	env -u TARGET -u MAKEFLAGS $(MAKE) -C hdl/projects/$(TARGET)
+	bash -c "cp hdl/projects/$(TARGET)/$(TARGET).sdk/system_top.xsa $@"
 	unzip -l $@ | grep -q ps7_init || cp hdl/projects/$(TARGET)/$(TARGET).srcs/sources_1/bd/system/ip/system_sys_ps7_0/ps7_init* build/
 else ifneq ($(XSA_FILE),)
 	cp $(XSA_FILE) $@
