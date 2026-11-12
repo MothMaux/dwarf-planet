@@ -128,5 +128,10 @@ This toolchain is used to build: Buildroot, Linux and u-boot
 * To add a board layout:
 add target to list in ~/makefile
 
-add defconfig in ~/br2-external/configs/*_defconfig
+add defconfigs in 
+
+`./u-boot/configs/zynq_x_defconfig` \
+`./linux/arch/arm/configs/zynq_x_defconfig` \
+`./br2-external/configs/zynq_x_defconfig` 
+
 add board project files in ~/br2-external/buildroot/boards
