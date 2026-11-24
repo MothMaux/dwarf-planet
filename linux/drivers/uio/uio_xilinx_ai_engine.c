@@ -271,12 +271,14 @@ err_out:
 	return ret;
 }
 
-static void xilinx_ai_engine_remove(struct platform_device *pdev)
+static int xilinx_ai_engine_remove(struct platform_device *pdev)
 {
 	struct platform_device *uio = platform_get_drvdata(pdev);
 
 	platform_device_unregister(uio);
 	of_node_put(pdev->dev.of_node);
+
+	return 0;
 }
 
 static const struct of_device_id xilinx_ai_engine_of_match[] = {
@@ -297,4 +299,4 @@ static struct platform_driver xilinx_ai_engine_driver = {
 module_platform_driver(xilinx_ai_engine_driver);
 
 MODULE_AUTHOR("Xilinx, Inc.");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

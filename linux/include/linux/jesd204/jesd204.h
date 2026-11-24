@@ -216,7 +216,6 @@ enum jesd204_dev_op {
 	JESD204_OP_CLK_SYNC_STAGE1,
 	JESD204_OP_CLK_SYNC_STAGE2,
 	JESD204_OP_CLK_SYNC_STAGE3,
-	JESD204_OP_CLK_SYNC_STAGE4,
 	JESD204_OP_LINK_SETUP,
 	JESD204_OP_OPT_SETUP_STAGE1,
 	JESD204_OP_OPT_SETUP_STAGE2,
@@ -226,9 +225,6 @@ enum jesd204_dev_op {
 	JESD204_OP_CLOCKS_ENABLE,
 	JESD204_OP_LINK_ENABLE,
 	JESD204_OP_LINK_RUNNING,
-	JESD204_OP_OPT_POST_SETUP_STAGE1,
-	JESD204_OP_OPT_POST_SETUP_STAGE2,
-	JESD204_OP_OPT_POST_SETUP_STAGE3,
 	JESD204_OP_OPT_POST_RUNNING_STAGE,
 
 	__JESD204_MAX_OPS,
@@ -266,8 +262,6 @@ int jesd204_get_links_data(struct jesd204_dev *jdev,
 			   const unsigned int num_links);
 
 int jesd204_fsm_start(struct jesd204_dev *jdev, unsigned int link_idx);
-int devm_jesd204_fsm_start(struct device *dev, struct jesd204_dev *jdev,
-			   unsigned int link_idx);
 void jesd204_fsm_stop(struct jesd204_dev *jdev, unsigned int link_idx);
 
 int jesd204_fsm_resume(struct jesd204_dev *jdev, unsigned int link_idx);
@@ -322,13 +316,6 @@ static inline int jesd204_get_links_data(struct jesd204_dev *jdev,
 
 static inline int jesd204_fsm_start(struct jesd204_dev *jdev,
 				    unsigned int link_idx)
-{
-	return 0;
-}
-
-static inline int devm_jesd204_fsm_start(struct device *dev,
-					 struct jesd204_dev *jdev,
-					 unsigned int link_idx)
 {
 	return 0;
 }
@@ -442,7 +429,5 @@ void jesd204_printk(const char *level, const struct jesd204_dev *jdev,
 	jesd204_printk(KERN_NOTICE, dev, fmt, ##__VA_ARGS__)
 #define jesd204_info(dev, fmt, ...)					\
 	jesd204_printk(KERN_INFO, dev, fmt, ##__VA_ARGS__)
-#define jesd204_dbg(dev, fmt, ...)					\
-	jesd204_printk(KERN_DEBUG, dev, fmt, ##__VA_ARGS__)
 
 #endif

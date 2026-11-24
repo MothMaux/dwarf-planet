@@ -13,7 +13,7 @@
 #include <linux/gpio.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/gpio/consumer.h>
+#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/string.h>
 #include <sound/jack.h>
@@ -41,13 +41,15 @@ static struct snd_soc_jack_pin headset_jack_pins[] = {
 struct adrv936x_simple_card_data {
 	struct snd_soc_card snd_card;
 	struct adrv936x_box_simple_dai_props {
-		struct simple_util_dai cpu_dai;
-		struct simple_util_dai codec_dai;
+		struct asoc_simple_dai cpu_dai;
+		struct asoc_simple_dai codec_dai;
 		unsigned int mclk_fs;
 	} *dai_props;
 	unsigned int mclk_fs;
-	struct gpio_desc *hp_det;
-	struct gpio_desc *mic_det;
+	int gpio_hp_det;
+	int gpio_hp_det_invert;
+	int gpio_mic_det;
+	int gpio_mic_det_invert;
 	struct snd_soc_dai_link dai_link[];	/* dynamically allocated */
 };
 
@@ -92,8 +94,8 @@ static int adrv9363x_box_card_hw_params(struct snd_pcm_substream *substream,
 				      struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
-	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
+	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
 	struct adrv936x_simple_card_data *priv = snd_soc_card_get_drvdata(rtd->card);
 	struct adrv936x_box_simple_dai_props *dai_props = &priv->dai_props[rtd->num];
 	unsigned int mclk, mclk_fs = 0;
@@ -154,7 +156,7 @@ static struct snd_soc_jack_gpio simple_card_mic_jack_gpio = {
 };
 
 static int __adrv9363x_box_card_dai_init(struct snd_soc_dai *dai,
-				       struct simple_util_dai *set)
+				       struct asoc_simple_dai *set)
 {
 	int ret;
 
@@ -187,8 +189,8 @@ err:
 static int adrv9363x_box_card_dai_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct adrv936x_simple_card_data *priv = snd_soc_card_get_drvdata(rtd->card);
-	struct snd_soc_dai *codec = snd_soc_rtd_to_codec(rtd, 0);
-	struct snd_soc_dai *cpu = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *codec = asoc_rtd_to_codec(rtd, 0);
+	struct snd_soc_dai *cpu = asoc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_component *component;
 	struct adrv936x_box_simple_dai_props *dai_props;
 	int ret;
@@ -202,25 +204,27 @@ static int adrv9363x_box_card_dai_init(struct snd_soc_pcm_runtime *rtd)
 	if (ret < 0)
 		return ret;
 
-	if (priv->hp_det) {
+	if (gpio_is_valid(priv->gpio_hp_det)) {
 		snd_soc_card_jack_new_pins(rtd->card, "Headphones",
 					   SND_JACK_HEADPHONE,
 					   &simple_card_hp_jack,
 					   simple_card_hp_jack_pins,
 					   ARRAY_SIZE(simple_card_hp_jack_pins));
 
-		simple_card_hp_jack_gpio.desc = priv->hp_det;
+		simple_card_hp_jack_gpio.gpio = priv->gpio_hp_det;
+		simple_card_hp_jack_gpio.invert = priv->gpio_hp_det_invert;
 		snd_soc_jack_add_gpios(&simple_card_hp_jack, 1,
 				       &simple_card_hp_jack_gpio);
 	}
 
-	if (priv->mic_det) {
+	if (gpio_is_valid(priv->gpio_mic_det)) {
 		snd_soc_card_jack_new_pins(rtd->card, "Mic Jack",
 					   SND_JACK_MICROPHONE,
 					   &simple_card_mic_jack,
 					   simple_card_mic_jack_pins,
 					   ARRAY_SIZE(simple_card_mic_jack_pins));
-		simple_card_mic_jack_gpio.desc = priv->mic_det;
+		simple_card_mic_jack_gpio.gpio = priv->gpio_mic_det;
+		simple_card_mic_jack_gpio.invert = priv->gpio_mic_det_invert;
 		snd_soc_jack_add_gpios(&simple_card_mic_jack, 1,
 				       &simple_card_mic_jack_gpio);
 	}
@@ -242,7 +246,7 @@ static int adrv9363x_box_card_dai_init(struct snd_soc_pcm_runtime *rtd)
 
 static int
 adrv9363x_box_card_sub_parse_of(struct device_node *np,
-			      struct simple_util_dai *dai,
+			      struct asoc_simple_dai *dai,
 			      struct device_node **p_node,
 			      const char **name,
 			      int *args_count)
@@ -267,7 +271,7 @@ adrv9363x_box_card_sub_parse_of(struct device_node *np,
 		*args_count = args.args_count;
 
 	/* Get dai->name */
-	ret = snd_soc_of_get_dai_name(np, name, 0);
+	ret = snd_soc_of_get_dai_name(np, name);
 	if (ret < 0)
 		return ret;
 
@@ -462,6 +466,7 @@ static int adrv9363x_box_card_parse_of(struct device_node *node,
 				     struct adrv936x_simple_card_data *priv)
 {
 	struct device *dev = adrv936x_box_simple_priv_to_dev(priv);
+	enum of_gpio_flags flags;
 	u32 val;
 	int ret;
 
@@ -517,15 +522,17 @@ static int adrv9363x_box_card_parse_of(struct device_node *node,
 			return ret;
 	}
 
-	priv->hp_det = devm_gpiod_get_optional(dev, "simple-audio-card,hp-det-gpio",
-					       GPIOD_IN);
-	if (IS_ERR(priv->hp_det))
-		return PTR_ERR(priv->hp_det);
+	priv->gpio_hp_det = of_get_named_gpio_flags(node,
+				"simple-audio-card,hp-det-gpio", 0, &flags);
+	priv->gpio_hp_det_invert = !!(flags & OF_GPIO_ACTIVE_LOW);
+	if (priv->gpio_hp_det == -EPROBE_DEFER)
+		return -EPROBE_DEFER;
 
-	priv->mic_det = devm_gpiod_get_optional(dev, "simple-audio-card,mic-det-gpio",
-						GPIOD_IN);
-	if (IS_ERR(priv->mic_det))
-		return PTR_ERR(priv->mic_det);
+	priv->gpio_mic_det = of_get_named_gpio_flags(node,
+				"simple-audio-card,mic-det-gpio", 0, &flags);
+	priv->gpio_mic_det_invert = !!(flags & OF_GPIO_ACTIVE_LOW);
+	if (priv->gpio_mic_det == -EPROBE_DEFER)
+		return -EPROBE_DEFER;
 
 	if (!priv->snd_card.name)
 		priv->snd_card.name = priv->snd_card.dai_link->name;
@@ -534,7 +541,7 @@ static int adrv9363x_box_card_parse_of(struct device_node *node,
 }
 
 /* Decrease the reference count of the device nodes */
-static void adrv9363x_box_card_unref(struct snd_soc_card *card)
+static int adrv9363x_box_card_unref(struct snd_soc_card *card)
 {
 	struct snd_soc_dai_link *dai_link;
 	int num_links;
@@ -545,6 +552,7 @@ static void adrv9363x_box_card_unref(struct snd_soc_card *card)
 		of_node_put(dai_link->cpus[0].of_node);
 		of_node_put(dai_link->codecs[0].of_node);
 	}
+	return 0;
 }
 
 static int headset_init(struct snd_soc_component *component)
@@ -625,6 +633,9 @@ static int adrv9363x_box_card_probe(struct platform_device *pdev)
 	priv->snd_card.aux_dev = &headset_dev;
 	priv->snd_card.num_aux_devs = 1;
 
+	priv->gpio_hp_det = -ENOENT;
+	priv->gpio_mic_det = -ENOENT;
+
 	/* Get room for the other properties */
 	priv->dai_props = devm_kzalloc(dev,
 			sizeof(*priv->dai_props) * num_links,
@@ -642,7 +653,7 @@ static int adrv9363x_box_card_probe(struct platform_device *pdev)
 		}
 
 	} else {
-		struct simple_util_info *cinfo;
+		struct asoc_simple_card_info *cinfo;
 
 		cinfo = dev->platform_data;
 		if (!cinfo) {
@@ -686,11 +697,19 @@ err:
 	return ret;
 }
 
-static void adrv9363x_box_card_remove(struct platform_device *pdev)
+static int adrv9363x_box_card_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
+	struct adrv936x_simple_card_data *priv = snd_soc_card_get_drvdata(card);
 
-	adrv9363x_box_card_unref(card);
+	if (gpio_is_valid(priv->gpio_hp_det))
+		snd_soc_jack_free_gpios(&simple_card_hp_jack, 1,
+					&simple_card_hp_jack_gpio);
+	if (gpio_is_valid(priv->gpio_mic_det))
+		snd_soc_jack_free_gpios(&simple_card_mic_jack, 1,
+					&simple_card_mic_jack_gpio);
+
+	return adrv9363x_box_card_unref(card);
 }
 
 static const struct of_device_id adrv9363x_box_of_match[] = {

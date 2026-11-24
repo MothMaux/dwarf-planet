@@ -21,7 +21,6 @@
 #include <linux/scatterlist.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
-#include <linux/workqueue.h>
 
 #define CTL_SD_CMD 0x00
 #define CTL_ARG_REG 0x04
@@ -129,7 +128,6 @@ struct tmio_mmc_dma_ops {
 
 	/* optional */
 	void (*end)(struct tmio_mmc_host *host);	/* held host->lock */
-	bool (*dma_irq)(struct tmio_mmc_host *host);
 };
 
 struct tmio_mmc_host {
@@ -139,6 +137,9 @@ struct tmio_mmc_host {
 	struct mmc_data         *data;
 	struct mmc_host         *mmc;
 	struct mmc_host_ops     ops;
+
+	/* Callbacks for clock / power control */
+	void (*set_pwr)(struct platform_device *host, int state);
 
 	/* pio related stuff */
 	struct scatterlist      *sg_ptr;
@@ -154,7 +155,7 @@ struct tmio_mmc_host {
 	bool			dma_on;
 	struct dma_chan		*chan_rx;
 	struct dma_chan		*chan_tx;
-	struct work_struct	dma_issue;
+	struct tasklet_struct	dma_issue;
 	struct scatterlist	bounce_sg;
 	u8			*bounce_buf;
 
@@ -202,6 +203,20 @@ void tmio_mmc_do_data_irq(struct tmio_mmc_host *host);
 void tmio_mmc_enable_mmc_irqs(struct tmio_mmc_host *host, u32 i);
 void tmio_mmc_disable_mmc_irqs(struct tmio_mmc_host *host, u32 i);
 irqreturn_t tmio_mmc_irq(int irq, void *devid);
+
+static inline char *tmio_mmc_kmap_atomic(struct scatterlist *sg,
+					 unsigned long *flags)
+{
+	local_irq_save(*flags);
+	return kmap_atomic(sg_page(sg)) + sg->offset;
+}
+
+static inline void tmio_mmc_kunmap_atomic(struct scatterlist *sg,
+					  unsigned long *flags, void *virt)
+{
+	kunmap_atomic(virt - sg->offset);
+	local_irq_restore(*flags);
+}
 
 #ifdef CONFIG_PM
 int tmio_mmc_host_runtime_suspend(struct device *dev);

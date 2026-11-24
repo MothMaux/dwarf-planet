@@ -51,12 +51,12 @@
 #include <linux/clk-provider.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
-#include <linux/gpio/consumer.h>
 #include <linux/gpio.h>
 #include <linux/ieee802154.h>
 #include <linux/io.h>
 #include <linux/kfifo.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -1446,7 +1446,8 @@ static u8 mcps_data_request(
 	command.pdata.data_req.src_addr_mode = src_addr_mode;
 	command.pdata.data_req.dst.mode = dst_address_mode;
 	if (dst_address_mode != MAC_MODE_NO_ADDR) {
-		put_unaligned_le16(dst_pan_id, command.pdata.data_req.dst.pan_id);
+		command.pdata.data_req.dst.pan_id[0] = LS_BYTE(dst_pan_id);
+		command.pdata.data_req.dst.pan_id[1] = MS_BYTE(dst_pan_id);
 		if (dst_address_mode == MAC_MODE_SHORT_ADDR) {
 			command.pdata.data_req.dst.address[0] = LS_BYTE(
 				dst_addr->short_address
@@ -1794,12 +1795,12 @@ static int ca8210_skb_rx(
 	}
 	hdr.source.mode = data_ind[0];
 	dev_dbg(&priv->spi->dev, "srcAddrMode: %#03x\n", hdr.source.mode);
-	hdr.source.pan_id = cpu_to_le16(get_unaligned_le16(&data_ind[1]));
+	hdr.source.pan_id = *(u16 *)&data_ind[1];
 	dev_dbg(&priv->spi->dev, "srcPanId: %#06x\n", hdr.source.pan_id);
 	memcpy(&hdr.source.extended_addr, &data_ind[3], 8);
 	hdr.dest.mode = data_ind[11];
 	dev_dbg(&priv->spi->dev, "dstAddrMode: %#03x\n", hdr.dest.mode);
-	hdr.dest.pan_id = cpu_to_le16(get_unaligned_le16(&data_ind[12]));
+	hdr.dest.pan_id = *(u16 *)&data_ind[12];
 	dev_dbg(&priv->spi->dev, "dstPanId: %#06x\n", hdr.dest.pan_id);
 	memcpy(&hdr.dest.extended_addr, &data_ind[14], 8);
 
@@ -1901,9 +1902,10 @@ static int ca8210_skb_tx(
 	struct ca8210_priv  *priv
 )
 {
+	int status;
 	struct ieee802154_hdr header = { };
 	struct secspec secspec;
-	int mac_len, status;
+	unsigned int mac_len;
 
 	dev_dbg(&priv->spi->dev, "%s called\n", __func__);
 
@@ -1911,8 +1913,6 @@ static int ca8210_skb_tx(
 	 * packet
 	 */
 	mac_len = ieee802154_hdr_peek_addrs(skb, &header);
-	if (mac_len < 0)
-		return mac_len;
 
 	secspec.security_level = header.sec.level;
 	secspec.key_id_mode = header.sec.key_id_mode;
@@ -1926,7 +1926,7 @@ static int ca8210_skb_tx(
 	status =  mcps_data_request(
 		header.source.mode,
 		header.dest.mode,
-		le16_to_cpu(header.dest.pan_id),
+		header.dest.pan_id,
 		(union macaddr *)&header.dest.extended_addr,
 		skb->len - mac_len,
 		&skb->data[mac_len],
@@ -2739,6 +2739,7 @@ static int ca8210_register_ext_clock(struct spi_device *spi)
 	struct device_node *np = spi->dev.of_node;
 	struct ca8210_priv *priv = spi_get_drvdata(spi);
 	struct ca8210_platform_data *pdata = spi->dev.platform_data;
+	int ret = 0;
 
 	if (!np)
 		return -EFAULT;
@@ -2755,8 +2756,18 @@ static int ca8210_register_ext_clock(struct spi_device *spi)
 		dev_crit(&spi->dev, "Failed to register external clk\n");
 		return PTR_ERR(priv->clk);
 	}
+	ret = of_clk_add_provider(np, of_clk_src_simple_get, priv->clk);
+	if (ret) {
+		clk_unregister(priv->clk);
+		dev_crit(
+			&spi->dev,
+			"Failed to register external clock as clock provider\n"
+		);
+	} else {
+		dev_info(&spi->dev, "External clock set as clock provider\n");
+	}
 
-	return of_clk_add_provider(np, of_clk_src_simple_get, priv->clk);
+	return ret;
 }
 
 /**
@@ -2768,8 +2779,8 @@ static void ca8210_unregister_ext_clock(struct spi_device *spi)
 {
 	struct ca8210_priv *priv = spi_get_drvdata(spi);
 
-	if (IS_ERR_OR_NULL(priv->clk))
-		return;
+	if (!priv->clk)
+		return
 
 	of_clk_del_provider(spi->dev.of_node);
 	clk_unregister(priv->clk);
@@ -2842,6 +2853,7 @@ static int ca8210_interrupt_init(struct spi_device *spi)
 	);
 	if (ret) {
 		dev_crit(&spi->dev, "request_irq %d failed\n", pdata->irq_id);
+		gpio_unexport(pdata->gpio_irq);
 		gpio_free(pdata->gpio_irq);
 	}
 
@@ -2856,13 +2868,19 @@ static int ca8210_interrupt_init(struct spi_device *spi)
  */
 static int ca8210_dev_com_init(struct ca8210_priv *priv)
 {
-	priv->mlme_workqueue = alloc_ordered_workqueue("MLME work queue", 0);
+	priv->mlme_workqueue = alloc_ordered_workqueue(
+		"MLME work queue",
+		WQ_UNBOUND
+	);
 	if (!priv->mlme_workqueue) {
 		dev_crit(&priv->spi->dev, "alloc of mlme_workqueue failed!\n");
 		return -ENOMEM;
 	}
 
-	priv->irq_workqueue = alloc_ordered_workqueue("ca8210 irq worker", 0);
+	priv->irq_workqueue = alloc_ordered_workqueue(
+		"ca8210 irq worker",
+		WQ_UNBOUND
+	);
 	if (!priv->irq_workqueue) {
 		dev_crit(&priv->spi->dev, "alloc of irq_workqueue failed!\n");
 		destroy_workqueue(priv->mlme_workqueue);
@@ -2925,8 +2943,7 @@ static void ca8210_hw_setup(struct ieee802154_hw *ca8210_hw)
 	ca8210_hw->phy->flags =
 		WPAN_PHY_FLAG_TXPOWER |
 		WPAN_PHY_FLAG_CCA_ED_LEVEL |
-		WPAN_PHY_FLAG_CCA_MODE |
-		WPAN_PHY_FLAG_DATAGRAMS_ONLY;
+		WPAN_PHY_FLAG_CCA_MODE;
 }
 
 /**
@@ -2949,7 +2966,7 @@ static int ca8210_test_interface_init(struct ca8210_priv *priv)
 		node_name,
 		sizeof(node_name),
 		"ca8210@%d_%d",
-		priv->spi->controller->bus_num,
+		priv->spi->master->bus_num,
 		spi_get_chipselect(priv->spi, 0)
 	);
 
@@ -3071,11 +3088,7 @@ static int ca8210_probe(struct spi_device *spi_device)
 	spi_set_drvdata(priv->spi, priv);
 	if (IS_ENABLED(CONFIG_IEEE802154_CA8210_DEBUGFS)) {
 		cascoda_api_upstream = ca8210_test_int_driver_write;
-		ret = ca8210_test_interface_init(priv);
-		if (ret) {
-			dev_crit(&spi_device->dev, "ca8210_test_interface_init failed\n");
-			goto error;
-		}
+		ca8210_test_interface_init(priv);
 	} else {
 		cascoda_api_upstream = NULL;
 	}
@@ -3164,7 +3177,8 @@ MODULE_DEVICE_TABLE(of, ca8210_of_ids);
 static struct spi_driver ca8210_spi_driver = {
 	.driver = {
 		.name =                 DRIVER_NAME,
-		.of_match_table =       ca8210_of_ids,
+		.owner =                THIS_MODULE,
+		.of_match_table =       of_match_ptr(ca8210_of_ids),
 	},
 	.probe  =                       ca8210_probe,
 	.remove =                       ca8210_remove

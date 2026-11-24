@@ -11,10 +11,10 @@
 #ifndef AXI_ADXCVR_H_
 #define AXI_ADXCVR_H_
 
-#include <linux/adi-axi-common.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/mutex.h>
+#include <linux/fpga/adi-axi-common.h>
 #include <linux/jesd204/jesd204.h>
 
 #include "xilinx_transceiver.h"
@@ -78,9 +78,9 @@ struct adxcvr_state {
 	u32			sys_clk_sel;
 	u32			out_clk_sel;
 	u32			fsm_enable_delay_ms;
-	int			fsm_start_delayed_ret;
 
-	struct clk_hw_onecell_data *clk_lookup;
+	struct clk		*clks[3];
+	struct clk_onecell_data clk_lookup;
 
 	struct xilinx_xcvr	xcvr;
 	struct adxcvr_eyescan   *eye;

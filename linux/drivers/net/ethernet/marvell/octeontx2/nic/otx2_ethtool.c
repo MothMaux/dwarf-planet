@@ -92,16 +92,10 @@ static void otx2_get_qset_strings(struct otx2_nic *pfvf, u8 **data, int qset)
 			*data += ETH_GSTRING_LEN;
 		}
 	}
-
-	for (qidx = 0; qidx < otx2_get_total_tx_queues(pfvf); qidx++) {
+	for (qidx = 0; qidx < pfvf->hw.tx_queues; qidx++) {
 		for (stats = 0; stats < otx2_n_queue_stats; stats++) {
-			if (qidx >= pfvf->hw.non_qos_queues)
-				sprintf(*data, "txq_qos%d: %s",
-					qidx + start_qidx - pfvf->hw.non_qos_queues,
-					otx2_queue_stats[stats].name);
-			else
-				sprintf(*data, "txq%d: %s", qidx + start_qidx,
-					otx2_queue_stats[stats].name);
+			sprintf(*data, "txq%d: %s", qidx + start_qidx,
+				otx2_queue_stats[stats].name);
 			*data += ETH_GSTRING_LEN;
 		}
 	}
@@ -165,7 +159,7 @@ static void otx2_get_qset_stats(struct otx2_nic *pfvf,
 				[otx2_queue_stats[stat].index];
 	}
 
-	for (qidx = 0; qidx < otx2_get_total_tx_queues(pfvf); qidx++) {
+	for (qidx = 0; qidx < pfvf->hw.tx_queues; qidx++) {
 		if (!otx2_update_sq_stats(pfvf, qidx)) {
 			for (stat = 0; stat < otx2_n_queue_stats; stat++)
 				*((*data)++) = 0;
@@ -260,7 +254,7 @@ static int otx2_get_sset_count(struct net_device *netdev, int sset)
 		return -EINVAL;
 
 	qstats_count = otx2_n_queue_stats *
-		       (pfvf->hw.rx_queues + otx2_get_total_tx_queues(pfvf));
+		       (pfvf->hw.rx_queues + pfvf->hw.tx_queues);
 	if (!test_bit(CN10K_RPM, &pfvf->hw.cap_flag))
 		mac_stats = CGX_RX_STATS_COUNT + CGX_TX_STATS_COUNT;
 	otx2_update_lmac_fec_stats(pfvf);
@@ -288,7 +282,7 @@ static int otx2_set_channels(struct net_device *dev,
 {
 	struct otx2_nic *pfvf = netdev_priv(dev);
 	bool if_up = netif_running(dev);
-	int err, qos_txqs;
+	int err = 0;
 
 	if (!channel->rx_count || !channel->tx_count)
 		return -EINVAL;
@@ -302,18 +296,14 @@ static int otx2_set_channels(struct net_device *dev,
 	if (if_up)
 		dev->netdev_ops->ndo_stop(dev);
 
-	qos_txqs = bitmap_weight(pfvf->qos.qos_sq_bmap,
-				 OTX2_QOS_MAX_LEAF_NODES);
-
-	err = otx2_set_real_num_queues(dev, channel->tx_count + qos_txqs,
+	err = otx2_set_real_num_queues(dev, channel->tx_count,
 				       channel->rx_count);
 	if (err)
 		return err;
 
 	pfvf->hw.rx_queues = channel->rx_count;
 	pfvf->hw.tx_queues = channel->tx_count;
-	if (pfvf->xdp_prog)
-		pfvf->hw.xdp_queues = channel->rx_count;
+	pfvf->qset.cq_cnt = pfvf->hw.tx_queues +  pfvf->hw.rx_queues;
 
 	if (if_up)
 		err = dev->netdev_ops->ndo_open(dev);
@@ -333,25 +323,16 @@ static void otx2_get_pauseparam(struct net_device *netdev,
 	if (is_otx2_lbkvf(pfvf->pdev))
 		return;
 
-	mutex_lock(&pfvf->mbox.lock);
 	req = otx2_mbox_alloc_msg_cgx_cfg_pause_frm(&pfvf->mbox);
-	if (!req) {
-		mutex_unlock(&pfvf->mbox.lock);
+	if (!req)
 		return;
-	}
 
 	if (!otx2_sync_mbox_msg(&pfvf->mbox)) {
 		rsp = (struct cgx_pause_frm_cfg *)
 		       otx2_mbox_get_rsp(&pfvf->mbox.mbox, 0, &req->hdr);
-		if (IS_ERR(rsp)) {
-			mutex_unlock(&pfvf->mbox.lock);
-			return;
-		}
-
 		pause->rx_pause = rsp->rx_pause;
 		pause->tx_pause = rsp->tx_pause;
 	}
-	mutex_unlock(&pfvf->mbox.lock);
 }
 
 static int otx2_set_pauseparam(struct net_device *netdev,
@@ -432,14 +413,6 @@ static int otx2_set_ringparam(struct net_device *netdev,
 	 */
 	if (rx_count < pfvf->hw.rq_skid)
 		rx_count =  pfvf->hw.rq_skid;
-
-	if (ring->rx_pending < 16) {
-		netdev_err(netdev,
-			   "rx ring size %u invalid, min is 16\n",
-			   ring->rx_pending);
-		return -EINVAL;
-	}
-
 	rx_count = Q_COUNT(Q_SIZE(rx_count, 3));
 
 	/* Due pipelining impact minimum 2000 unused SQ CQE's
@@ -780,7 +753,6 @@ static int otx2_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *nfc)
 	struct otx2_nic *pfvf = netdev_priv(dev);
 	int ret = -EOPNOTSUPP;
 
-	pfvf->flow_cfg->ntuple = ntuple;
 	switch (nfc->cmd) {
 	case ETHTOOL_SRXFH:
 		ret = otx2_set_rss_hash_opts(pfvf, nfc);
@@ -847,26 +819,21 @@ static int otx2_rss_ctx_create(struct otx2_nic *pfvf,
 	return 0;
 }
 
-/* Configure RSS table and hash key */
-static int otx2_set_rxfh(struct net_device *dev,
-			 struct ethtool_rxfh_param *rxfh,
-			 struct netlink_ext_ack *extack)
+/* RSS context configuration */
+static int otx2_set_rxfh_context(struct net_device *dev, const u32 *indir,
+				 const u8 *hkey, const u8 hfunc,
+				 u32 *rss_context, bool delete)
 {
-	u32 rss_context = DEFAULT_RSS_CONTEXT_GROUP;
 	struct otx2_nic *pfvf = netdev_priv(dev);
 	struct otx2_rss_ctx *rss_ctx;
 	struct otx2_rss_info *rss;
 	int ret, idx;
 
-	if (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE &&
-	    rxfh->hfunc != ETH_RSS_HASH_TOP)
+	if (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP)
 		return -EOPNOTSUPP;
 
-	if (rxfh->rss_context)
-		rss_context = rxfh->rss_context;
-
-	if (rss_context != ETH_RXFH_CONTEXT_ALLOC &&
-	    rss_context >= MAX_RSS_GROUPS)
+	if (*rss_context != ETH_RXFH_CONTEXT_ALLOC &&
+	    *rss_context >= MAX_RSS_GROUPS)
 		return -EINVAL;
 
 	rss = &pfvf->hw.rss_info;
@@ -876,45 +843,40 @@ static int otx2_set_rxfh(struct net_device *dev,
 		return -EIO;
 	}
 
-	if (rxfh->key) {
-		memcpy(rss->key, rxfh->key, sizeof(rss->key));
+	if (hkey) {
+		memcpy(rss->key, hkey, sizeof(rss->key));
 		otx2_set_rss_key(pfvf);
 	}
-	if (rxfh->rss_delete)
-		return otx2_rss_ctx_delete(pfvf, rss_context);
+	if (delete)
+		return otx2_rss_ctx_delete(pfvf, *rss_context);
 
-	if (rss_context == ETH_RXFH_CONTEXT_ALLOC) {
-		ret = otx2_rss_ctx_create(pfvf, &rss_context);
-		rxfh->rss_context = rss_context;
+	if (*rss_context == ETH_RXFH_CONTEXT_ALLOC) {
+		ret = otx2_rss_ctx_create(pfvf, rss_context);
 		if (ret)
 			return ret;
 	}
-	if (rxfh->indir) {
-		rss_ctx = rss->rss_ctx[rss_context];
+	if (indir) {
+		rss_ctx = rss->rss_ctx[*rss_context];
 		for (idx = 0; idx < rss->rss_size; idx++)
-			rss_ctx->ind_tbl[idx] = rxfh->indir[idx];
+			rss_ctx->ind_tbl[idx] = indir[idx];
 	}
-	otx2_set_rss_table(pfvf, rss_context);
+	otx2_set_rss_table(pfvf, *rss_context);
 
 	return 0;
 }
 
-/* Get RSS configuration */
-static int otx2_get_rxfh(struct net_device *dev,
-			 struct ethtool_rxfh_param *rxfh)
+static int otx2_get_rxfh_context(struct net_device *dev, u32 *indir,
+				 u8 *hkey, u8 *hfunc, u32 rss_context)
 {
-	u32 rss_context = DEFAULT_RSS_CONTEXT_GROUP;
 	struct otx2_nic *pfvf = netdev_priv(dev);
 	struct otx2_rss_ctx *rss_ctx;
 	struct otx2_rss_info *rss;
-	u32 *indir = rxfh->indir;
 	int idx, rx_queues;
 
 	rss = &pfvf->hw.rss_info;
 
-	rxfh->hfunc = ETH_RSS_HASH_TOP;
-	if (rxfh->rss_context)
-		rss_context = rxfh->rss_context;
+	if (hfunc)
+		*hfunc = ETH_RSS_HASH_TOP;
 
 	if (!indir)
 		return 0;
@@ -936,10 +898,28 @@ static int otx2_get_rxfh(struct net_device *dev,
 		for (idx = 0; idx < rss->rss_size; idx++)
 			indir[idx] = rss_ctx->ind_tbl[idx];
 	}
-	if (rxfh->key)
-		memcpy(rxfh->key, rss->key, sizeof(rss->key));
+	if (hkey)
+		memcpy(hkey, rss->key, sizeof(rss->key));
 
 	return 0;
+}
+
+/* Get RSS configuration */
+static int otx2_get_rxfh(struct net_device *dev, u32 *indir,
+			 u8 *hkey, u8 *hfunc)
+{
+	return otx2_get_rxfh_context(dev, indir, hkey, hfunc,
+				     DEFAULT_RSS_CONTEXT_GROUP);
+}
+
+/* Configure RSS table and hash key */
+static int otx2_set_rxfh(struct net_device *dev, const u32 *indir,
+			 const u8 *hkey, const u8 hfunc)
+{
+
+	u32 rss_context = DEFAULT_RSS_CONTEXT_GROUP;
+
+	return otx2_set_rxfh_context(dev, indir, hkey, hfunc, &rss_context, 0);
 }
 
 static u32 otx2_get_msglevel(struct net_device *netdev)
@@ -967,7 +947,7 @@ static u32 otx2_get_link(struct net_device *netdev)
 }
 
 static int otx2_get_ts_info(struct net_device *netdev,
-			    struct kernel_ethtool_ts_info *info)
+			    struct ethtool_ts_info *info)
 {
 	struct otx2_nic *pfvf = netdev_priv(netdev);
 
@@ -975,6 +955,8 @@ static int otx2_get_ts_info(struct net_device *netdev,
 		return ethtool_op_get_ts_info(netdev, info);
 
 	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
+				SOF_TIMESTAMPING_RX_SOFTWARE |
+				SOF_TIMESTAMPING_SOFTWARE |
 				SOF_TIMESTAMPING_TX_HARDWARE |
 				SOF_TIMESTAMPING_RX_HARDWARE |
 				SOF_TIMESTAMPING_RAW_HARDWARE;
@@ -1085,11 +1067,6 @@ static int otx2_set_fecparam(struct net_device *netdev,
 
 	rsp = (struct fec_mode *)otx2_mbox_get_rsp(&pfvf->mbox.mbox,
 						   0, &req->hdr);
-	if (IS_ERR(rsp)) {
-		err = PTR_ERR(rsp);
-		goto end;
-	}
-
 	if (rsp->fec >= 0)
 		pfvf->linfo.fec = rsp->fec;
 	else
@@ -1291,41 +1268,7 @@ end:
 	return err;
 }
 
-static void otx2_get_fec_stats(struct net_device *netdev,
-			       struct ethtool_fec_stats *fec_stats)
-{
-	struct otx2_nic *pfvf = netdev_priv(netdev);
-	struct cgx_fw_data *rsp;
-
-	otx2_update_lmac_fec_stats(pfvf);
-
-	/* Report MAC FEC stats */
-	fec_stats->corrected_blocks.total     = pfvf->hw.cgx_fec_corr_blks;
-	fec_stats->uncorrectable_blocks.total = pfvf->hw.cgx_fec_uncorr_blks;
-
-	rsp = otx2_get_fwdata(pfvf);
-	if (!IS_ERR(rsp) && rsp->fwdata.phy.misc.has_fec_stats &&
-	    !otx2_get_phy_fec_stats(pfvf)) {
-		/* Fetch fwdata again because it's been recently populated with
-		 * latest PHY FEC stats.
-		 */
-		rsp = otx2_get_fwdata(pfvf);
-		if (!IS_ERR(rsp)) {
-			struct fec_stats_s *p = &rsp->fwdata.phy.fec_stats;
-
-			if (pfvf->linfo.fec == OTX2_FEC_BASER) {
-				fec_stats->corrected_blocks.total = p->brfec_corr_blks;
-				fec_stats->uncorrectable_blocks.total = p->brfec_uncorr_blks;
-			} else {
-				fec_stats->corrected_blocks.total = p->rsfec_corr_cws;
-				fec_stats->uncorrectable_blocks.total = p->rsfec_uncorr_cws;
-			}
-		}
-	}
-}
-
 static const struct ethtool_ops otx2_ethtool_ops = {
-	.cap_rss_ctx_supported	= true,
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
 				     ETHTOOL_COALESCE_MAX_FRAMES |
 				     ETHTOOL_COALESCE_USE_ADAPTIVE,
@@ -1348,12 +1291,13 @@ static const struct ethtool_ops otx2_ethtool_ops = {
 	.get_rxfh_indir_size	= otx2_get_rxfh_indir_size,
 	.get_rxfh		= otx2_get_rxfh,
 	.set_rxfh		= otx2_set_rxfh,
+	.get_rxfh_context	= otx2_get_rxfh_context,
+	.set_rxfh_context	= otx2_set_rxfh_context,
 	.get_msglevel		= otx2_get_msglevel,
 	.set_msglevel		= otx2_set_msglevel,
 	.get_pauseparam		= otx2_get_pauseparam,
 	.set_pauseparam		= otx2_set_pauseparam,
 	.get_ts_info		= otx2_get_ts_info,
-	.get_fec_stats		= otx2_get_fec_stats,
 	.get_fecparam		= otx2_get_fecparam,
 	.set_fecparam		= otx2_set_fecparam,
 	.get_link_ksettings     = otx2_get_link_ksettings,
@@ -1427,7 +1371,7 @@ static int otx2vf_get_sset_count(struct net_device *netdev, int sset)
 		return -EINVAL;
 
 	qstats_count = otx2_n_queue_stats *
-		       (vf->hw.rx_queues + otx2_get_total_tx_queues(vf));
+		       (vf->hw.rx_queues + vf->hw.tx_queues);
 
 	return otx2_n_dev_stats + otx2_n_drv_stats + qstats_count + 1;
 }
@@ -1447,7 +1391,6 @@ static int otx2vf_get_link_ksettings(struct net_device *netdev,
 }
 
 static const struct ethtool_ops otx2vf_ethtool_ops = {
-	.cap_rss_ctx_supported	= true,
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
 				     ETHTOOL_COALESCE_MAX_FRAMES |
 				     ETHTOOL_COALESCE_USE_ADAPTIVE,
@@ -1466,6 +1409,8 @@ static const struct ethtool_ops otx2vf_ethtool_ops = {
 	.get_rxfh_indir_size	= otx2_get_rxfh_indir_size,
 	.get_rxfh		= otx2_get_rxfh,
 	.set_rxfh		= otx2_set_rxfh,
+	.get_rxfh_context	= otx2_get_rxfh_context,
+	.set_rxfh_context	= otx2_set_rxfh_context,
 	.get_ringparam		= otx2_get_ringparam,
 	.set_ringparam		= otx2_set_ringparam,
 	.get_coalesce		= otx2_get_coalesce,

@@ -27,25 +27,14 @@ dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-g-a2197-00-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-m-a2197-01-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-m-a2197-02-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-m-a2197-03-revA.dtb
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-01-revA.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-02-revA.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-03-revA.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-04-revA.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-05-revA.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA.dtb
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-revB.dtb
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-revC.dtb
-
-zynqmp-p-a2197-00-revA-x-prc-01-revA-dtbs := zynqmp-p-a2197-00-revA.dtb zynqmp-p-a2197-00-revA-x-prc-01-revA.dtbo
-zynqmp-p-a2197-00-revA-x-prc-02-revA-dtbs := zynqmp-p-a2197-00-revA.dtb zynqmp-p-a2197-00-revA-x-prc-02-revA.dtbo
-zynqmp-p-a2197-00-revA-x-prc-03-revA-dtbs := zynqmp-p-a2197-00-revA.dtb zynqmp-p-a2197-00-revA-x-prc-03-revA.dtbo
-zynqmp-p-a2197-00-revA-x-prc-04-revA-dtbs := zynqmp-p-a2197-00-revA.dtb zynqmp-p-a2197-00-revA-x-prc-04-revA.dtbo
-zynqmp-p-a2197-00-revA-x-prc-05-revA-dtbs := zynqmp-p-a2197-00-revA.dtb zynqmp-p-a2197-00-revA-x-prc-05-revA.dtbo
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-01-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-02-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-03-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-04-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA-x-prc-05-revA.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-p-a2197-00-revA.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-revB.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-revC.dtb
 
 zynqmp-sc-vek280-revA-dtbs := zynqmp-sc-revB.dtb zynqmp-sc-vek280-revA.dtbo
 zynqmp-sc-vek280-revB-dtbs := zynqmp-sc-revC.dtb zynqmp-sc-vek280-revB.dtbo
@@ -54,7 +43,6 @@ zynqmp-sc-vpk120-revB-dtbs := zynqmp-sc-revB.dtb zynqmp-sc-vpk120-revB.dtbo
 zynqmp-sc-vpk180-revA-dtbs := zynqmp-sc-revB.dtb zynqmp-sc-vpk180-revA.dtbo
 zynqmp-sc-vpk180-revB-dtbs := zynqmp-sc-revB.dtb zynqmp-sc-vpk180-revB.dtbo
 zynqmp-sc-vn-p-b2197-00-revA-dtbs := zynqmp-sc-revB.dtb zynqmp-sc-vn-p-b2197-00-revA.dtbo
-zynqmp-sc-vm-p-m1369-00-revA-dtbs := zynqmp-sc-revB.dtb zynqmp-sc-vm-p-m1369-00-revA.dtbo
 
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-vek280-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-vek280-revB.dtb
@@ -63,7 +51,6 @@ dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-vpk120-revB.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-vpk180-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-vpk180-revB.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-vn-p-b2197-00-revA.dtb
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sc-vm-p-m1369-00-revA.dtb
 
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-vp-x-a2785-00-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-vpk120-revA.dtb
@@ -79,13 +66,9 @@ dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k24-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-smk-k24-revA.dtb
 
 zynqmp-sm-k26-revA-sck-kv-g-revA-dtbs := zynqmp-sm-k26-revA.dtb zynqmp-sck-kv-g-revA.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k26-revA-sck-kv-g-revA.dtb
 zynqmp-sm-k26-revA-sck-kv-g-revB-dtbs := zynqmp-sm-k26-revA.dtb zynqmp-sck-kv-g-revB.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k26-revA-sck-kv-g-revB.dtb
 zynqmp-smk-k26-revA-sck-kv-g-revA-dtbs := zynqmp-smk-k26-revA.dtb zynqmp-sck-kv-g-revA.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-smk-k26-revA-sck-kv-g-revA.dtb
 zynqmp-smk-k26-revA-sck-kv-g-revB-dtbs := zynqmp-smk-k26-revA.dtb zynqmp-sck-kv-g-revB.dtbo
-dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-smk-k26-revA-sck-kv-g-revB.dtb
 
 zynqmp-sm-k26-revA-sck-kr-g-revA-dtbs := zynqmp-sm-k26-revA.dtb zynqmp-sck-kr-g-revA.dtbo
 zynqmp-sm-k26-revA-sck-kr-g-revB-dtbs := zynqmp-sm-k26-revA.dtb zynqmp-sck-kr-g-revB.dtbo
@@ -97,6 +80,10 @@ zynqmp-smk-k24-revA-sck-kd-g-revA-dtbs := zynqmp-smk-k24-revA.dtb zynqmp-sck-kd-
 zynqmp-sm-k24-revA-sck-kv-g-revB-dtbs := zynqmp-sm-k24-revA.dtb zynqmp-sck-kv-g-revB.dtbo
 zynqmp-smk-k24-revA-sck-kv-g-revB-dtbs := zynqmp-smk-k24-revA.dtb zynqmp-sck-kv-g-revB.dtbo
 
+dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k26-revA-sck-kv-g-revA.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k26-revA-sck-kv-g-revB.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-smk-k26-revA-sck-kv-g-revA.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-smk-k26-revA-sck-kv-g-revB.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k26-revA-sck-kr-g-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k26-revA-sck-kr-g-revB.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-smk-k26-revA-sck-kr-g-revA.dtb
@@ -107,7 +94,6 @@ dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-sm-k24-revA-sck-kv-g-revB.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += zynqmp-smk-k24-revA-sck-kv-g-revB.dtb
 
 # Versal boards
-dtb-$(CONFIG_ARCH_ZYNQMP) += versal-emb-plus-ve2302-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += versal-v350-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += versal-vek280-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += versal-vek280-revB.dtb
@@ -151,8 +137,11 @@ dtb-$(CONFIG_ARCH_ZYNQMP) += versal-vck190-revB-x-ebm-02-revA.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += versal-vck190-revB-x-ebm-03-revA.dtb
 
 # Versal NET platforms
+dtb-$(CONFIG_ARCH_ZYNQMP) += versal-net-emu-rev1.9.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += versal-net-ipp-rev1.9-ospi.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += versal-net-ipp-rev1.9.dtb
 dtb-$(CONFIG_ARCH_ZYNQMP) += versal-net-vn-p-b2197-00-revA.dtb
-dtb-$(CONFIG_ARCH_ZYNQMP) += versal-net-vn-x-b2197-01-revA.dtb
+dtb-$(CONFIG_ARCH_ZYNQMP) += versal-net-vn-x-b2197-00-revA.dtb
 
 versal-net-vn-p-b2197-00-revA-x-prc-07-revA-dtbs := versal-net-vn-p-b2197-00-revA.dtb x-prc-07-revA.dtbo
 versal-net-vn-p-b2197-00-revA-x-prc-07-i3c-revA-dtbs := versal-net-vn-p-b2197-00-revA.dtb x-prc-07-i3c-revA.dtbo

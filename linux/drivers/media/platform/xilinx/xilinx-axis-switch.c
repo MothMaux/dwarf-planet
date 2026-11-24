@@ -133,7 +133,8 @@ xvsw_get_pad_format(struct xvswitch_device *xvsw,
 
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		get_fmt = v4l2_subdev_state_get_format(sd_state, pad);
+		get_fmt = v4l2_subdev_get_try_format(&xvsw->subdev, sd_state,
+						     pad);
 		break;
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		get_fmt = &xvsw->formats[pad];
@@ -253,7 +254,6 @@ static int xvsw_set_format(struct v4l2_subdev *subdev,
 	return 0;
 }
 
-#if 0
 static int xvsw_get_routing(struct v4l2_subdev *subdev,
 			    struct v4l2_subdev_routing *route)
 {
@@ -273,8 +273,8 @@ static int xvsw_get_routing(struct v4l2_subdev *subdev,
 		min = route->num_routes;
 
 	for (i = 0; i < min; ++i) {
-		route->routes[i].sink_pad = xvsw->routing[i];
-		route->routes[i].source_pad = i;
+		route->routes[i].sink = xvsw->routing[i];
+		route->routes[i].source = i;
 	}
 
 	route->num_routes = xvsw->nsources;
@@ -283,12 +283,9 @@ static int xvsw_get_routing(struct v4l2_subdev *subdev,
 
 	return 0;
 }
-#endif
 
 static int xvsw_set_routing(struct v4l2_subdev *subdev,
-			    struct v4l2_subdev_state *state,
-			    enum v4l2_subdev_format_whence which,
-			    struct v4l2_subdev_krouting *route)
+			    struct v4l2_subdev_routing *route)
 {
 	struct xvswitch_device *xvsw = to_xvsw(subdev);
 	unsigned int i;
@@ -309,8 +306,8 @@ static int xvsw_set_routing(struct v4l2_subdev *subdev,
 		xvsw->routing[i] = -1;
 
 	for (i = 0; i < route->num_routes; ++i)
-		xvsw->routing[route->routes[i].source_pad - xvsw->nsinks] =
-			route->routes[i].sink_pad;
+		xvsw->routing[route->routes[i].source - xvsw->nsinks] =
+			route->routes[i].sink;
 
 done:
 	mutex_unlock(&subdev->entity.graph_obj.mdev->graph_mutex);
@@ -336,7 +333,7 @@ static struct v4l2_subdev_pad_ops xvsw_pad_ops = {
 	.enum_frame_size = xvip_enum_frame_size,
 	.get_fmt = xvsw_get_format,
 	.set_fmt = xvsw_set_format,
-/*	.get_routing = xvsw_get_routing,*/
+	.get_routing = xvsw_get_routing,
 	.set_routing = xvsw_set_routing,
 };
 
@@ -425,11 +422,11 @@ static int xvsw_parse_of(struct xvswitch_device *xvsw)
 
 	if (!xvsw->tdest_routing) {
 		xvsw->saxi_ctlclk = devm_clk_get(xvsw->dev,
-						 "s_axi_ctrl_aclk");
+						 "s_axi_ctl_clk");
 		if (IS_ERR(xvsw->saxi_ctlclk)) {
 			ret = PTR_ERR(xvsw->saxi_ctlclk);
 			dev_err(xvsw->dev,
-				"failed to get s_axi_ctrl_aclk (%d)\n",
+				"failed to get s_axi_ctl_clk (%d)\n",
 				ret);
 			return ret;
 		}
@@ -568,7 +565,7 @@ static int xvsw_probe(struct platform_device *pdev)
 	v4l2_subdev_init(subdev, &xvsw_ops);
 	subdev->dev = &pdev->dev;
 	subdev->internal_ops = &xvsw_internal_ops;
-	strscpy(subdev->name, dev_name(&pdev->dev), sizeof(subdev->name));
+	strlcpy(subdev->name, dev_name(&pdev->dev), sizeof(subdev->name));
 	v4l2_set_subdevdata(subdev, xvsw);
 	subdev->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	subdev->entity.ops = &xvsw_media_ops;
@@ -598,7 +595,7 @@ clk_error:
 	return ret;
 }
 
-static void xvsw_remove(struct platform_device *pdev)
+static int xvsw_remove(struct platform_device *pdev)
 {
 	struct xvswitch_device *xvsw = platform_get_drvdata(pdev);
 	struct v4l2_subdev *subdev = &xvsw->subdev;
@@ -608,6 +605,7 @@ static void xvsw_remove(struct platform_device *pdev)
 	if (!xvsw->tdest_routing)
 		clk_disable_unprepare(xvsw->saxi_ctlclk);
 	clk_disable_unprepare(xvsw->aclk);
+	return 0;
 }
 
 static const struct of_device_id xvsw_of_id_table[] = {
@@ -629,4 +627,4 @@ module_platform_driver(xvsw_driver);
 
 MODULE_AUTHOR("Vishal Sagar <vishal.sagar@xilinx.com>");
 MODULE_DESCRIPTION("Xilinx AXI4-Stream Switch Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

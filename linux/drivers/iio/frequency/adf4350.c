@@ -34,6 +34,7 @@ enum {
 
 struct adf4350_state {
 	struct spi_device		*spi;
+	struct regulator		*reg;
 	struct gpio_desc		*lock_detect_gpiod;
 	struct adf4350_platform_data	*pdata;
 	struct clk			*clk;
@@ -152,12 +153,6 @@ static int adf4350_set_freq(struct adf4350_state *st, unsigned long long freq)
 
 	st->r4_rf_div_sel = 0;
 
-	/*
-	 * !\TODO: The below computation is making sure we get a power of 2
-	 * shift (st->r4_rf_div_sel) so that freq becomes higher or equal to
-	 * ADF4350_MIN_VCO_FREQ. This might be simplified with fls()/fls_long()
-	 * and friends.
-	 */
 	while (freq < ADF4350_MIN_VCO_FREQ) {
 		freq <<= 1;
 		st->r4_rf_div_sel++;
@@ -227,13 +222,7 @@ static int adf4350_set_freq(struct adf4350_state *st, unsigned long long freq)
 	st->regs[ADF4350_REG2] &= ~ADF4350_REG2_10BIT_R_CNT(0x3FF);
 	st->regs[ADF4350_REG2] |= ADF4350_REG2_10BIT_R_CNT(r_cnt);
 
-	if (st->r0_fract) {
-		st->regs[ADF4350_REG2] &= ~ADF4350_REG2_LDF_INT_N;
-		st->regs[ADF4350_REG3] &= ~ADF4351_REG3_ANTI_BACKLASH_3ns_EN;
-	} else {
-		st->regs[ADF4350_REG2] |= ADF4350_REG2_LDF_INT_N;
-		st->regs[ADF4350_REG3] |= ADF4351_REG3_ANTI_BACKLASH_3ns_EN;
-	}
+
 	st->regs[ADF4350_REG4] &= ~(ADF4350_REG4_RF_DIV_SEL(0x7) |
 				ADF4350_REG4_8BIT_BAND_SEL_CLKDIV(0xFF));
 	st->regs[ADF4350_REG4] |= ADF4350_REG4_RF_DIV_SEL(st->r4_rf_div_sel) |
@@ -436,20 +425,12 @@ static int adf4350_clk_is_enabled(struct clk_hw *hw)
 	return (st->regs[ADF4350_REG2] & ADF4350_REG2_POWER_DOWN_EN);
 }
 
-static long adf4350_clk_round_rate(struct clk_hw *hw,
-				   unsigned long rate,
-				   unsigned long *parent_rate)
-{
-	return rate;
-}
-
 static const struct clk_ops adf4350_clk_ops = {
 	.recalc_rate = adf4350_clk_recalc_rate,
 	.set_rate = adf4350_clk_set_rate,
 	.prepare = adf4350_clk_prepare,
 	.unprepare = adf4350_clk_unprepare,
 	.is_enabled = adf4350_clk_is_enabled,
-	.round_rate = adf4350_clk_round_rate,
 };
 
 static int adf4350_clk_register(struct adf4350_state *st)
@@ -580,15 +561,6 @@ static struct adf4350_platform_data *adf4350_parse_dt(struct device *dev)
 	return pdata;
 }
 
-static void adf4350_power_down(void *data)
-{
-	struct iio_dev *indio_dev = data;
-	struct adf4350_state *st = iio_priv(indio_dev);
-
-	st->regs[ADF4350_REG2] |= ADF4350_REG2_POWER_DOWN_EN;
-	adf4350_sync_config(st, true);
-}
-
 static int adf4350_probe(struct spi_device *spi)
 {
 	struct adf4350_platform_data *pdata;
@@ -611,21 +583,31 @@ static int adf4350_probe(struct spi_device *spi)
 	}
 
 	if (!pdata->clkin) {
-		clk = devm_clk_get_enabled(&spi->dev, "clkin");
+		clk = devm_clk_get(&spi->dev, "clkin");
 		if (IS_ERR(clk))
-			return PTR_ERR(clk);
+			return -EPROBE_DEFER;
+
+		ret = clk_prepare_enable(clk);
+		if (ret < 0)
+			return ret;
 	}
 
 	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
-	if (indio_dev == NULL)
-		return -ENOMEM;
+	if (indio_dev == NULL) {
+		ret =  -ENOMEM;
+		goto error_disable_clk;
+	}
 
 	st = iio_priv(indio_dev);
 
-	ret = devm_regulator_get_enable(&spi->dev, "vcc");
-	if (ret)
-		return ret;
+	st->reg = devm_regulator_get(&spi->dev, "vcc");
+	if (!IS_ERR(st->reg)) {
+		ret = regulator_enable(st->reg);
+		if (ret)
+			goto error_disable_clk;
+	}
 
+	spi_set_drvdata(spi, indio_dev);
 	st->spi = spi;
 	st->pdata = pdata;
 
@@ -652,8 +634,10 @@ static int adf4350_probe(struct spi_device *spi)
 
 	st->lock_detect_gpiod = devm_gpiod_get_optional(&spi->dev, NULL,
 							GPIOD_IN);
-	if (IS_ERR(st->lock_detect_gpiod))
-		return PTR_ERR(st->lock_detect_gpiod);
+	if (IS_ERR(st->lock_detect_gpiod)) {
+		ret = PTR_ERR(st->lock_detect_gpiod);
+		goto error_disable_reg;
+	}
 
 	if (st->lock_detect_gpiod) {
 		int i;
@@ -665,8 +649,9 @@ static int adf4350_probe(struct spi_device *spi)
 			adf4350_sync_config(st, false);
 			ret = gpiod_get_value(st->lock_detect_gpiod);
 			if (ret != ((i & 1) ? 1 : 0)) {
+				ret = -ENODEV;
 				dev_err(&spi->dev, "Probe failed (muxout)");
-				return -ENODEV;
+				goto error_disable_reg;
 			}
 		}
 	}
@@ -704,24 +689,48 @@ static int adf4350_probe(struct spi_device *spi)
 	if (pdata->power_up_frequency) {
 		ret = adf4350_set_freq(st, pdata->power_up_frequency);
 		if (ret)
-			return ret;
+			goto error_disable_reg;
 	}
 
 	ret = adf4350_clk_register(st);
 	if (ret)
-		return ret;
+		goto error_disable_reg;
 
 	if (!st->clkout) {
 		indio_dev->channels = &adf4350_chan;
 		indio_dev->num_channels = 1;
 	}
 
-	ret = devm_add_action_or_reset(&spi->dev, adf4350_power_down, indio_dev);
+	ret = iio_device_register(indio_dev);
 	if (ret)
-		return dev_err_probe(&spi->dev, ret,
-				     "Failed to add action to managed power down\n");
+		goto error_disable_reg;
 
-	return devm_iio_device_register(&spi->dev, indio_dev);
+	return 0;
+
+error_disable_reg:
+	if (!IS_ERR(st->reg))
+		regulator_disable(st->reg);
+error_disable_clk:
+	clk_disable_unprepare(clk);
+
+	return ret;
+}
+
+static void adf4350_remove(struct spi_device *spi)
+{
+	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+	struct adf4350_state *st = iio_priv(indio_dev);
+	struct regulator *reg = st->reg;
+
+	st->regs[ADF4350_REG2] |= ADF4350_REG2_POWER_DOWN_EN;
+	adf4350_sync_config(st, false);
+
+	iio_device_unregister(indio_dev);
+
+	clk_disable_unprepare(st->clk);
+
+	if (!IS_ERR(reg))
+		regulator_disable(reg);
 }
 
 static const struct of_device_id adf4350_of_match[] = {
@@ -744,6 +753,7 @@ static struct spi_driver adf4350_driver = {
 		.of_match_table = adf4350_of_match,
 	},
 	.probe		= adf4350_probe,
+	.remove		= adf4350_remove,
 	.id_table	= adf4350_id,
 };
 module_spi_driver(adf4350_driver);

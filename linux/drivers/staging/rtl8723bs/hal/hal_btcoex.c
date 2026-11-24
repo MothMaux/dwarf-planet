@@ -6,6 +6,7 @@
  ******************************************************************************/
 
 #include <hal_data.h>
+#include <rtw_debug.h>
 #include <hal_btcoex.h>
 #include <Mp_Precomp.h>
 
@@ -1174,6 +1175,14 @@ bool hal_btcoex_IsBtDisabled(struct adapter *padapter)
 		return true;
 	else
 		return false;
+}
+
+void hal_btcoex_SetChipType(struct adapter *padapter, u8 chipType)
+{
+	struct hal_com_data *pHalData;
+
+
+	pHalData = GET_HAL_DATA(padapter);
 }
 
 void hal_btcoex_SetPgAntNum(struct adapter *padapter, u8 antNum)

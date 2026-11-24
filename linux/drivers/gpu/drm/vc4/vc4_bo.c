@@ -69,8 +69,8 @@ static void vc4_bo_stats_print(struct drm_printer *p, struct vc4_dev *vc4)
 
 static int vc4_bo_stats_debugfs(struct seq_file *m, void *unused)
 {
-	struct drm_debugfs_entry *entry = m->private;
-	struct drm_device *dev = entry->dev;
+	struct drm_info_node *node = (struct drm_info_node *)m->private;
+	struct drm_device *dev = node->minor->dev;
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	struct drm_printer p = drm_seq_file_printer(m);
 
@@ -179,7 +179,6 @@ static void vc4_bo_destroy(struct vc4_bo *bo)
 		bo->validated_shader = NULL;
 	}
 
-	mutex_destroy(&bo->madv_lock);
 	drm_gem_dma_free(&bo->base);
 }
 
@@ -251,7 +250,7 @@ void vc4_bo_add_to_purgeable_pool(struct vc4_bo *bo)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(bo->base.base.dev);
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return;
 
 	mutex_lock(&vc4->purgeable.lock);
@@ -265,7 +264,7 @@ static void vc4_bo_remove_from_purgeable_pool_locked(struct vc4_bo *bo)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(bo->base.base.dev);
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return;
 
 	/* list_del_init() is used here because the caller might release
@@ -395,8 +394,9 @@ struct drm_gem_object *vc4_create_object(struct drm_device *dev, size_t size)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 	struct vc4_bo *bo;
+	int ret;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return ERR_PTR(-ENODEV);
 
 	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
@@ -406,7 +406,9 @@ struct drm_gem_object *vc4_create_object(struct drm_device *dev, size_t size)
 	bo->madv = VC4_MADV_WILLNEED;
 	refcount_set(&bo->usecnt, 0);
 
-	mutex_init(&bo->madv_lock);
+	ret = drmm_mutex_init(dev, &bo->madv_lock);
+	if (ret)
+		return ERR_PTR(ret);
 
 	mutex_lock(&vc4->bo_lock);
 	bo->label = VC4_BO_TYPE_KERNEL;
@@ -427,7 +429,7 @@ struct vc4_bo *vc4_bo_create(struct drm_device *dev, size_t unaligned_size,
 	struct drm_gem_dma_object *dma_obj;
 	struct vc4_bo *bo;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return ERR_PTR(-ENODEV);
 
 	if (size == 0)
@@ -469,7 +471,7 @@ struct vc4_bo *vc4_bo_create(struct drm_device *dev, size_t unaligned_size,
 
 	if (IS_ERR(dma_obj)) {
 		struct drm_printer p = drm_info_printer(vc4->base.dev);
-		drm_err(dev, "Failed to allocate from GEM DMA helper:\n");
+		DRM_ERROR("Failed to allocate from GEM DMA helper:\n");
 		vc4_bo_stats_print(&p, vc4);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -496,7 +498,7 @@ int vc4_bo_dumb_create(struct drm_file *file_priv,
 	struct vc4_bo *bo = NULL;
 	int ret;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	ret = vc4_dumb_fixup_args(args);
@@ -622,7 +624,7 @@ int vc4_bo_inc_usecnt(struct vc4_bo *bo)
 	struct vc4_dev *vc4 = to_vc4_dev(bo->base.base.dev);
 	int ret;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	/* Fast path: if the BO is already retained by someone, no need to
@@ -661,7 +663,7 @@ void vc4_bo_dec_usecnt(struct vc4_bo *bo)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(bo->base.base.dev);
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return;
 
 	/* Fast path: if the BO is still retained by someone, no need to test
@@ -702,7 +704,7 @@ static struct dma_buf *vc4_prime_export(struct drm_gem_object *obj, int flags)
 	 */
 	ret = vc4_bo_inc_usecnt(bo);
 	if (ret) {
-		drm_err(obj->dev, "Failed to increment BO usecnt\n");
+		DRM_ERROR("Failed to increment BO usecnt\n");
 		return ERR_PTR(ret);
 	}
 
@@ -734,12 +736,12 @@ static int vc4_gem_object_mmap(struct drm_gem_object *obj, struct vm_area_struct
 	struct vc4_bo *bo = to_vc4_bo(obj);
 
 	if (bo->validated_shader && (vma->vm_flags & VM_WRITE)) {
-		DRM_DEBUG("mmapping of shader BOs for writing not allowed.\n");
+		DRM_DEBUG("mmaping of shader BOs for writing not allowed.\n");
 		return -EINVAL;
 	}
 
 	if (bo->madv != VC4_MADV_WILLNEED) {
-		DRM_DEBUG("mmapping of %s BO not allowed\n",
+		DRM_DEBUG("mmaping of %s BO not allowed\n",
 			  bo->madv == VC4_MADV_DONTNEED ?
 			  "purgeable" : "purged");
 		return -EINVAL;
@@ -783,7 +785,7 @@ int vc4_create_bo_ioctl(struct drm_device *dev, void *data,
 	struct vc4_bo *bo = NULL;
 	int ret;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	ret = vc4_grab_bin_bo(vc4, vc4file);
@@ -813,7 +815,7 @@ int vc4_mmap_bo_ioctl(struct drm_device *dev, void *data,
 	struct drm_vc4_mmap_bo *args = data;
 	struct drm_gem_object *gem_obj;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	gem_obj = drm_gem_object_lookup(file_priv, args->handle);
@@ -839,7 +841,7 @@ vc4_create_shader_bo_ioctl(struct drm_device *dev, void *data,
 	struct vc4_bo *bo = NULL;
 	int ret;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	if (args->size == 0)
@@ -918,7 +920,7 @@ int vc4_set_tiling_ioctl(struct drm_device *dev, void *data,
 	struct vc4_bo *bo;
 	bool t_format;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	if (args->flags != 0)
@@ -964,7 +966,7 @@ int vc4_get_tiling_ioctl(struct drm_device *dev, void *data,
 	struct drm_gem_object *gem_obj;
 	struct vc4_bo *bo;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	if (args->flags != 0 || args->modifier != 0)
@@ -991,11 +993,15 @@ int vc4_bo_debugfs_init(struct drm_minor *minor)
 {
 	struct drm_device *drm = minor->dev;
 	struct vc4_dev *vc4 = to_vc4_dev(drm);
+	int ret;
 
 	if (!vc4->v3d)
 		return -ENODEV;
 
-	drm_debugfs_add_file(drm, "bo_stats", vc4_bo_stats_debugfs, NULL);
+	ret = vc4_debugfs_add_file(minor, "bo_stats",
+				   vc4_bo_stats_debugfs, NULL);
+	if (ret)
+		return ret;
 
 	return 0;
 }
@@ -1007,7 +1013,7 @@ int vc4_bo_cache_init(struct drm_device *dev)
 	int ret;
 	int i;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	/* Create the initial set of BO labels that the kernel will
@@ -1050,10 +1056,10 @@ static void vc4_bo_cache_destroy(struct drm_device *dev, void *unused)
 
 	for (i = 0; i < vc4->num_labels; i++) {
 		if (vc4->bo_labels[i].num_allocated) {
-			drm_err(dev, "Destroying BO cache with %d %s "
-				"BOs still allocated\n",
-				vc4->bo_labels[i].num_allocated,
-				vc4->bo_labels[i].name);
+			DRM_ERROR("Destroying BO cache with %d %s "
+				  "BOs still allocated\n",
+				  vc4->bo_labels[i].num_allocated,
+				  vc4->bo_labels[i].name);
 		}
 
 		if (is_user_label(i))
@@ -1071,7 +1077,7 @@ int vc4_label_bo_ioctl(struct drm_device *dev, void *data,
 	struct drm_gem_object *gem_obj;
 	int ret = 0, label;
 
-	if (WARN_ON_ONCE(vc4->gen == VC4_GEN_5))
+	if (WARN_ON_ONCE(vc4->is_vc5))
 		return -ENODEV;
 
 	if (!args->len)
@@ -1083,7 +1089,7 @@ int vc4_label_bo_ioctl(struct drm_device *dev, void *data,
 
 	gem_obj = drm_gem_object_lookup(file_priv, args->handle);
 	if (!gem_obj) {
-		drm_err(dev, "Failed to look up GEM BO %d\n", args->handle);
+		DRM_ERROR("Failed to look up GEM BO %d\n", args->handle);
 		kfree(name);
 		return -ENOENT;
 	}

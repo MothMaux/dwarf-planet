@@ -77,7 +77,6 @@ static int parse_fixed_partitions(struct mtd_info *master,
 	of_id = of_match_node(parse_ofpart_match_table, ofpart_node);
 	if (dedicated && !of_id) {
 		/* The 'partitions' subnode might be used by another parser */
-		of_node_put(ofpart_node);
 		return 0;
 	}
 
@@ -92,18 +91,12 @@ static int parse_fixed_partitions(struct mtd_info *master,
 		nr_parts++;
 	}
 
-	if (nr_parts == 0) {
-		if (dedicated)
-			of_node_put(ofpart_node);
+	if (nr_parts == 0)
 		return 0;
-	}
 
 	parts = kcalloc(nr_parts, sizeof(*parts), GFP_KERNEL);
-	if (!parts) {
-		if (dedicated)
-			of_node_put(ofpart_node);
+	if (!parts)
 		return -ENOMEM;
-	}
 
 	i = 0;
 	for_each_child_of_node(ofpart_node,  pp) {
@@ -129,25 +122,6 @@ static int parse_fixed_partitions(struct mtd_info *master,
 
 		a_cells = of_n_addr_cells(pp);
 		s_cells = of_n_size_cells(pp);
-		if (!dedicated && s_cells == 0) {
-			/*
-			 * This is a ugly workaround to not create
-			 * regression on devices that are still creating
-			 * partitions as direct children of the nand controller.
-			 * This can happen in case the nand controller node has
-			 * #size-cells equal to 0 and the firmware (e.g.
-			 * U-Boot) just add the partitions there assuming
-			 * 32-bit addressing.
-			 *
-			 * If you get this warning your firmware and/or DTS
-			 * should be really fixed.
-			 *
-			 * This is working only for devices smaller than 4GiB.
-			 */
-			pr_warn("%s: ofpart partition %pOF (%pOF) #size-cells is wrongly set to <0>, assuming <1> for parsing partitions.\n",
-				master->name, pp, mtd_node);
-			s_cells = 1;
-		}
 		if (len / 4 != a_cells + s_cells) {
 			pr_debug("%s: ofpart partition %pOF (%pOF) error parsing reg property.\n",
 				 master->name, pp,
@@ -164,10 +138,10 @@ static int parse_fixed_partitions(struct mtd_info *master,
 			partname = of_get_property(pp, "name", &len);
 		parts[i].name = partname;
 
-		if (of_property_read_bool(pp, "read-only"))
+		if (of_get_property(pp, "read-only", &len))
 			parts[i].mask_flags |= MTD_WRITEABLE;
 
-		if (of_property_read_bool(pp, "lock"))
+		if (of_get_property(pp, "lock", &len))
 			parts[i].mask_flags |= MTD_POWERUP_LOCK;
 
 		if (of_property_read_bool(pp, "slc-mode"))
@@ -182,9 +156,6 @@ static int parse_fixed_partitions(struct mtd_info *master,
 	if (quirks && quirks->post_parse)
 		quirks->post_parse(master, parts, nr_parts);
 
-	if (dedicated)
-		of_node_put(ofpart_node);
-
 	*pparts = parts;
 	return nr_parts;
 
@@ -193,8 +164,6 @@ ofpart_fail:
 	       master->name, pp, mtd_node);
 	ret = -EINVAL;
 ofpart_none:
-	if (dedicated)
-		of_node_put(ofpart_node);
 	of_node_put(pp);
 	kfree(parts);
 	return ret;

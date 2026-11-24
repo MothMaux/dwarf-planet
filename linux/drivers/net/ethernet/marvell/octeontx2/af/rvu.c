@@ -156,7 +156,7 @@ int rvu_alloc_rsrc_contig(struct rsrc_bmap *rsrc, int nrsrc)
 	return start;
 }
 
-void rvu_free_rsrc_contig(struct rsrc_bmap *rsrc, int nrsrc, int start)
+static void rvu_free_rsrc_contig(struct rsrc_bmap *rsrc, int nrsrc, int start)
 {
 	if (!rsrc->bmap)
 		return;
@@ -817,8 +817,6 @@ static int rvu_fwdata_init(struct rvu *rvu)
 	err = cgx_get_fwdata_base(&fwdbase);
 	if (err)
 		goto fail;
-
-	BUILD_BUG_ON(offsetof(struct rvu_fwdata, cgx_fw_data) > FWDATA_CGX_LMAC_OFFSET);
 	rvu->fwdata = ioremap_wc(fwdbase, sizeof(struct rvu_fwdata));
 	if (!rvu->fwdata)
 		goto fail;
@@ -936,9 +934,6 @@ static int rvu_setup_hw_resources(struct rvu *rvu)
 	hw->total_pfs = (cfg >> 32) & 0xFF;
 	hw->total_vfs = (cfg >> 20) & 0xFFF;
 	hw->max_vfs_per_pf = (cfg >> 40) & 0xFF;
-
-	if (!is_rvu_otx2(rvu))
-		rvu_apr_block_cn10k_init(rvu);
 
 	/* Init NPA LF's bitmap */
 	block = &hw->block[BLKADDR_NPA];
@@ -1162,7 +1157,6 @@ cpt:
 	}
 
 	rvu_program_channels(rvu);
-	cgx_start_linkup(rvu);
 
 	err = rvu_mcs_init(rvu);
 	if (err) {
@@ -1170,16 +1164,8 @@ cpt:
 		goto nix_err;
 	}
 
-	err = rvu_cpt_init(rvu);
-	if (err) {
-		dev_err(rvu->dev, "%s: Failed to initialize cpt\n", __func__);
-		goto mcs_err;
-	}
-
 	return 0;
 
-mcs_err:
-	rvu_mcs_exit(rvu);
 nix_err:
 	rvu_nix_freemem(rvu);
 npa_err:
@@ -1487,7 +1473,7 @@ int rvu_get_nix_blkaddr(struct rvu *rvu, u16 pcifunc)
 	/* All CGX mapped PFs are set with assigned NIX block during init */
 	if (is_pf_cgxmapped(rvu, rvu_get_pf(pcifunc))) {
 		blkaddr = pf->nix_blkaddr;
-	} else if (is_lbk_vf(rvu, pcifunc)) {
+	} else if (is_afvf(pcifunc)) {
 		vf = pcifunc - 1;
 		/* Assign NIX based on VF number. All even numbered VFs get
 		 * NIX0 and odd numbered gets NIX1
@@ -1546,8 +1532,8 @@ static int rvu_get_attach_blkaddr(struct rvu *rvu, int blktype,
 	return -ENODEV;
 }
 
-static int rvu_attach_block(struct rvu *rvu, int pcifunc, int blktype,
-			    int num_lfs, struct rsrc_attach *attach)
+static void rvu_attach_block(struct rvu *rvu, int pcifunc, int blktype,
+			     int num_lfs, struct rsrc_attach *attach)
 {
 	struct rvu_pfvf *pfvf = rvu_get_pfvf(rvu, pcifunc);
 	struct rvu_hwinfo *hw = rvu->hw;
@@ -1557,21 +1543,21 @@ static int rvu_attach_block(struct rvu *rvu, int pcifunc, int blktype,
 	u64 cfg;
 
 	if (!num_lfs)
-		return -EINVAL;
+		return;
 
 	blkaddr = rvu_get_attach_blkaddr(rvu, blktype, pcifunc, attach);
 	if (blkaddr < 0)
-		return -EFAULT;
+		return;
 
 	block = &hw->block[blkaddr];
 	if (!block->lf.bmap)
-		return -ESRCH;
+		return;
 
 	for (slot = 0; slot < num_lfs; slot++) {
 		/* Allocate the resource */
 		lf = rvu_alloc_rsrc(&block->lf);
 		if (lf < 0)
-			return -EFAULT;
+			return;
 
 		cfg = (1ULL << 63) | (pcifunc << 8) | slot;
 		rvu_write64(rvu, blkaddr, block->lfcfg_reg |
@@ -1582,8 +1568,6 @@ static int rvu_attach_block(struct rvu *rvu, int pcifunc, int blktype,
 		/* Set start MSIX vector for this LF within this PF/VF */
 		rvu_set_msix_offset(rvu, pfvf, block, lf);
 	}
-
-	return 0;
 }
 
 static int rvu_check_rsrc_availability(struct rvu *rvu,
@@ -1646,7 +1630,7 @@ static int rvu_check_rsrc_availability(struct rvu *rvu,
 		if (req->ssow > block->lf.max) {
 			dev_err(&rvu->pdev->dev,
 				"Func 0x%x: Invalid SSOW req, %d > max %d\n",
-				 pcifunc, req->ssow, block->lf.max);
+				 pcifunc, req->sso, block->lf.max);
 			return -EINVAL;
 		}
 		mappedlfs = rvu_get_rsrc_mapcount(pfvf, block->addr);
@@ -1721,31 +1705,22 @@ int rvu_mbox_handler_attach_resources(struct rvu *rvu,
 	int err;
 
 	/* If first request, detach all existing attached resources */
-	if (!attach->modify) {
-		err = rvu_detach_rsrcs(rvu, NULL, pcifunc);
-		if (err)
-			return err;
-	}
+	if (!attach->modify)
+		rvu_detach_rsrcs(rvu, NULL, pcifunc);
 
 	mutex_lock(&rvu->rsrc_lock);
 
 	/* Check if the request can be accommodated */
 	err = rvu_check_rsrc_availability(rvu, attach, pcifunc);
 	if (err)
-		goto fail1;
+		goto exit;
 
 	/* Now attach the requested resources */
-	if (attach->npalf) {
-		err = rvu_attach_block(rvu, pcifunc, BLKTYPE_NPA, 1, attach);
-		if (err)
-			goto fail1;
-	}
+	if (attach->npalf)
+		rvu_attach_block(rvu, pcifunc, BLKTYPE_NPA, 1, attach);
 
-	if (attach->nixlf) {
-		err = rvu_attach_block(rvu, pcifunc, BLKTYPE_NIX, 1, attach);
-		if (err)
-			goto fail2;
-	}
+	if (attach->nixlf)
+		rvu_attach_block(rvu, pcifunc, BLKTYPE_NIX, 1, attach);
 
 	if (attach->sso) {
 		/* RVU func doesn't know which exact LF or slot is attached
@@ -1755,64 +1730,33 @@ int rvu_mbox_handler_attach_resources(struct rvu *rvu,
 		 */
 		if (attach->modify)
 			rvu_detach_block(rvu, pcifunc, BLKTYPE_SSO);
-		err = rvu_attach_block(rvu, pcifunc, BLKTYPE_SSO,
-				       attach->sso, attach);
-		if (err)
-			goto fail3;
+		rvu_attach_block(rvu, pcifunc, BLKTYPE_SSO,
+				 attach->sso, attach);
 	}
 
 	if (attach->ssow) {
 		if (attach->modify)
 			rvu_detach_block(rvu, pcifunc, BLKTYPE_SSOW);
-		err = rvu_attach_block(rvu, pcifunc, BLKTYPE_SSOW,
-				       attach->ssow, attach);
-		if (err)
-			goto fail4;
+		rvu_attach_block(rvu, pcifunc, BLKTYPE_SSOW,
+				 attach->ssow, attach);
 	}
 
 	if (attach->timlfs) {
 		if (attach->modify)
 			rvu_detach_block(rvu, pcifunc, BLKTYPE_TIM);
-		err = rvu_attach_block(rvu, pcifunc, BLKTYPE_TIM,
-				       attach->timlfs, attach);
-		if (err)
-			goto fail5;
+		rvu_attach_block(rvu, pcifunc, BLKTYPE_TIM,
+				 attach->timlfs, attach);
 	}
 
 	if (attach->cptlfs) {
 		if (attach->modify &&
 		    rvu_attach_from_same_block(rvu, BLKTYPE_CPT, attach))
 			rvu_detach_block(rvu, pcifunc, BLKTYPE_CPT);
-		err = rvu_attach_block(rvu, pcifunc, BLKTYPE_CPT,
-				       attach->cptlfs, attach);
-		if (err)
-			goto fail6;
+		rvu_attach_block(rvu, pcifunc, BLKTYPE_CPT,
+				 attach->cptlfs, attach);
 	}
 
-	mutex_unlock(&rvu->rsrc_lock);
-	return 0;
-
-fail6:
-	if (attach->timlfs)
-		rvu_detach_block(rvu, pcifunc, BLKTYPE_TIM);
-
-fail5:
-	if (attach->ssow)
-		rvu_detach_block(rvu, pcifunc, BLKTYPE_SSOW);
-
-fail4:
-	if (attach->sso)
-		rvu_detach_block(rvu, pcifunc, BLKTYPE_SSO);
-
-fail3:
-	if (attach->nixlf)
-		rvu_detach_block(rvu, pcifunc, BLKTYPE_NIX);
-
-fail2:
-	if (attach->npalf)
-		rvu_detach_block(rvu, pcifunc, BLKTYPE_NPA);
-
-fail1:
+exit:
 	mutex_unlock(&rvu->rsrc_lock);
 	return err;
 }
@@ -2057,13 +2001,6 @@ int rvu_mbox_handler_vf_flr(struct rvu *rvu, struct msg_req *req,
 	return 0;
 }
 
-int rvu_ndc_sync(struct rvu *rvu, int lfblkaddr, int lfidx, u64 lfoffset)
-{
-	/* Sync cached info for this LF in NDC to LLC/DRAM */
-	rvu_write64(rvu, lfblkaddr, lfoffset, BIT_ULL(12) | lfidx);
-	return rvu_poll_reg(rvu, lfblkaddr, lfoffset, BIT_ULL(12), true);
-}
-
 int rvu_mbox_handler_get_hw_cap(struct rvu *rvu, struct msg_req *req,
 				struct get_hw_cap_rsp *rsp)
 {
@@ -2086,7 +2023,7 @@ int rvu_mbox_handler_set_vf_perm(struct rvu *rvu, struct set_vf_perm *req,
 	u16 target;
 
 	/* Only PF can add VF permissions */
-	if ((pcifunc & RVU_PFVF_FUNC_MASK) || is_lbk_vf(rvu, pcifunc))
+	if ((pcifunc & RVU_PFVF_FUNC_MASK) || is_afvf(pcifunc))
 		return -EOPNOTSUPP;
 
 	target = (pcifunc & ~RVU_PFVF_FUNC_MASK) | (req->vf + 1);
@@ -2113,65 +2050,6 @@ int rvu_mbox_handler_set_vf_perm(struct rvu *rvu, struct set_vf_perm *req,
 						     NIXLF_PROMISC_ENTRY,
 						     false);
 		}
-	}
-
-	return 0;
-}
-
-int rvu_mbox_handler_ndc_sync_op(struct rvu *rvu,
-				 struct ndc_sync_op *req,
-				 struct msg_rsp *rsp)
-{
-	struct rvu_hwinfo *hw = rvu->hw;
-	u16 pcifunc = req->hdr.pcifunc;
-	int err, lfidx, lfblkaddr;
-
-	if (req->npa_lf_sync) {
-		/* Get NPA LF data */
-		lfblkaddr = rvu_get_blkaddr(rvu, BLKTYPE_NPA, pcifunc);
-		if (lfblkaddr < 0)
-			return NPA_AF_ERR_AF_LF_INVALID;
-
-		lfidx = rvu_get_lf(rvu, &hw->block[lfblkaddr], pcifunc, 0);
-		if (lfidx < 0)
-			return NPA_AF_ERR_AF_LF_INVALID;
-
-		/* Sync NPA NDC */
-		err = rvu_ndc_sync(rvu, lfblkaddr,
-				   lfidx, NPA_AF_NDC_SYNC);
-		if (err)
-			dev_err(rvu->dev,
-				"NDC-NPA sync failed for LF %u\n", lfidx);
-	}
-
-	if (!req->nix_lf_tx_sync && !req->nix_lf_rx_sync)
-		return 0;
-
-	/* Get NIX LF data */
-	lfblkaddr = rvu_get_blkaddr(rvu, BLKTYPE_NIX, pcifunc);
-	if (lfblkaddr < 0)
-		return NIX_AF_ERR_AF_LF_INVALID;
-
-	lfidx = rvu_get_lf(rvu, &hw->block[lfblkaddr], pcifunc, 0);
-	if (lfidx < 0)
-		return NIX_AF_ERR_AF_LF_INVALID;
-
-	if (req->nix_lf_tx_sync) {
-		/* Sync NIX TX NDC */
-		err = rvu_ndc_sync(rvu, lfblkaddr,
-				   lfidx, NIX_AF_NDC_TX_SYNC);
-		if (err)
-			dev_err(rvu->dev,
-				"NDC-NIX-TX sync fail for LF %u\n", lfidx);
-	}
-
-	if (req->nix_lf_rx_sync) {
-		/* Sync NIX RX NDC */
-		err = rvu_ndc_sync(rvu, lfblkaddr,
-				   lfidx, NIX_AF_NDC_RX_SYNC);
-		if (err)
-			dev_err(rvu->dev,
-				"NDC-NIX-RX sync failed for LF %u\n", lfidx);
 	}
 
 	return 0;
@@ -2228,7 +2106,7 @@ bad_message:
 	}
 }
 
-static void __rvu_mbox_handler(struct rvu_work *mwork, int type, bool poll)
+static void __rvu_mbox_handler(struct rvu_work *mwork, int type)
 {
 	struct rvu *rvu = mwork->rvu;
 	int offset, err, id, devid;
@@ -2295,9 +2173,6 @@ static void __rvu_mbox_handler(struct rvu_work *mwork, int type, bool poll)
 	}
 	mw->mbox_wrk[devid].num_msgs = 0;
 
-	if (poll)
-		otx2_mbox_wait_for_zero(mbox, devid);
-
 	/* Send mbox responses to VF/PF */
 	otx2_mbox_msg_send(mbox, devid);
 }
@@ -2305,18 +2180,15 @@ static void __rvu_mbox_handler(struct rvu_work *mwork, int type, bool poll)
 static inline void rvu_afpf_mbox_handler(struct work_struct *work)
 {
 	struct rvu_work *mwork = container_of(work, struct rvu_work, work);
-	struct rvu *rvu = mwork->rvu;
 
-	mutex_lock(&rvu->mbox_lock);
-	__rvu_mbox_handler(mwork, TYPE_AFPF, true);
-	mutex_unlock(&rvu->mbox_lock);
+	__rvu_mbox_handler(mwork, TYPE_AFPF);
 }
 
 static inline void rvu_afvf_mbox_handler(struct work_struct *work)
 {
 	struct rvu_work *mwork = container_of(work, struct rvu_work, work);
 
-	__rvu_mbox_handler(mwork, TYPE_AFVF, false);
+	__rvu_mbox_handler(mwork, TYPE_AFVF);
 }
 
 static void __rvu_mbox_up_handler(struct rvu_work *mwork, int type)
@@ -2402,7 +2274,7 @@ static inline void rvu_afvf_mbox_up_handler(struct work_struct *work)
 }
 
 static int rvu_get_mbox_regions(struct rvu *rvu, void **mbox_addr,
-				int num, int type, unsigned long *pf_bmap)
+				int num, int type)
 {
 	struct rvu_hwinfo *hw = rvu->hw;
 	int region;
@@ -2414,9 +2286,6 @@ static int rvu_get_mbox_regions(struct rvu *rvu, void **mbox_addr,
 	 */
 	if (type == TYPE_AFVF) {
 		for (region = 0; region < num; region++) {
-			if (!test_bit(region, pf_bmap))
-				continue;
-
 			if (hw->cap.per_pf_mbox_regs) {
 				bar4 = rvu_read64(rvu, BLKADDR_RVUM,
 						  RVU_AF_PFX_BAR4_ADDR(0)) +
@@ -2438,9 +2307,6 @@ static int rvu_get_mbox_regions(struct rvu *rvu, void **mbox_addr,
 	 * RVU_AF_PF_BAR4_ADDR register.
 	 */
 	for (region = 0; region < num; region++) {
-		if (!test_bit(region, pf_bmap))
-			continue;
-
 		if (hw->cap.per_pf_mbox_regs) {
 			bar4 = rvu_read64(rvu, BLKADDR_RVUM,
 					  RVU_AF_PFX_BAR4_ADDR(region));
@@ -2469,35 +2335,12 @@ static int rvu_mbox_init(struct rvu *rvu, struct mbox_wq_info *mw,
 	int err = -EINVAL, i, dir, dir_up;
 	void __iomem *reg_base;
 	struct rvu_work *mwork;
-	unsigned long *pf_bmap;
 	void **mbox_regions;
 	const char *name;
-	u64 cfg;
-
-	pf_bmap = bitmap_zalloc(num, GFP_KERNEL);
-	if (!pf_bmap)
-		return -ENOMEM;
-
-	/* RVU VFs */
-	if (type == TYPE_AFVF)
-		bitmap_set(pf_bmap, 0, num);
-
-	if (type == TYPE_AFPF) {
-		/* Mark enabled PFs in bitmap */
-		for (i = 0; i < num; i++) {
-			cfg = rvu_read64(rvu, BLKADDR_RVUM, RVU_PRIV_PFX_CFG(i));
-			if (cfg & BIT_ULL(20))
-				set_bit(i, pf_bmap);
-		}
-	}
-
-	mutex_init(&rvu->mbox_lock);
 
 	mbox_regions = kcalloc(num, sizeof(void *), GFP_KERNEL);
-	if (!mbox_regions) {
-		err = -ENOMEM;
-		goto free_bitmap;
-	}
+	if (!mbox_regions)
+		return -ENOMEM;
 
 	switch (type) {
 	case TYPE_AFPF:
@@ -2505,7 +2348,7 @@ static int rvu_mbox_init(struct rvu *rvu, struct mbox_wq_info *mw,
 		dir = MBOX_DIR_AFPF;
 		dir_up = MBOX_DIR_AFPF_UP;
 		reg_base = rvu->afreg_base;
-		err = rvu_get_mbox_regions(rvu, mbox_regions, num, TYPE_AFPF, pf_bmap);
+		err = rvu_get_mbox_regions(rvu, mbox_regions, num, TYPE_AFPF);
 		if (err)
 			goto free_regions;
 		break;
@@ -2514,7 +2357,7 @@ static int rvu_mbox_init(struct rvu *rvu, struct mbox_wq_info *mw,
 		dir = MBOX_DIR_PFVF;
 		dir_up = MBOX_DIR_PFVF_UP;
 		reg_base = rvu->pfreg_base;
-		err = rvu_get_mbox_regions(rvu, mbox_regions, num, TYPE_AFVF, pf_bmap);
+		err = rvu_get_mbox_regions(rvu, mbox_regions, num, TYPE_AFVF);
 		if (err)
 			goto free_regions;
 		break;
@@ -2522,9 +2365,9 @@ static int rvu_mbox_init(struct rvu *rvu, struct mbox_wq_info *mw,
 		goto free_regions;
 	}
 
-	mw->mbox_wq = alloc_workqueue("%s",
+	mw->mbox_wq = alloc_workqueue(name,
 				      WQ_UNBOUND | WQ_HIGHPRI | WQ_MEM_RECLAIM,
-				      num, name);
+				      num);
 	if (!mw->mbox_wq) {
 		err = -ENOMEM;
 		goto unmap_regions;
@@ -2545,19 +2388,16 @@ static int rvu_mbox_init(struct rvu *rvu, struct mbox_wq_info *mw,
 	}
 
 	err = otx2_mbox_regions_init(&mw->mbox, mbox_regions, rvu->pdev,
-				     reg_base, dir, num, pf_bmap);
+				     reg_base, dir, num);
 	if (err)
 		goto exit;
 
 	err = otx2_mbox_regions_init(&mw->mbox_up, mbox_regions, rvu->pdev,
-				     reg_base, dir_up, num, pf_bmap);
+				     reg_base, dir_up, num);
 	if (err)
 		goto exit;
 
 	for (i = 0; i < num; i++) {
-		if (!test_bit(i, pf_bmap))
-			continue;
-
 		mwork = &mw->mbox_wrk[i];
 		mwork->rvu = rvu;
 		INIT_WORK(&mwork->work, mbox_handler);
@@ -2566,7 +2406,8 @@ static int rvu_mbox_init(struct rvu *rvu, struct mbox_wq_info *mw,
 		mwork->rvu = rvu;
 		INIT_WORK(&mwork->work, mbox_up_handler);
 	}
-	goto free_regions;
+	kfree(mbox_regions);
+	return 0;
 
 exit:
 	destroy_workqueue(mw->mbox_wq);
@@ -2575,8 +2416,6 @@ unmap_regions:
 		iounmap((void __iomem *)mbox_regions[num]);
 free_regions:
 	kfree(mbox_regions);
-free_bitmap:
-	bitmap_free(pf_bmap);
 	return err;
 }
 
@@ -2642,9 +2481,10 @@ static void rvu_queue_work(struct mbox_wq_info *mw, int first,
 	}
 }
 
-static irqreturn_t rvu_mbox_pf_intr_handler(int irq, void *rvu_irq)
+static irqreturn_t rvu_mbox_intr_handler(int irq, void *rvu_irq)
 {
 	struct rvu *rvu = (struct rvu *)rvu_irq;
+	int vfs = rvu->vfs;
 	u64 intr;
 
 	intr = rvu_read64(rvu, BLKADDR_RVUM, RVU_AF_PFAF_MBOX_INT);
@@ -2658,25 +2498,13 @@ static irqreturn_t rvu_mbox_pf_intr_handler(int irq, void *rvu_irq)
 
 	rvu_queue_work(&rvu->afpf_wq_info, 0, rvu->hw->total_pfs, intr);
 
-	return IRQ_HANDLED;
-}
-
-static irqreturn_t rvu_mbox_intr_handler(int irq, void *rvu_irq)
-{
-	struct rvu *rvu = (struct rvu *)rvu_irq;
-	int vfs = rvu->vfs;
-	u64 intr;
-
-	/* Sync with mbox memory region */
-	rmb();
-
 	/* Handle VF interrupts */
 	if (vfs > 64) {
 		intr = rvupf_read64(rvu, RVU_PF_VFPF_MBOX_INTX(1));
 		rvupf_write64(rvu, RVU_PF_VFPF_MBOX_INTX(1), intr);
 
 		rvu_queue_work(&rvu->afvf_wq_info, 64, vfs, intr);
-		vfs = 64;
+		vfs -= 64;
 	}
 
 	intr = rvupf_read64(rvu, RVU_PF_VFPF_MBOX_INTX(0));
@@ -2747,13 +2575,6 @@ static void __rvu_flr_handler(struct rvu *rvu, u16 pcifunc)
 	 * 2. Flush and reset SSO/SSOW
 	 * 3. Cleanup pools (NPA)
 	 */
-
-	/* Free allocated BPIDs */
-	rvu_nix_flr_free_bpids(rvu, pcifunc);
-
-	/* Free multicast/mirror node associated with the 'pcifunc' */
-	rvu_nix_mcast_flr_free_entries(rvu, pcifunc);
-
 	rvu_blklf_teardown(rvu, pcifunc, BLKADDR_NIX0);
 	rvu_blklf_teardown(rvu, pcifunc, BLKADDR_NIX1);
 	rvu_blklf_teardown(rvu, pcifunc, BLKADDR_CPT0);
@@ -2769,10 +2590,6 @@ static void __rvu_flr_handler(struct rvu *rvu, u16 pcifunc)
 	 * Since LF is detached use LF number as -1.
 	 */
 	rvu_npc_free_mcam_entries(rvu, pcifunc, -1);
-	rvu_mac_reset(rvu, pcifunc);
-
-	if (rvu->mcs_blk_cnt)
-		rvu_mcs_flr_handler(rvu, pcifunc);
 
 	mutex_unlock(&rvu->flr_lock);
 }
@@ -3014,7 +2831,7 @@ static int rvu_register_interrupts(struct rvu *rvu)
 	/* Register mailbox interrupt handler */
 	sprintf(&rvu->irq_name[RVU_AF_INT_VEC_MBOX * NAME_SIZE], "RVUAF Mbox");
 	ret = request_irq(pci_irq_vector(rvu->pdev, RVU_AF_INT_VEC_MBOX),
-			  rvu_mbox_pf_intr_handler, 0,
+			  rvu_mbox_intr_handler, 0,
 			  &rvu->irq_name[RVU_AF_INT_VEC_MBOX * NAME_SIZE], rvu);
 	if (ret) {
 		dev_err(rvu->dev,
@@ -3188,8 +3005,9 @@ static int rvu_flr_init(struct rvu *rvu)
 			    cfg | BIT_ULL(22));
 	}
 
-	rvu->flr_wq = alloc_ordered_workqueue("rvu_afpf_flr",
-					      WQ_HIGHPRI | WQ_MEM_RECLAIM);
+	rvu->flr_wq = alloc_workqueue("rvu_afpf_flr",
+				      WQ_UNBOUND | WQ_HIGHPRI | WQ_MEM_RECLAIM,
+				       1);
 	if (!rvu->flr_wq)
 		return -ENOMEM;
 
@@ -3284,19 +3102,12 @@ static int rvu_enable_sriov(struct rvu *rvu)
 {
 	struct pci_dev *pdev = rvu->pdev;
 	int err, chans, vfs;
-	int pos = 0;
 
 	if (!rvu_afvf_msix_vectors_num_ok(rvu)) {
 		dev_warn(&pdev->dev,
 			 "Skipping SRIOV enablement since not enough IRQs are available\n");
 		return 0;
 	}
-
-	/* Get RVU VFs device id */
-	pos = pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_SRIOV);
-	if (!pos)
-		return 0;
-	pci_read_config_word(pdev, pos + PCI_SRIOV_VF_DID, &rvu->vf_devid);
 
 	chans = rvu_get_num_lbk_chans();
 	if (chans < 0)
@@ -3402,7 +3213,7 @@ static int rvu_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	rvu->ptp = ptp_get();
 	if (IS_ERR(rvu->ptp)) {
 		err = PTR_ERR(rvu->ptp);
-		if (err)
+		if (err == -EPROBE_DEFER)
 			goto err_release_regions;
 		rvu->ptp = NULL;
 	}
@@ -3472,7 +3283,7 @@ static int rvu_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	mutex_init(&rvu->rswitch.switch_lock);
 
 	if (rvu->fwdata)
-		ptp_start(rvu, rvu->fwdata->sclk, rvu->fwdata->ptp_ext_clk_rate,
+		ptp_start(rvu->ptp, rvu->fwdata->sclk, rvu->fwdata->ptp_ext_clk_rate,
 			  rvu->fwdata->ptp_ext_tstamp);
 
 	return 0;
@@ -3529,22 +3340,11 @@ static void rvu_remove(struct pci_dev *pdev)
 	devm_kfree(&pdev->dev, rvu);
 }
 
-static void rvu_shutdown(struct pci_dev *pdev)
-{
-	struct rvu *rvu = pci_get_drvdata(pdev);
-
-	if (!rvu)
-		return;
-
-	rvu_clear_rvum_blk_revid(rvu);
-}
-
 static struct pci_driver rvu_driver = {
 	.name = DRV_NAME,
 	.id_table = rvu_id_table,
 	.probe = rvu_probe,
 	.remove = rvu_remove,
-	.shutdown = rvu_shutdown,
 };
 
 static int __init rvu_init_module(void)

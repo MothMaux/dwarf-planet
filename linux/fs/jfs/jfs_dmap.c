@@ -63,10 +63,10 @@
  */
 static void dbAllocBits(struct bmap * bmp, struct dmap * dp, s64 blkno,
 			int nblocks);
-static void dbSplit(dmtree_t *tp, int leafno, int splitsz, int newval, bool is_ctl);
-static int dbBackSplit(dmtree_t *tp, int leafno, bool is_ctl);
-static int dbJoin(dmtree_t *tp, int leafno, int newval, bool is_ctl);
-static void dbAdjTree(dmtree_t *tp, int leafno, int newval, bool is_ctl);
+static void dbSplit(dmtree_t * tp, int leafno, int splitsz, int newval);
+static int dbBackSplit(dmtree_t * tp, int leafno);
+static int dbJoin(dmtree_t * tp, int leafno, int newval);
+static void dbAdjTree(dmtree_t * tp, int leafno, int newval);
 static int dbAdjCtl(struct bmap * bmp, s64 blkno, int newval, int alloc,
 		    int level);
 static int dbAllocAny(struct bmap * bmp, s64 nblocks, int l2nb, s64 * results);
@@ -87,7 +87,7 @@ static int dbAllocCtl(struct bmap * bmp, s64 nblocks, int l2nb, s64 blkno,
 static int dbExtend(struct inode *ip, s64 blkno, s64 nblocks, s64 addnblocks);
 static int dbFindBits(u32 word, int l2nb);
 static int dbFindCtl(struct bmap * bmp, int l2nb, int level, s64 * blkno);
-static int dbFindLeaf(dmtree_t *tp, int l2nb, int *leafidx, bool is_ctl);
+static int dbFindLeaf(dmtree_t * tp, int l2nb, int *leafidx);
 static int dbFreeBits(struct bmap * bmp, struct dmap * dp, s64 blkno,
 		      int nblocks);
 static int dbFreeDmap(struct bmap * bmp, struct dmap * dp, s64 blkno,
@@ -155,7 +155,7 @@ int dbMount(struct inode *ipbmap)
 	struct bmap *bmp;
 	struct dbmap_disk *dbmp_le;
 	struct metapage *mp;
-	int i, err;
+	int i;
 
 	/*
 	 * allocate/initialize the in-memory bmap descriptor
@@ -170,8 +170,8 @@ int dbMount(struct inode *ipbmap)
 			   BMAPBLKNO << JFS_SBI(ipbmap->i_sb)->l2nbperpage,
 			   PSIZE, 0);
 	if (mp == NULL) {
-		err = -EIO;
-		goto err_kfree_bmp;
+		kfree(bmp);
+		return -EIO;
 	}
 
 	/* copy the on-disk bmap descriptor to its in-memory version. */
@@ -180,6 +180,12 @@ int dbMount(struct inode *ipbmap)
 	bmp->db_nfree = le64_to_cpu(dbmp_le->dn_nfree);
 	bmp->db_l2nbperpage = le32_to_cpu(dbmp_le->dn_l2nbperpage);
 	bmp->db_numag = le32_to_cpu(dbmp_le->dn_numag);
+	if (!bmp->db_numag) {
+		release_metapage(mp);
+		kfree(bmp);
+		return -EINVAL;
+	}
+
 	bmp->db_maxlevel = le32_to_cpu(dbmp_le->dn_maxlevel);
 	bmp->db_maxag = le32_to_cpu(dbmp_le->dn_maxag);
 	bmp->db_agpref = le32_to_cpu(dbmp_le->dn_agpref);
@@ -188,24 +194,6 @@ int dbMount(struct inode *ipbmap)
 	bmp->db_agwidth = le32_to_cpu(dbmp_le->dn_agwidth);
 	bmp->db_agstart = le32_to_cpu(dbmp_le->dn_agstart);
 	bmp->db_agl2size = le32_to_cpu(dbmp_le->dn_agl2size);
-
-	if ((bmp->db_l2nbperpage > L2PSIZE - L2MINBLOCKSIZE) ||
-	    (bmp->db_l2nbperpage < 0) ||
-	    !bmp->db_numag || (bmp->db_numag > MAXAG) ||
-	    (bmp->db_maxag >= MAXAG) || (bmp->db_maxag < 0) ||
-	    (bmp->db_agpref >= MAXAG) || (bmp->db_agpref < 0) ||
-	    (bmp->db_agheight < 0) || (bmp->db_agheight > (L2LPERCTL >> 1)) ||
-	    (bmp->db_agwidth < 1) || (bmp->db_agwidth > (LPERCTL / MAXAG)) ||
-	    (bmp->db_agwidth > (1 << (L2LPERCTL - (bmp->db_agheight << 1)))) ||
-	    (bmp->db_agstart < 0) ||
-	    (bmp->db_agstart > (CTLTREESIZE - 1 - bmp->db_agwidth * (MAXAG - 1))) ||
-	    (bmp->db_agl2size > L2MAXL2SIZE - L2MAXAG) ||
-	    (bmp->db_agl2size < 0) ||
-	    ((bmp->db_mapsize - 1) >> bmp->db_agl2size) > MAXAG) {
-		err = -EINVAL;
-		goto err_release_metapage;
-	}
-
 	for (i = 0; i < MAXAG; i++)
 		bmp->db_agfree[i] = le64_to_cpu(dbmp_le->dn_agfree[i]);
 	bmp->db_agsize = le64_to_cpu(dbmp_le->dn_agsize);
@@ -226,12 +214,6 @@ int dbMount(struct inode *ipbmap)
 	BMAP_LOCK_INIT(bmp);
 
 	return (0);
-
-err_release_metapage:
-	release_metapage(mp);
-err_kfree_bmp:
-	kfree(bmp);
-	return err;
 }
 
 
@@ -265,7 +247,6 @@ int dbUnmount(struct inode *ipbmap, int mounterror)
 
 	/* free the memory for the in-memory bmap. */
 	kfree(bmp);
-	JFS_SBI(ipbmap->i_sb)->bmap = NULL;
 
 	return (0);
 }
@@ -641,7 +622,7 @@ int dbNextAG(struct inode *ipbmap)
 	 * average free space.
 	 */
 	for (i = 0 ; i < bmp->db_numag; i++, agpref++) {
-		if (agpref >= bmp->db_numag)
+		if (agpref == bmp->db_numag)
 			agpref = 0;
 
 		if (atomic_read(&bmp->db_active[agpref]))
@@ -1389,12 +1370,6 @@ dbAllocAG(struct bmap * bmp, int agno, s64 nblocks, int l2nb, s64 * results)
 	    (1 << (L2LPERCTL - (bmp->db_agheight << 1))) / bmp->db_agwidth;
 	ti = bmp->db_agstart + bmp->db_agwidth * (agno & (agperlev - 1));
 
-	if (ti < 0 || ti >= le32_to_cpu(dcp->nleafs)) {
-		jfs_error(bmp->db_ipbmap->i_sb, "Corrupt dmapctl page\n");
-		release_metapage(mp);
-		return -EIO;
-	}
-
 	/* dmap control page trees fan-out by 4 and a single allocation
 	 * group may be described by 1 or 2 subtrees within the ag level
 	 * dmap control page, depending upon the ag size. examine the ag's
@@ -1621,8 +1596,6 @@ s64 dbDiscardAG(struct inode *ip, int agno, s64 minlen)
 		} else if (rc == -ENOSPC) {
 			/* search for next smaller log2 block */
 			l2nb = BLKSTOL2(nblocks) - 1;
-			if (unlikely(l2nb < 0))
-				break;
 			nblocks = 1LL << l2nb;
 		} else {
 			/* Trim any already allocated blocks */
@@ -1714,7 +1687,7 @@ static int dbFindCtl(struct bmap * bmp, int l2nb, int level, s64 * blkno)
 		 * dbFindLeaf() returns the index of the leaf at which
 		 * free space was found.
 		 */
-		rc = dbFindLeaf((dmtree_t *) dcp, l2nb, &leafidx, true);
+		rc = dbFindLeaf((dmtree_t *) dcp, l2nb, &leafidx);
 
 		/* release the buffer.
 		 */
@@ -1814,11 +1787,6 @@ dbAllocCtl(struct bmap * bmp, s64 nblocks, int l2nb, s64 blkno, s64 * results)
 		if (mp == NULL)
 			return -EIO;
 		dp = (struct dmap *) mp->data;
-
-		if (dp->tree.budmin < 0) {
-			release_metapage(mp);
-			return -EIO;
-		}
 
 		/* try to allocate the blocks.
 		 */
@@ -1966,11 +1934,8 @@ dbAllocDmapLev(struct bmap * bmp,
 	 * free space.  if sufficient free space is found, dbFindLeaf()
 	 * returns the index of the leaf at which free space was found.
 	 */
-	if (dbFindLeaf((dmtree_t *) &dp->tree, l2nb, &leafidx, false))
+	if (dbFindLeaf((dmtree_t *) & dp->tree, l2nb, &leafidx))
 		return -ENOSPC;
-
-	if (leafidx < 0)
-		return -EIO;
 
 	/* determine the block number within the file system corresponding
 	 * to the leaf at which free space was found.
@@ -2105,7 +2070,7 @@ static int dbFreeDmap(struct bmap * bmp, struct dmap * dp, s64 blkno,
 		 * system.
 		 */
 		if (dp->tree.stree[word] == NOFREE)
-			dbBackSplit((dmtree_t *)&dp->tree, word, false);
+			dbBackSplit((dmtree_t *) & dp->tree, word);
 
 		dbAllocBits(bmp, dp, blkno, nblocks);
 	}
@@ -2191,7 +2156,7 @@ static void dbAllocBits(struct bmap * bmp, struct dmap * dp, s64 blkno,
 			 * the binary system of the leaves if need be.
 			 */
 			dbSplit(tp, word, BUDMIN,
-				dbMaxBud((u8 *)&dp->wmap[word]), false);
+				dbMaxBud((u8 *) & dp->wmap[word]));
 
 			word += 1;
 		} else {
@@ -2231,7 +2196,7 @@ static void dbAllocBits(struct bmap * bmp, struct dmap * dp, s64 blkno,
 				 * system of the leaves to reflect the current
 				 * allocation (size).
 				 */
-				dbSplit(tp, word, size, NOFREE, false);
+				dbSplit(tp, word, size, NOFREE);
 
 				/* get the number of dmap words handled */
 				nw = BUDSIZE(size, BUDMIN);
@@ -2338,7 +2303,7 @@ static int dbFreeBits(struct bmap * bmp, struct dmap * dp, s64 blkno,
 			/* update the leaf for this dmap word.
 			 */
 			rc = dbJoin(tp, word,
-				    dbMaxBud((u8 *)&dp->wmap[word]), false);
+				    dbMaxBud((u8 *) & dp->wmap[word]));
 			if (rc)
 				return rc;
 
@@ -2371,7 +2336,7 @@ static int dbFreeBits(struct bmap * bmp, struct dmap * dp, s64 blkno,
 
 				/* update the leaf.
 				 */
-				rc = dbJoin(tp, word, size, false);
+				rc = dbJoin(tp, word, size);
 				if (rc)
 					return rc;
 
@@ -2523,16 +2488,16 @@ dbAdjCtl(struct bmap * bmp, s64 blkno, int newval, int alloc, int level)
 		 * that it is at the front of a binary buddy system.
 		 */
 		if (oldval == NOFREE) {
-			rc = dbBackSplit((dmtree_t *)dcp, leafno, true);
+			rc = dbBackSplit((dmtree_t *) dcp, leafno);
 			if (rc) {
 				release_metapage(mp);
 				return rc;
 			}
 			oldval = dcp->stree[ti];
 		}
-		dbSplit((dmtree_t *) dcp, leafno, dcp->budmin, newval, true);
+		dbSplit((dmtree_t *) dcp, leafno, dcp->budmin, newval);
 	} else {
-		rc = dbJoin((dmtree_t *) dcp, leafno, newval, true);
+		rc = dbJoin((dmtree_t *) dcp, leafno, newval);
 		if (rc) {
 			release_metapage(mp);
 			return rc;
@@ -2563,7 +2528,7 @@ dbAdjCtl(struct bmap * bmp, s64 blkno, int newval, int alloc, int level)
 				 */
 				if (alloc) {
 					dbJoin((dmtree_t *) dcp, leafno,
-					       oldval, true);
+					       oldval);
 				} else {
 					/* the dbJoin() above might have
 					 * caused a larger binary buddy system
@@ -2573,9 +2538,9 @@ dbAdjCtl(struct bmap * bmp, s64 blkno, int newval, int alloc, int level)
 					 */
 					if (dcp->stree[ti] == NOFREE)
 						dbBackSplit((dmtree_t *)
-							    dcp, leafno, true);
+							    dcp, leafno);
 					dbSplit((dmtree_t *) dcp, leafno,
-						dcp->budmin, oldval, true);
+						dcp->budmin, oldval);
 				}
 
 				/* release the buffer and return the error.
@@ -2623,7 +2588,7 @@ dbAdjCtl(struct bmap * bmp, s64 blkno, int newval, int alloc, int level)
  *
  * serialization: IREAD_LOCK(ipbmap) or IWRITE_LOCK(ipbmap) held on entry/exit;
  */
-static void dbSplit(dmtree_t *tp, int leafno, int splitsz, int newval, bool is_ctl)
+static void dbSplit(dmtree_t * tp, int leafno, int splitsz, int newval)
 {
 	int budsz;
 	int cursz;
@@ -2645,7 +2610,7 @@ static void dbSplit(dmtree_t *tp, int leafno, int splitsz, int newval, bool is_c
 		while (cursz >= splitsz) {
 			/* update the buddy's leaf with its new value.
 			 */
-			dbAdjTree(tp, leafno ^ budsz, cursz, is_ctl);
+			dbAdjTree(tp, leafno ^ budsz, cursz);
 
 			/* on to the next size and buddy.
 			 */
@@ -2657,7 +2622,7 @@ static void dbSplit(dmtree_t *tp, int leafno, int splitsz, int newval, bool is_c
 	/* adjust the dmap tree to reflect the specified leaf's new
 	 * value.
 	 */
-	dbAdjTree(tp, leafno, newval, is_ctl);
+	dbAdjTree(tp, leafno, newval);
 }
 
 
@@ -2688,7 +2653,7 @@ static void dbSplit(dmtree_t *tp, int leafno, int splitsz, int newval, bool is_c
  *
  * serialization: IREAD_LOCK(ipbmap) or IWRITE_LOCK(ipbmap) held on entry/exit;
  */
-static int dbBackSplit(dmtree_t *tp, int leafno, bool is_ctl)
+static int dbBackSplit(dmtree_t * tp, int leafno)
 {
 	int budsz, bud, w, bsz, size;
 	int cursz;
@@ -2739,7 +2704,7 @@ static int dbBackSplit(dmtree_t *tp, int leafno, bool is_ctl)
 				 * system in two.
 				 */
 				cursz = leaf[bud] - 1;
-				dbSplit(tp, bud, cursz, cursz, is_ctl);
+				dbSplit(tp, bud, cursz, cursz);
 				break;
 			}
 		}
@@ -2767,7 +2732,7 @@ static int dbBackSplit(dmtree_t *tp, int leafno, bool is_ctl)
  *
  * RETURN VALUES: none
  */
-static int dbJoin(dmtree_t *tp, int leafno, int newval, bool is_ctl)
+static int dbJoin(dmtree_t * tp, int leafno, int newval)
 {
 	int budsz, buddy;
 	s8 *leaf;
@@ -2822,12 +2787,12 @@ static int dbJoin(dmtree_t *tp, int leafno, int newval, bool is_ctl)
 			if (leafno < buddy) {
 				/* leafno is the left buddy.
 				 */
-				dbAdjTree(tp, buddy, NOFREE, is_ctl);
+				dbAdjTree(tp, buddy, NOFREE);
 			} else {
 				/* buddy is the left buddy and becomes
 				 * leafno.
 				 */
-				dbAdjTree(tp, leafno, NOFREE, is_ctl);
+				dbAdjTree(tp, leafno, NOFREE);
 				leafno = buddy;
 			}
 
@@ -2840,7 +2805,7 @@ static int dbJoin(dmtree_t *tp, int leafno, int newval, bool is_ctl)
 
 	/* update the leaf value.
 	 */
-	dbAdjTree(tp, leafno, newval, is_ctl);
+	dbAdjTree(tp, leafno, newval);
 
 	return 0;
 }
@@ -2861,19 +2826,14 @@ static int dbJoin(dmtree_t *tp, int leafno, int newval, bool is_ctl)
  *
  * RETURN VALUES: none
  */
-static void dbAdjTree(dmtree_t *tp, int leafno, int newval, bool is_ctl)
+static void dbAdjTree(dmtree_t * tp, int leafno, int newval)
 {
 	int lp, pp, k;
-	int max, size;
-
-	size = is_ctl ? CTLTREESIZE : TREESIZE;
+	int max;
 
 	/* pick up the index of the leaf for this leafno.
 	 */
 	lp = leafno + le32_to_cpu(tp->dmt_leafidx);
-
-	if (WARN_ON_ONCE(lp >= size || lp < 0))
-		return;
 
 	/* is the current value the same as the old value ?  if so,
 	 * there is nothing to do.
@@ -2888,9 +2848,6 @@ static void dbAdjTree(dmtree_t *tp, int leafno, int newval, bool is_ctl)
 	/* bubble the new value up the tree as required.
 	 */
 	for (k = 0; k < le32_to_cpu(tp->dmt_height); k++) {
-		if (lp == 0)
-			break;
-
 		/* get the index of the first leaf of the 4 leaf
 		 * group containing the specified leaf (leafno).
 		 */
@@ -2938,19 +2895,14 @@ static void dbAdjTree(dmtree_t *tp, int leafno, int newval, bool is_ctl)
  *	leafidx	- return pointer to be set to the index of the leaf
  *		  describing at least l2nb free blocks if sufficient
  *		  free blocks are found.
- *	is_ctl	- determines if the tree is of type ctl
  *
  * RETURN VALUES:
  *	0	- success
  *	-ENOSPC	- insufficient free blocks.
  */
-static int dbFindLeaf(dmtree_t *tp, int l2nb, int *leafidx, bool is_ctl)
+static int dbFindLeaf(dmtree_t * tp, int l2nb, int *leafidx)
 {
 	int ti, n = 0, k, x = 0;
-	int max_size, max_idx;
-
-	max_size = is_ctl ? CTLTREESIZE : TREESIZE;
-	max_idx = is_ctl ? LPERCTL : LPERDMAP;
 
 	/* first check the root of the tree to see if there is
 	 * sufficient free space.
@@ -2971,8 +2923,6 @@ static int dbFindLeaf(dmtree_t *tp, int l2nb, int *leafidx, bool is_ctl)
 			/* sufficient free space found.  move to the next
 			 * level (or quit if this is the last level).
 			 */
-			if (x + n > max_size)
-				return -ENOSPC;
 			if (l2nb <= tp->dmt_stree[x + n])
 				break;
 		}
@@ -2982,8 +2932,6 @@ static int dbFindLeaf(dmtree_t *tp, int l2nb, int *leafidx, bool is_ctl)
 		 */
 		assert(n < 4);
 	}
-	if (le32_to_cpu(tp->dmt_leafidx) >= max_idx)
-		return -ENOSPC;
 
 	/* set the return to the leftmost leaf describing sufficient
 	 * free space.
@@ -3028,7 +2976,7 @@ static int dbFindBits(u32 word, int l2nb)
 
 	/* scan the word for nb free bits at nb alignments.
 	 */
-	for (bitno = 0; mask != 0; bitno += nb, mask = (mask >> nb)) {
+	for (bitno = 0; mask != 0; bitno += nb, mask >>= nb) {
 		if ((mask & word) == mask)
 			break;
 	}
@@ -3400,7 +3348,7 @@ int dbExtendFS(struct inode *ipbmap, s64 blkno,	s64 nblocks)
 	oldl2agsize = bmp->db_agl2size;
 
 	bmp->db_agl2size = l2agsize;
-	bmp->db_agsize = (s64)1 << l2agsize;
+	bmp->db_agsize = 1 << l2agsize;
 
 	/* compute new number of AG */
 	agno = bmp->db_numag;
@@ -3663,8 +3611,8 @@ void dbFinalizeBmap(struct inode *ipbmap)
 	 * system size is not a multiple of the group size).
 	 */
 	inactfree = (inactags && ag_rem) ?
-	    (((s64)inactags - 1) << bmp->db_agl2size) + ag_rem
-	    : ((s64)inactags << bmp->db_agl2size);
+	    ((inactags - 1) << bmp->db_agl2size) + ag_rem
+	    : inactags << bmp->db_agl2size;
 
 	/* determine how many free blocks are in the active
 	 * allocation groups plus the average number of free blocks
@@ -3887,7 +3835,7 @@ static int dbInitTree(struct dmaptree * dtp)
 	l2max = le32_to_cpu(dtp->l2nleafs) + dtp->budmin;
 
 	/*
-	 * configure the leaf level into binary buddy system
+	 * configure the leaf levevl into binary buddy system
 	 *
 	 * Try to combine buddies starting with a buddy size of 1
 	 * (i.e. two leaves). At a buddy size of 1 two buddy leaves

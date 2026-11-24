@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/perf/xilinx-apm.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Xilinx Axi Performance Monitor
+title: Xilinx Axi Performance Monitor device tree bindings
 
 maintainers:
   - Shubhrajyoti Datta <shubhrajyoti.datta@xilinx.com>

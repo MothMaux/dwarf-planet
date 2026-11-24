@@ -1136,10 +1136,7 @@ static int ad9162_probe(struct spi_device *spi)
 
 	dev_info(&spi->dev, "Probed.\n");
 
-	if (!st->jdev)
-		return 0;
-
-	return devm_jesd204_fsm_start(&spi->dev, st->jdev, JESD204_LINKS_ALL);
+	return jesd204_fsm_start(st->jdev, JESD204_LINKS_ALL);
 out:
 	return ret;
 }

@@ -13,12 +13,10 @@
 #include <sound/intel-nhlt.h>
 #include <sound/soc-acpi.h>
 
-#include <acpi/nhlt.h>
-
 static int dsp_driver;
 
 module_param(dsp_driver, int, 0444);
-MODULE_PARM_DESC(dsp_driver, "Force the DSP driver for Intel DSP (0=auto, 1=legacy, 2=SST, 3=SOF, 4=AVS)");
+MODULE_PARM_DESC(dsp_driver, "Force the DSP driver for Intel DSP (0=auto, 1=legacy, 2=SST, 3=SOF)");
 
 #define FLAG_SST			BIT(0)
 #define FLAG_SOF			BIT(1)
@@ -52,67 +50,25 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_MERRIFIELD)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_SST_TNG,
+		.device = 0x119a,
 	},
 #endif
-/*
- * Skylake, Kabylake, Apollolake
- * the legacy HDAudio driver is used except on Up Squared (SOF) and
- * Chromebooks (SST), as well as devices based on the ES8336 codec
- */
-#if IS_ENABLED(CONFIG_SND_SOC_INTEL_AVS)
-	{
-		.flags = FLAG_SST,
-		.device = PCI_DEVICE_ID_INTEL_HDA_SKL_LP,
-		.dmi_table = (const struct dmi_system_id []) {
-			{
-				.ident = "Google Chromebooks",
-				.matches = {
-					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
-				}
-			},
-			{}
-		}
-	},
-	{
-		.flags = FLAG_SST | FLAG_SST_ONLY_IF_DMIC,
-		.device = PCI_DEVICE_ID_INTEL_HDA_SKL_LP,
-	},
-	{
-		.flags = FLAG_SST,
-		.device = PCI_DEVICE_ID_INTEL_HDA_KBL_LP,
-		.dmi_table = (const struct dmi_system_id []) {
-			{
-				.ident = "Google Chromebooks",
-				.matches = {
-					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
-				}
-			},
-			{}
-		}
-	},
-	{
-		.flags = FLAG_SST | FLAG_SST_ONLY_IF_DMIC,
-		.device = PCI_DEVICE_ID_INTEL_HDA_KBL_LP,
-	},
-	{
-		.flags = FLAG_SST,
-		.device = PCI_DEVICE_ID_INTEL_HDA_APL,
-		.dmi_table = (const struct dmi_system_id []) {
-			{
-				.ident = "Google Chromebooks",
-				.matches = {
-					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
-				}
-			},
-			{}
-		}
-	},
-#endif
+/* Broxton-T */
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_APOLLOLAKE)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_APL,
+		.device = 0x1a98,
+	},
+#endif
+/*
+ * Apollolake (Broxton-P)
+ * the legacy HDAudio driver is used except on Up Squared (SOF) and
+ * Chromebooks (SST), as well as devices based on the ES8336 codec
+ */
+#if IS_ENABLED(CONFIG_SND_SOC_SOF_APOLLOLAKE)
+	{
+		.flags = FLAG_SOF,
+		.device = 0x5a98,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Up Squared",
@@ -126,8 +82,68 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_APL,
+		.device = 0x5a98,
 		.codec_hid =  &essx_83x6,
+	},
+#endif
+#if IS_ENABLED(CONFIG_SND_SOC_INTEL_APL)
+	{
+		.flags = FLAG_SST,
+		.device = 0x5a98,
+		.dmi_table = (const struct dmi_system_id []) {
+			{
+				.ident = "Google Chromebooks",
+				.matches = {
+					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
+				}
+			},
+			{}
+		}
+	},
+#endif
+/*
+ * Skylake and Kabylake use legacy HDAudio driver except for Google
+ * Chromebooks (SST)
+ */
+
+/* Sunrise Point-LP */
+#if IS_ENABLED(CONFIG_SND_SOC_INTEL_SKL)
+	{
+		.flags = FLAG_SST,
+		.device = 0x9d70,
+		.dmi_table = (const struct dmi_system_id []) {
+			{
+				.ident = "Google Chromebooks",
+				.matches = {
+					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
+				}
+			},
+			{}
+		}
+	},
+	{
+		.flags = FLAG_SST | FLAG_SST_ONLY_IF_DMIC,
+		.device = 0x9d70,
+	},
+#endif
+/* Kabylake-LP */
+#if IS_ENABLED(CONFIG_SND_SOC_INTEL_KBL)
+	{
+		.flags = FLAG_SST,
+		.device = 0x9d71,
+		.dmi_table = (const struct dmi_system_id []) {
+			{
+				.ident = "Google Chromebooks",
+				.matches = {
+					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
+				}
+			},
+			{}
+		}
+	},
+	{
+		.flags = FLAG_SST | FLAG_SST_ONLY_IF_DMIC,
+		.device = 0x9d71,
 	},
 #endif
 
@@ -139,7 +155,7 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_GEMINILAKE)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_GML,
+		.device = 0x3198,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Google Chromebooks",
@@ -152,16 +168,16 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_GML,
+		.device = 0x3198,
 		.codec_hid =  &essx_83x6,
 	},
 #endif
 
 /*
- * CoffeeLake, CannonLake, CometLake, IceLake, TigerLake, AlderLake,
- * RaptorLake use legacy HDAudio driver except for Google Chromebooks
- * and when DMICs are present. Two cases are required since Coreboot
- * does not expose NHLT tables.
+ * CoffeeLake, CannonLake, CometLake, IceLake, TigerLake use legacy
+ * HDAudio driver except for Google Chromebooks and when DMICs are
+ * present. Two cases are required since Coreboot does not expose NHLT
+ * tables.
  *
  * When the Chromebook quirk is not present, it's based on information
  * that no such device exists. When the quirk is present, it could be
@@ -172,7 +188,7 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_CANNONLAKE)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CNL_LP,
+		.device = 0x9dc8,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Google Chromebooks",
@@ -191,12 +207,12 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CNL_LP,
+		.device = 0x09dc8,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CNL_LP,
+		.device = 0x9dc8,
 	},
 #endif
 
@@ -204,7 +220,7 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_COFFEELAKE)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CNL_H,
+		.device = 0xa348,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Google Chromebooks",
@@ -217,7 +233,7 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CNL_H,
+		.device = 0xa348,
 	},
 #endif
 
@@ -225,7 +241,7 @@ static const struct config_entry config_table[] = {
 /* Cometlake-LP */
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CML_LP,
+		.device = 0x02c8,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Google Chromebooks",
@@ -251,17 +267,17 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CML_LP,
+		.device = 0x02c8,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CML_LP,
+		.device = 0x02c8,
 	},
 /* Cometlake-H */
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CML_H,
+		.device = 0x06c8,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.matches = {
@@ -280,12 +296,12 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CML_H,
+		.device = 0x06c8,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_CML_H,
+		.device = 0x06c8,
 	},
 #endif
 
@@ -293,7 +309,7 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_ICELAKE)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ICL_LP,
+		.device = 0x34c8,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Google Chromebooks",
@@ -306,12 +322,12 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ICL_LP,
+		.device = 0x34c8,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ICL_LP,
+		.device = 0x34c8,
 	},
 #endif
 
@@ -319,7 +335,7 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_JASPERLAKE)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_JSL_N,
+		.device = 0x4dc8,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Google Chromebooks",
@@ -327,23 +343,17 @@ static const struct config_entry config_table[] = {
 					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
 				}
 			},
-			{
-				.ident = "Google firmware",
-				.matches = {
-					DMI_MATCH(DMI_BIOS_VERSION, "Google"),
-				}
-			},
 			{}
 		}
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_JSL_N,
+		.device = 0x4dc8,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC,
-		.device = PCI_DEVICE_ID_INTEL_HDA_JSL_N,
+		.device = 0x4dc8,
 	},
 #endif
 
@@ -351,7 +361,7 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_TIGERLAKE)
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_TGL_LP,
+		.device = 0xa0c8,
 		.dmi_table = (const struct dmi_system_id []) {
 			{
 				.ident = "Google Chromebooks",
@@ -370,16 +380,16 @@ static const struct config_entry config_table[] = {
 	},
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_TGL_LP,
+		.device = 0xa0c8,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_TGL_LP,
+		.device = 0xa0c8,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_TGL_H,
+		.device = 0x43c8,
 	},
 #endif
 
@@ -387,163 +397,79 @@ static const struct config_entry config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_ELKHARTLAKE)
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC,
-		.device = PCI_DEVICE_ID_INTEL_HDA_EHL_0,
+		.device = 0x4b55,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC,
-		.device = PCI_DEVICE_ID_INTEL_HDA_EHL_3,
+		.device = 0x4b58,
 	},
 #endif
 
-/* Alder Lake / Raptor Lake */
+/* Alder Lake */
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_ALDERLAKE)
+	/* Alderlake-S */
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_S,
+		.device = 0x7ad0,
 	},
+	/* RaptorLake-S */
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_RPL_S,
+		.device = 0x7a50,
 	},
+	/* Alderlake-P */
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_P,
-		.dmi_table = (const struct dmi_system_id []) {
-			{
-				.ident = "Google Chromebooks",
-				.matches = {
-					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
-				}
-			},
-			{}
-		}
-	},
-	{
-		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_P,
+		.device = 0x51c8,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_P,
+		.device = 0x51c8,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_PX,
+		.device = 0x51cd,
 	},
+	/* Alderlake-PS */
 	{
 		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_PS,
+		.device = 0x51c9,
 		.codec_hid =  &essx_83x6,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_PS,
+		.device = 0x51c9,
+	},
+	/* Alderlake-M */
+	{
+		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
+		.device = 0x51cc,
+	},
+	/* Alderlake-N */
+	{
+		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
+		.device = 0x54c8,
+	},
+	/* RaptorLake-P */
+	{
+		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
+		.device = 0x51ca,
 	},
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_M,
+		.device = 0x51cb,
 	},
-	{
-		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_N,
-		.dmi_table = (const struct dmi_system_id []) {
-			{
-				.ident = "Google Chromebooks",
-				.matches = {
-					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
-				}
-			},
-			{}
-		}
-	},
+	/* RaptorLake-M */
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ADL_N,
+		.device = 0x51ce,
 	},
-	{
-		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_RPL_P_0,
-		.dmi_table = (const struct dmi_system_id []) {
-			{
-				.ident = "Google Chromebooks",
-				.matches = {
-					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
-				}
-			},
-			{}
-		}
-	},
+	/* RaptorLake-PX */
 	{
 		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_RPL_P_0,
+		.device = 0x51cf,
 	},
-	{
-		.flags = FLAG_SOF,
-		.device = PCI_DEVICE_ID_INTEL_HDA_RPL_P_1,
-		.dmi_table = (const struct dmi_system_id []) {
-			{
-				.ident = "Google Chromebooks",
-				.matches = {
-					DMI_MATCH(DMI_SYS_VENDOR, "Google"),
-				}
-			},
-			{}
-		}
-	},
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_RPL_P_1,
-	},
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_RPL_M,
-	},
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_RPL_PX,
-	},
-#endif
-
-/* Meteor Lake */
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_METEORLAKE)
-	/* Meteorlake-P */
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_MTL,
-	},
-	/* ArrowLake-S */
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ARL_S,
-	},
-	/* ArrowLake */
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_ARL,
-	},
-#endif
-
-/* Lunar Lake */
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_LUNARLAKE)
-	/* Lunarlake-P */
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_LNL_P,
-	},
-#endif
-
-	/* Panther Lake */
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_PANTHERLAKE)
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_PTL,
-	},
-	{
-		.flags = FLAG_SOF | FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE,
-		.device = PCI_DEVICE_ID_INTEL_HDA_PTL_H,
-	},
-
 #endif
 
 };
@@ -562,32 +488,9 @@ static const struct config_entry *snd_intel_dsp_find_config
 		if (table->codec_hid) {
 			int i;
 
-			for (i = 0; i < table->codec_hid->num_codecs; i++) {
-				struct nhlt_acpi_table *nhlt;
-				bool ssp_found = false;
-
-				if (!acpi_dev_present(table->codec_hid->codecs[i], NULL, -1))
-					continue;
-
-				nhlt = intel_nhlt_init(&pci->dev);
-				if (!nhlt) {
-					dev_warn(&pci->dev, "%s: NHLT table not found, skipped HID %s\n",
-						 __func__, table->codec_hid->codecs[i]);
-					continue;
-				}
-
-				if (intel_nhlt_has_endpoint_type(nhlt, NHLT_LINK_SSP) &&
-				    intel_nhlt_ssp_endpoint_mask(nhlt, NHLT_DEVICE_I2S))
-					ssp_found = true;
-
-				intel_nhlt_free(nhlt);
-
-				if (ssp_found)
+			for (i = 0; i < table->codec_hid->num_codecs; i++)
+				if (acpi_dev_present(table->codec_hid->codecs[i], NULL, -1))
 					break;
-
-				dev_warn(&pci->dev, "%s: no valid SSP found for HID %s, skipped\n",
-					 __func__, table->codec_hid->codecs[i]);
-			}
 			if (i == table->codec_hid->num_codecs)
 				continue;
 		}
@@ -598,15 +501,15 @@ static const struct config_entry *snd_intel_dsp_find_config
 
 static int snd_intel_dsp_check_dmic(struct pci_dev *pci)
 {
+	struct nhlt_acpi_table *nhlt;
 	int ret = 0;
 
-	acpi_nhlt_get_gbl_table();
-
-	if (acpi_nhlt_find_endpoint(ACPI_NHLT_LINKTYPE_PDM, -1, -1, -1))
-		ret = 1;
-
-	acpi_nhlt_put_gbl_table();
-
+	nhlt = intel_nhlt_init(&pci->dev);
+	if (nhlt) {
+		if (intel_nhlt_has_endpoint_type(nhlt, NHLT_LINK_DMIC))
+			ret = 1;
+		intel_nhlt_free(nhlt);
+	}
 	return ret;
 }
 
@@ -637,7 +540,7 @@ int snd_intel_dsp_driver_probe(struct pci_dev *pci)
 	const struct config_entry *cfg;
 
 	/* Intel vendor only */
-	if (pci->vendor != PCI_VENDOR_ID_INTEL)
+	if (pci->vendor != 0x8086)
 		return SND_INTEL_DSP_DRIVER_ANY;
 
 	/*
@@ -645,12 +548,12 @@ int snd_intel_dsp_driver_probe(struct pci_dev *pci)
 	 * for HDMI/DP support, ignore kernel parameter
 	 */
 	switch (pci->device) {
-	case PCI_DEVICE_ID_INTEL_HDA_BDW:
-	case PCI_DEVICE_ID_INTEL_HDA_HSW_0:
-	case PCI_DEVICE_ID_INTEL_HDA_HSW_2:
-	case PCI_DEVICE_ID_INTEL_HDA_HSW_3:
-	case PCI_DEVICE_ID_INTEL_HDA_BYT:
-	case PCI_DEVICE_ID_INTEL_HDA_BSW:
+	case 0x160c: /* Broadwell */
+	case 0x0a0c: /* Haswell */
+	case 0x0c0c:
+	case 0x0d0c:
+	case 0x0f04: /* Baytrail */
+	case 0x2284: /* Braswell */
 		return SND_INTEL_DSP_DRIVER_ANY;
 	}
 
@@ -671,23 +574,22 @@ int snd_intel_dsp_driver_probe(struct pci_dev *pci)
 		return SND_INTEL_DSP_DRIVER_LEGACY;
 	}
 
-	dev_dbg(&pci->dev, "DSP detected with PCI class/subclass/prog-if info 0x%06x\n", pci->class);
+	dev_info(&pci->dev, "DSP detected with PCI class/subclass/prog-if info 0x%06x\n", pci->class);
 
 	/* find the configuration for the specific device */
 	cfg = snd_intel_dsp_find_config(pci, config_table, ARRAY_SIZE(config_table));
 	if (!cfg)
-		return IS_ENABLED(CONFIG_SND_HDA_INTEL) ?
-			SND_INTEL_DSP_DRIVER_LEGACY : SND_INTEL_DSP_DRIVER_ANY;
+		return SND_INTEL_DSP_DRIVER_ANY;
 
 	if (cfg->flags & FLAG_SOF) {
 		if (cfg->flags & FLAG_SOF_ONLY_IF_SOUNDWIRE &&
 		    snd_intel_dsp_check_soundwire(pci) > 0) {
-			dev_info_once(&pci->dev, "SoundWire enabled on CannonLake+ platform, using SOF driver\n");
+			dev_info(&pci->dev, "SoundWire enabled on CannonLake+ platform, using SOF driver\n");
 			return SND_INTEL_DSP_DRIVER_SOF;
 		}
 		if (cfg->flags & FLAG_SOF_ONLY_IF_DMIC &&
 		    snd_intel_dsp_check_dmic(pci)) {
-			dev_info_once(&pci->dev, "Digital mics found on Skylake+ platform, using SOF driver\n");
+			dev_info(&pci->dev, "Digital mics found on Skylake+ platform, using SOF driver\n");
 			return SND_INTEL_DSP_DRIVER_SOF;
 		}
 		if (!(cfg->flags & FLAG_SOF_ONLY_IF_DMIC_OR_SOUNDWIRE))
@@ -698,7 +600,7 @@ int snd_intel_dsp_driver_probe(struct pci_dev *pci)
 	if (cfg->flags & FLAG_SST) {
 		if (cfg->flags & FLAG_SST_ONLY_IF_DMIC) {
 			if (snd_intel_dsp_check_dmic(pci)) {
-				dev_info_once(&pci->dev, "Digital mics found on Skylake+ platform, using SST driver\n");
+				dev_info(&pci->dev, "Digital mics found on Skylake+ platform, using SST driver\n");
 				return SND_INTEL_DSP_DRIVER_SST;
 			}
 		} else {
@@ -727,10 +629,6 @@ static const struct config_entry acpi_config_table[] = {
 #if IS_ENABLED(CONFIG_SND_SST_ATOM_HIFI2_PLATFORM_ACPI) || \
     IS_ENABLED(CONFIG_SND_SOC_SOF_BAYTRAIL)
 /* BayTrail */
-	{
-		.flags = FLAG_SST_OR_SOF_BYT,
-		.acpi_hid = "LPE0F28",
-	},
 	{
 		.flags = FLAG_SST_OR_SOF_BYT,
 		.acpi_hid = "80860F28",

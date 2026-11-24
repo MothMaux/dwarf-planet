@@ -345,7 +345,8 @@ static void release_tar_archive(struct tar_arch_info_t *tar_arch)
 		kfree(curr);
 	}
 
-	release_firmware(tar_arch->fw);
+	if (tar_arch->fw)
+		release_firmware(tar_arch->fw);
 	kfree(tar_arch);
 }
 
@@ -1336,7 +1337,7 @@ static ssize_t ucode_load_store(struct device *dev,
 	int del_grp_idx = -1;
 	int ucode_idx = 0;
 
-	if (count >= OTX_CPT_UCODE_NAME_LENGTH)
+	if (strlen(buf) > OTX_CPT_UCODE_NAME_LENGTH)
 		return -EINVAL;
 
 	eng_grps = container_of(attr, struct otx_cpt_eng_grps, ucode_load_attr);

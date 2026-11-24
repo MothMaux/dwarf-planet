@@ -1238,7 +1238,7 @@ static int wm8990_i2c_probe(struct i2c_client *i2c)
 }
 
 static const struct i2c_device_id wm8990_i2c_id[] = {
-	{ "wm8990" },
+	{ "wm8990", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, wm8990_i2c_id);
@@ -1247,7 +1247,7 @@ static struct i2c_driver wm8990_i2c_driver = {
 	.driver = {
 		.name = "wm8990",
 	},
-	.probe = wm8990_i2c_probe,
+	.probe_new = wm8990_i2c_probe,
 	.id_table = wm8990_i2c_id,
 };
 

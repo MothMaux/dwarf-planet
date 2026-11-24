@@ -27,13 +27,6 @@ struct sys_reg_params {
 	bool	is_write;
 };
 
-#define encoding_to_params(reg)						\
-	((struct sys_reg_params){ .Op0 = sys_reg_Op0(reg),		\
-				  .Op1 = sys_reg_Op1(reg),		\
-				  .CRn = sys_reg_CRn(reg),		\
-				  .CRm = sys_reg_CRm(reg),		\
-				  .Op2 = sys_reg_Op2(reg) })
-
 #define esr_sys64_to_params(esr)                                               \
 	((struct sys_reg_params){ .Op0 = ((esr) >> 20) & 3,                    \
 				  .Op1 = ((esr) >> 14) & 0x7,                  \
@@ -71,16 +64,13 @@ struct sys_reg_desc {
 		       struct sys_reg_params *,
 		       const struct sys_reg_desc *);
 
-	/*
-	 * Initialization for vcpu. Return initialized value, or KVM
-	 * sanitized value for ID registers.
-	 */
-	u64 (*reset)(struct kvm_vcpu *, const struct sys_reg_desc *);
+	/* Initialization for vcpu. */
+	void (*reset)(struct kvm_vcpu *, const struct sys_reg_desc *);
 
 	/* Index into sys_reg[], or 0 if we don't need to save it. */
 	int reg;
 
-	/* Value (usually reset value), or write mask for idregs */
+	/* Value (usually reset value) */
 	u64 val;
 
 	/* Custom get/set_user functions, fallback to generic if NULL */
@@ -132,21 +122,19 @@ static inline bool read_zero(struct kvm_vcpu *vcpu,
 }
 
 /* Reset functions */
-static inline u64 reset_unknown(struct kvm_vcpu *vcpu,
+static inline void reset_unknown(struct kvm_vcpu *vcpu,
 				 const struct sys_reg_desc *r)
 {
 	BUG_ON(!r->reg);
 	BUG_ON(r->reg >= NR_SYS_REGS);
 	__vcpu_sys_reg(vcpu, r->reg) = 0x1de7ec7edbadc0deULL;
-	return __vcpu_sys_reg(vcpu, r->reg);
 }
 
-static inline u64 reset_val(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
+static inline void reset_val(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
 {
 	BUG_ON(!r->reg);
 	BUG_ON(r->reg >= NR_SYS_REGS);
 	__vcpu_sys_reg(vcpu, r->reg) = r->val;
-	return __vcpu_sys_reg(vcpu, r->reg);
 }
 
 static inline unsigned int sysreg_visibility(const struct kvm_vcpu *vcpu,
@@ -223,10 +211,6 @@ int kvm_sys_reg_get_user(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg,
 int kvm_sys_reg_set_user(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg,
 			 const struct sys_reg_desc table[], unsigned int num);
 
-bool triage_sysreg_trap(struct kvm_vcpu *vcpu, int *sr_index);
-
-int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu);
-
 #define AA32(_x)	.aarch32_map = AA32_##_x
 #define Op0(_x) 	.Op0 = _x
 #define Op1(_x) 	.Op1 = _x
@@ -237,13 +221,6 @@ int kvm_finalize_sys_regs(struct kvm_vcpu *vcpu);
 #define SYS_DESC(reg)					\
 	.name = #reg,					\
 	Op0(sys_reg_Op0(reg)), Op1(sys_reg_Op1(reg)),	\
-	CRn(sys_reg_CRn(reg)), CRm(sys_reg_CRm(reg)),	\
-	Op2(sys_reg_Op2(reg))
-
-#define CP15_SYS_DESC(reg)				\
-	.name = #reg,					\
-	.aarch32_map = AA32_DIRECT,			\
-	Op0(0), Op1(sys_reg_Op1(reg)),			\
 	CRn(sys_reg_CRn(reg)), CRm(sys_reg_CRm(reg)),	\
 	Op2(sys_reg_Op2(reg))
 

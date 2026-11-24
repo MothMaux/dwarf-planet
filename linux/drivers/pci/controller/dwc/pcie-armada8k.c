@@ -21,6 +21,7 @@
 #include <linux/platform_device.h>
 #include <linux/resource.h>
 #include <linux/of_pci.h>
+#include <linux/of_irq.h>
 
 #include "pcie-designware.h"
 
@@ -225,7 +226,7 @@ static irqreturn_t armada8k_pcie_irq_handler(int irq, void *arg)
 }
 
 static const struct dw_pcie_host_ops armada8k_pcie_host_ops = {
-	.init = armada8k_pcie_host_init,
+	.host_init = armada8k_pcie_host_init,
 };
 
 static int armada8k_add_pcie_port(struct armada8k_pcie *pcie,

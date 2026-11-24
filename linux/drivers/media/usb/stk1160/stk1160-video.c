@@ -99,7 +99,7 @@ void stk1160_buffer_done(struct stk1160 *dev)
 static inline
 void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 {
-	int linesdone, lineoff, lencopy, offset;
+	int linesdone, lineoff, lencopy;
 	int bytesperline = dev->width * 2;
 	struct stk1160_buffer *buf = dev->isoc_ctl.buf;
 	u8 *dst = buf->mem;
@@ -107,7 +107,8 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 
 	/*
 	 * TODO: These stk1160_dbg are very spammy!
-	 * We should check why we are getting them.
+	 * We should 1) check why we are getting them
+	 * and 2) add ratelimit.
 	 *
 	 * UPDATE: One of the reasons (the only one?) for getting these
 	 * is incorrect standard (mismatch between expected and configured).
@@ -130,19 +131,17 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 	dst += linesdone * bytesperline * 2 + lineoff;
 
 	/* Copy the remaining of current line */
-	lencopy = min(remain, bytesperline - lineoff);
+	if (remain < (bytesperline - lineoff))
+		lencopy = remain;
+	else
+		lencopy = bytesperline - lineoff;
 
 	/*
 	 * Check if we have enough space left in the buffer.
 	 * In that case, we force loop exit after copy.
 	 */
-	offset = dst - (u8 *)buf->mem;
-	if (offset > buf->length) {
-		dev_warn_ratelimited(dev->dev, "out of bounds offset\n");
-		return;
-	}
-	if (lencopy > buf->length - offset) {
-		lencopy = buf->length - offset;
+	if (lencopy > buf->bytesused - buf->length) {
+		lencopy = buf->bytesused - buf->length;
 		remain = lencopy;
 	}
 
@@ -152,7 +151,7 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 
 	/* Let the bug hunt begin! sanity checks! */
 	if (lencopy < 0) {
-		printk_ratelimited(KERN_DEBUG "copy skipped: negative lencopy\n");
+		stk1160_dbg("copy skipped: negative lencopy\n");
 		return;
 	}
 
@@ -175,19 +174,17 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 		src += lencopy;
 
 		/* Copy one line at a time */
-		lencopy = min(remain, bytesperline);
+		if (remain < bytesperline)
+			lencopy = remain;
+		else
+			lencopy = bytesperline;
 
 		/*
 		 * Check if we have enough space left in the buffer.
 		 * In that case, we force loop exit after copy.
 		 */
-		offset = dst - (u8 *)buf->mem;
-		if (offset > buf->length) {
-			dev_warn_ratelimited(dev->dev, "offset out of bounds\n");
-			return;
-		}
-		if (lencopy > buf->length - offset) {
-			lencopy = buf->length - offset;
+		if (lencopy > buf->bytesused - buf->length) {
+			lencopy = buf->bytesused - buf->length;
 			remain = lencopy;
 		}
 

@@ -3,9 +3,8 @@
  * dts file for Xilinx ZynqMP Generic System Controller
  *
  * (C) Copyright 2021 - 2022, Xilinx, Inc.
- * (C) Copyright 2022 - 2024, Advanced Micro Devices, Inc.
  *
- * Michal Simek <michal.simek@amd.com>
+ * Michal Simek <michal.simek@xilinx.com>
  */
 /dts-v1/;
 
@@ -49,7 +48,7 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 		autorepeat;
-		key-fwuen {
+		fwuen {
 			label = "sw16";
 			gpios = <&gpio 12 GPIO_ACTIVE_LOW>;
 			linux,code = <BTN_MISC>;
@@ -71,7 +70,7 @@
 		};
 	};
 
-	si5332_2: si5332-2 { /* u42 */
+	si5332_2: si5332_2 { /* u42 */
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <26000000>;
@@ -80,7 +79,7 @@
 	pwm-fan {
 		compatible = "pwm-fan";
 		status = "okay";
-		pwms = <&ttc0 2 40000 0>;
+		pwms = <&ttc0 2 40000 1>;
 	};
 };
 
@@ -104,7 +103,7 @@
 		"", "", "ETH_RESET_B", /* 75 - 77, MIO end and EMIO start */
 		"", "", /* 78 - 79 */
 		"", "", "", "", "", /* 80 - 84 */
-		"", "", "", "", "", /* 85 - 89 */
+		"", "", "", "", "", /* 85 -89 */
 		"", "", "", "", "", /* 90 - 94 */
 		"", "", "", "", "", /* 95 - 99 */
 		"", "", "", "", "", /* 100 - 104 */
@@ -164,7 +163,7 @@
 
 &i2c1 { /* i2c1 MIO 24-25 */
 	status = "okay";
-	bootph-all;
+	u-boot,dm-pre-reloc;
 	clock-frequency = <100000>;
 	pinctrl-names = "default", "gpio";
 	pinctrl-0 = <&pinctrl_i2c1_default>;
@@ -175,9 +174,8 @@
 	/* Use for storing information about SC board */
 	eeprom: eeprom@54 { /* u34 - m24128 16kB */
 		compatible = "st,24c128", "atmel,24c128";
-		label = "eeprom_cc";
 		reg = <0x54>; /* & 0x5c */
-		bootph-all;
+		u-boot,dm-pre-reloc;
 	};
 };
 
@@ -193,7 +191,7 @@
 	status = "okay";
 	/* QSPI should also have PINCTRL setup */
 	flash@0 {
-		compatible = "m25p80", "jedec,spi-nor"; /* mt25qu512abb8e12 512Mib */
+		compatible = "mt25qu512a", "m25p80", "jedec,spi-nor"; /* mt25qu512abb8e12 512Mib */
 		#address-cells = <1>;
 		#size-cells = <1>;
 		reg = <0>;
@@ -289,9 +287,6 @@
 	status = "okay";
 	non-removable;
 	disable-wp;
-	no-sd;
-	no-sdio;
-	cap-mmc-hw-reset;
 	bus-width = <8>;
 	xlnx,mio-bank = <0>;
 };
@@ -348,7 +343,7 @@
 		};
 	};
 
-	pinctrl_i2c0_gpio: i2c0-gpio-grp {
+	pinctrl_i2c0_gpio: i2c0-gpio {
 		mux {
 			groups = "gpio0_34_grp", "gpio0_35_grp";
 			function = "gpio0";
@@ -375,7 +370,7 @@
 		};
 	};
 
-	pinctrl_i2c1_gpio: i2c1-gpio-grp {
+	pinctrl_i2c1_gpio: i2c1-gpio {
 		conf {
 			groups = "gpio0_24_grp", "gpio0_25_grp";
 			slew-rate = <SLEW_RATE_SLOW>;

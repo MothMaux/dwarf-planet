@@ -11,7 +11,6 @@
 #include <linux/list.h>
 #include <linux/module.h>
 #include <net/net_namespace.h>
-#include <net/inet_dscp.h>
 #include <net/sock.h>
 #include <net/fib_rules.h>
 #include <net/ip_tunnels.h>
@@ -37,8 +36,8 @@ static const struct fib_kuid_range fib_kuid_range_unset = {
 
 bool fib_rule_matchall(const struct fib_rule *rule)
 {
-	if (READ_ONCE(rule->iifindex) || READ_ONCE(rule->oifindex) ||
-	    rule->mark || rule->tun_id || rule->flags)
+	if (rule->iifindex || rule->oifindex || rule->mark || rule->tun_id ||
+	    rule->flags)
 		return false;
 	if (rule->suppress_ifgroup != -1 || rule->suppress_prefixlen != -1)
 		return false;
@@ -54,7 +53,7 @@ bool fib_rule_matchall(const struct fib_rule *rule)
 EXPORT_SYMBOL_GPL(fib_rule_matchall);
 
 int fib_default_rule_add(struct fib_rules_ops *ops,
-			 u32 pref, u32 table)
+			 u32 pref, u32 table, u32 flags)
 {
 	struct fib_rule *r;
 
@@ -66,6 +65,7 @@ int fib_default_rule_add(struct fib_rules_ops *ops,
 	r->action = FR_ACT_TO_TBL;
 	r->pref = pref;
 	r->table = table;
+	r->flags = flags;
 	r->proto = RTPROT_KERNEL;
 	r->fr_net = ops->fro_net;
 	r->uid_range = fib_kuid_range_unset;
@@ -73,7 +73,7 @@ int fib_default_rule_add(struct fib_rules_ops *ops,
 	r->suppress_prefixlen = -1;
 	r->suppress_ifgroup = -1;
 
-	/* The lock is not required here, the list in unreachable
+	/* The lock is not required here, the list in unreacheable
 	 * at the moment this function is called */
 	list_add_tail(&r->list, &ops->rules_list);
 	return 0;
@@ -260,14 +260,12 @@ static int fib_rule_match(struct fib_rule *rule, struct fib_rules_ops *ops,
 			  struct flowi *fl, int flags,
 			  struct fib_lookup_arg *arg)
 {
-	int iifindex, oifindex, ret = 0;
+	int ret = 0;
 
-	iifindex = READ_ONCE(rule->iifindex);
-	if (iifindex && (iifindex != fl->flowi_iif))
+	if (rule->iifindex && (rule->iifindex != fl->flowi_iif))
 		goto out;
 
-	oifindex = READ_ONCE(rule->oifindex);
-	if (oifindex && (oifindex != fl->flowi_oif))
+	if (rule->oifindex && (rule->oifindex != fl->flowi_oif))
 		goto out;
 
 	if ((rule->mark ^ fl->flowi_mark) & rule->mark_mask)
@@ -596,6 +594,7 @@ static int fib_nl2rule(struct sk_buff *skb, struct nlmsghdr *nlh,
 	if (tb[FRA_TUN_ID])
 		nlrule->tun_id = nla_get_be64(tb[FRA_TUN_ID]);
 
+	err = -EINVAL;
 	if (tb[FRA_L3MDEV] &&
 	    fib_nl2rule_l3mdev(tb[FRA_L3MDEV], nlrule, extack) < 0)
 		goto errout_free;
@@ -769,8 +768,7 @@ static const struct nla_policy fib_rule_policy[FRA_MAX + 1] = {
 	[FRA_PROTOCOL]  = { .type = NLA_U8 },
 	[FRA_IP_PROTO]  = { .type = NLA_U8 },
 	[FRA_SPORT_RANGE] = { .len = sizeof(struct fib_rule_port_range) },
-	[FRA_DPORT_RANGE] = { .len = sizeof(struct fib_rule_port_range) },
-	[FRA_DSCP]	= NLA_POLICY_MAX(NLA_U8, INET_DSCP_MASK >> 2),
+	[FRA_DPORT_RANGE] = { .len = sizeof(struct fib_rule_port_range) }
 };
 
 int fib_nl_newrule(struct sk_buff *skb, struct nlmsghdr *nlh,
@@ -1040,14 +1038,14 @@ static int fib_nl_fill_rule(struct sk_buff *skb, struct fib_rule *rule,
 	if (rule->iifname[0]) {
 		if (nla_put_string(skb, FRA_IIFNAME, rule->iifname))
 			goto nla_put_failure;
-		if (READ_ONCE(rule->iifindex) == -1)
+		if (rule->iifindex == -1)
 			frh->flags |= FIB_RULE_IIF_DETACHED;
 	}
 
 	if (rule->oifname[0]) {
 		if (nla_put_string(skb, FRA_OIFNAME, rule->oifname))
 			goto nla_put_failure;
-		if (READ_ONCE(rule->oifindex) == -1)
+		if (rule->oifindex == -1)
 			frh->flags |= FIB_RULE_OIF_DETACHED;
 	}
 
@@ -1146,10 +1144,10 @@ static int fib_nl_dumprule(struct sk_buff *skb, struct netlink_callback *cb)
 	const struct nlmsghdr *nlh = cb->nlh;
 	struct net *net = sock_net(skb->sk);
 	struct fib_rules_ops *ops;
-	int err, idx = 0, family;
+	int idx = 0, family;
 
 	if (cb->strict_check) {
-		err = fib_valid_dumprule_req(nlh, cb->extack);
+		int err = fib_valid_dumprule_req(nlh, cb->extack);
 
 		if (err < 0)
 			return err;
@@ -1162,17 +1160,17 @@ static int fib_nl_dumprule(struct sk_buff *skb, struct netlink_callback *cb)
 		if (ops == NULL)
 			return -EAFNOSUPPORT;
 
-		return dump_rules(skb, cb, ops);
+		dump_rules(skb, cb, ops);
+
+		return skb->len;
 	}
 
-	err = 0;
 	rcu_read_lock();
 	list_for_each_entry_rcu(ops, &net->rules_ops, list) {
 		if (idx < cb->args[0] || !try_module_get(ops->owner))
 			goto skip;
 
-		err = dump_rules(skb, cb, ops);
-		if (err < 0)
+		if (dump_rules(skb, cb, ops) < 0)
 			break;
 
 		cb->args[1] = 0;
@@ -1182,7 +1180,7 @@ skip:
 	rcu_read_unlock();
 	cb->args[0] = idx;
 
-	return err;
+	return skb->len;
 }
 
 static void notify_rule_change(int event, struct fib_rule *rule,
@@ -1209,7 +1207,8 @@ static void notify_rule_change(int event, struct fib_rule *rule,
 	rtnl_notify(skb, net, pid, ops->nlgroup, nlh, GFP_KERNEL);
 	return;
 errout:
-	rtnl_set_sk_err(net, ops->nlgroup, err);
+	if (err < 0)
+		rtnl_set_sk_err(net, ops->nlgroup, err);
 }
 
 static void attach_rules(struct list_head *rules, struct net_device *dev)
@@ -1219,10 +1218,10 @@ static void attach_rules(struct list_head *rules, struct net_device *dev)
 	list_for_each_entry(rule, rules, list) {
 		if (rule->iifindex == -1 &&
 		    strcmp(dev->name, rule->iifname) == 0)
-			WRITE_ONCE(rule->iifindex, dev->ifindex);
+			rule->iifindex = dev->ifindex;
 		if (rule->oifindex == -1 &&
 		    strcmp(dev->name, rule->oifname) == 0)
-			WRITE_ONCE(rule->oifindex, dev->ifindex);
+			rule->oifindex = dev->ifindex;
 	}
 }
 
@@ -1232,9 +1231,9 @@ static void detach_rules(struct list_head *rules, struct net_device *dev)
 
 	list_for_each_entry(rule, rules, list) {
 		if (rule->iifindex == dev->ifindex)
-			WRITE_ONCE(rule->iifindex, -1);
+			rule->iifindex = -1;
 		if (rule->oifindex == dev->ifindex)
-			WRITE_ONCE(rule->oifindex, -1);
+			rule->oifindex = -1;
 	}
 }
 
@@ -1296,8 +1295,7 @@ static int __init fib_rules_init(void)
 	int err;
 	rtnl_register(PF_UNSPEC, RTM_NEWRULE, fib_nl_newrule, NULL, 0);
 	rtnl_register(PF_UNSPEC, RTM_DELRULE, fib_nl_delrule, NULL, 0);
-	rtnl_register(PF_UNSPEC, RTM_GETRULE, NULL, fib_nl_dumprule,
-		      RTNL_FLAG_DUMP_UNLOCKED);
+	rtnl_register(PF_UNSPEC, RTM_GETRULE, NULL, fib_nl_dumprule, 0);
 
 	err = register_pernet_subsys(&fib_rules_net_ops);
 	if (err < 0)

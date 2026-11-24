@@ -24,7 +24,7 @@
 #include <linux/uaccess.h>
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include "pl2303.h"
 
 
@@ -118,7 +118,6 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(SMART_VENDOR_ID, SMART_PRODUCT_ID) },
 	{ USB_DEVICE(AT_VENDOR_ID, AT_VTKIT3_PRODUCT_ID) },
 	{ USB_DEVICE(IBM_VENDOR_ID, IBM_PRODUCT_ID) },
-	{ USB_DEVICE(MACROSILICON_VENDOR_ID, MACROSILICON_MS3020_PRODUCT_ID) },
 	{ }					/* Terminating entry */
 };
 
@@ -174,7 +173,7 @@ MODULE_DEVICE_TABLE(usb, id_table);
 #define PL2303_HXN_FLOWCTRL_RTS_CTS	0x18
 #define PL2303_HXN_FLOWCTRL_XON_XOFF	0x0c
 
-static int pl2303_set_break(struct usb_serial_port *port, bool enable);
+static void pl2303_set_break(struct usb_serial_port *port, bool enable);
 
 enum pl2303_type {
 	TYPE_H,
@@ -457,8 +456,6 @@ static int pl2303_detect_type(struct usb_serial *serial)
 		case 0x605:
 		case 0x700:	/* GR */
 		case 0x705:
-		case 0x905:	/* GT-2AB */
-		case 0x1005:	/* GC-Q20 */
 			return TYPE_HXN;
 		}
 		break;
@@ -1063,7 +1060,7 @@ static int pl2303_carrier_raised(struct usb_serial_port *port)
 	return 0;
 }
 
-static int pl2303_set_break(struct usb_serial_port *port, bool enable)
+static void pl2303_set_break(struct usb_serial_port *port, bool enable)
 {
 	struct usb_serial *serial = port->serial;
 	u16 state;
@@ -1080,19 +1077,15 @@ static int pl2303_set_break(struct usb_serial_port *port, bool enable)
 	result = usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
 				 BREAK_REQUEST, BREAK_REQUEST_TYPE, state,
 				 0, NULL, 0, 100);
-	if (result) {
+	if (result)
 		dev_err(&port->dev, "error sending break = %d\n", result);
-		return result;
-	}
-
-	return 0;
 }
 
-static int pl2303_break_ctl(struct tty_struct *tty, int state)
+static void pl2303_break_ctl(struct tty_struct *tty, int state)
 {
 	struct usb_serial_port *port = tty->driver_data;
 
-	return pl2303_set_break(port, state);
+	pl2303_set_break(port, state);
 }
 
 static void pl2303_update_line_status(struct usb_serial_port *port,
@@ -1237,6 +1230,7 @@ static void pl2303_process_read_urb(struct urb *urb)
 
 static struct usb_serial_driver pl2303_device = {
 	.driver = {
+		.owner =	THIS_MODULE,
 		.name =		"pl2303",
 	},
 	.id_table =		id_table,

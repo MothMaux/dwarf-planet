@@ -7,7 +7,6 @@
 
 #include <linux/io.h>
 #include <linux/clk.h>
-#include <linux/platform_device.h>
 #include <linux/timer.h>
 #include <linux/module.h>
 #include <linux/irqreturn.h>
@@ -24,13 +23,13 @@
 #include <linux/of.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
-#include <linux/of_platform.h>
+#include <linux/of_device.h>
 #include <linux/if_vlan.h>
 #include <linux/kmemleak.h>
 #include <linux/sys_soc.h>
 
 #include <net/switchdev.h>
-#include <net/page_pool/helpers.h>
+#include <net/page_pool.h>
 #include <net/pkt_cls.h>
 #include <net/devlink.h>
 
@@ -773,9 +772,6 @@ static void cpsw_slave_open(struct cpsw_slave *slave, struct cpsw_priv *priv)
 			slave->slave_num);
 		return;
 	}
-
-	phy->mac_managed_pm = true;
-
 	slave->phy = phy;
 
 	phy_attached_info(slave->phy);
@@ -1407,17 +1403,11 @@ static int cpsw_create_ports(struct cpsw_common *cpsw)
 		cpsw->slaves[i].ndev = ndev;
 
 		ndev->features |= NETIF_F_HW_VLAN_CTAG_FILTER |
-				  NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_HW_TC;
-		ndev->netns_local = true;
-
-		ndev->xdp_features = NETDEV_XDP_ACT_BASIC |
-				     NETDEV_XDP_ACT_REDIRECT |
-				     NETDEV_XDP_ACT_NDO_XMIT;
+				  NETIF_F_HW_VLAN_CTAG_RX | NETIF_F_NETNS_LOCAL | NETIF_F_HW_TC;
 
 		ndev->netdev_ops = &cpsw_netdev_ops;
 		ndev->ethtool_ops = &cpsw_ethtool_ops;
 		SET_NETDEV_DEV(ndev, dev);
-		ndev->dev.of_node = slave_data->slave_node;
 
 		if (!napi_ndev) {
 			/* CPSW Host port CPDMA interface is shared between
@@ -1627,8 +1617,7 @@ static int cpsw_dl_switch_mode_get(struct devlink *dl, u32 id,
 }
 
 static int cpsw_dl_switch_mode_set(struct devlink *dl, u32 id,
-				   struct devlink_param_gset_ctx *ctx,
-				   struct netlink_ext_ack *extack)
+				   struct devlink_param_gset_ctx *ctx)
 {
 	struct cpsw_devlink *dl_priv = devlink_priv(dl);
 	struct cpsw_common *cpsw = dl_priv->cpsw;
@@ -1765,8 +1754,7 @@ static int cpsw_dl_ale_ctrl_get(struct devlink *dl, u32 id,
 }
 
 static int cpsw_dl_ale_ctrl_set(struct devlink *dl, u32 id,
-				struct devlink_param_gset_ctx *ctx,
-				struct netlink_ext_ack *extack)
+				struct devlink_param_gset_ctx *ctx)
 {
 	struct cpsw_devlink *dl_priv = devlink_priv(dl);
 	struct cpsw_common *cpsw = dl_priv->cpsw;
@@ -1970,7 +1958,7 @@ static int cpsw_probe(struct platform_device *pdev)
 	/* setup netdevs */
 	ret = cpsw_create_ports(cpsw);
 	if (ret)
-		goto clean_cpts;
+		goto clean_unregister_netdev;
 
 	/* Grab RX and TX IRQs. Note that we also have RX_THRESHOLD and
 	 * MISC IRQs which are always kept disabled with this driver so
@@ -1984,14 +1972,14 @@ static int cpsw_probe(struct platform_device *pdev)
 			       0, dev_name(dev), cpsw);
 	if (ret < 0) {
 		dev_err(dev, "error attaching irq (%d)\n", ret);
-		goto clean_cpts;
+		goto clean_unregister_netdev;
 	}
 
 	ret = devm_request_irq(dev, cpsw->irqs_table[1], cpsw_tx_interrupt,
 			       0, dev_name(dev), cpsw);
 	if (ret < 0) {
 		dev_err(dev, "error attaching irq (%d)\n", ret);
-		goto clean_cpts;
+		goto clean_unregister_netdev;
 	}
 
 	if (!cpsw->cpts)
@@ -2001,7 +1989,7 @@ static int cpsw_probe(struct platform_device *pdev)
 			       0, dev_name(&pdev->dev), cpsw);
 	if (ret < 0) {
 		dev_err(dev, "error attaching misc irq (%d)\n", ret);
-		goto clean_cpts;
+		goto clean_unregister_netdev;
 	}
 
 	/* Enable misc CPTS evnt_pend IRQ */
@@ -2010,7 +1998,7 @@ static int cpsw_probe(struct platform_device *pdev)
 skip_cpts:
 	ret = cpsw_register_notifiers(cpsw);
 	if (ret)
-		goto clean_cpts;
+		goto clean_unregister_netdev;
 
 	ret = cpsw_register_devlink(cpsw);
 	if (ret)
@@ -2032,6 +2020,8 @@ skip_cpts:
 
 clean_unregister_notifiers:
 	cpsw_unregister_notifiers(cpsw);
+clean_unregister_netdev:
+	cpsw_unregister_ports(cpsw);
 clean_cpts:
 	cpts_release(cpsw->cpts);
 	cpdma_ctlr_destroy(cpsw->dma);
@@ -2042,20 +2032,14 @@ clean_dt_ret:
 	return ret;
 }
 
-static void cpsw_remove(struct platform_device *pdev)
+static int cpsw_remove(struct platform_device *pdev)
 {
 	struct cpsw_common *cpsw = platform_get_drvdata(pdev);
 	int ret;
 
 	ret = pm_runtime_resume_and_get(&pdev->dev);
-	if (ret < 0) {
-		/* Note, if this error path is taken, we're leaking some
-		 * resources.
-		 */
-		dev_err(&pdev->dev, "Failed to resume device (%pe)\n",
-			ERR_PTR(ret));
-		return;
-	}
+	if (ret < 0)
+		return ret;
 
 	cpsw_unregister_notifiers(cpsw);
 	cpsw_unregister_devlink(cpsw);
@@ -2066,6 +2050,7 @@ static void cpsw_remove(struct platform_device *pdev)
 	cpsw_remove_dt(cpsw);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+	return 0;
 }
 
 static int __maybe_unused cpsw_suspend(struct device *dev)
@@ -2126,7 +2111,7 @@ static struct platform_driver cpsw_driver = {
 		.of_match_table = cpsw_of_mtable,
 	},
 	.probe = cpsw_probe,
-	.remove_new = cpsw_remove,
+	.remove = cpsw_remove,
 };
 
 module_platform_driver(cpsw_driver);

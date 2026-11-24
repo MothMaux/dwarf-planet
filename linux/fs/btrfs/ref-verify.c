@@ -5,14 +5,11 @@
 
 #include <linux/sched.h>
 #include <linux/stacktrace.h>
-#include "messages.h"
 #include "ctree.h"
 #include "disk-io.h"
 #include "locking.h"
 #include "delayed-ref.h"
 #include "ref-verify.h"
-#include "fs.h"
-#include "accessors.h"
 
 /*
  * Used to keep track the roots and number of refs each root has for a given
@@ -441,8 +438,7 @@ static int process_extent_item(struct btrfs_fs_info *fs_info,
 	u32 item_size = btrfs_item_size(leaf, slot);
 	unsigned long end, ptr;
 	u64 offset, flags, count;
-	int type;
-	int ret = 0;
+	int type, ret;
 
 	ei = btrfs_item_ptr(leaf, slot, struct btrfs_extent_item);
 	flags = btrfs_extent_flags(leaf, ei);
@@ -485,13 +481,6 @@ static int process_extent_item(struct btrfs_fs_info *fs_info,
 			count = btrfs_shared_data_ref_count(leaf, sref);
 			ret = add_shared_data_ref(fs_info, offset, count,
 						  key->objectid, key->offset);
-			break;
-		case BTRFS_EXTENT_OWNER_REF_KEY:
-			if (!btrfs_fs_incompat(fs_info, SIMPLE_QUOTA)) {
-				btrfs_err(fs_info,
-			  "found extent owner ref without simple quotas enabled");
-				ret = -EINVAL;
-			}
 			break;
 		default:
 			btrfs_err(fs_info, "invalid key type in iref");
@@ -660,7 +649,7 @@ static void dump_block_entry(struct btrfs_fs_info *fs_info,
 }
 
 /*
- * Called when we modify a ref for a bytenr.
+ * btrfs_ref_tree_mod: called when we modify a ref for a bytenr
  *
  * This will add an action item to the given bytenr and do sanity checks to make
  * sure we haven't messed something up.  If we are making a new allocation and
@@ -678,7 +667,7 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 	int ret = 0;
 	bool metadata;
 	u64 bytenr = generic_ref->bytenr;
-	u64 num_bytes = generic_ref->num_bytes;
+	u64 num_bytes = generic_ref->len;
 	u64 parent = generic_ref->parent;
 	u64 ref_root = 0;
 	u64 owner = 0;
@@ -689,11 +678,11 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 
 	if (generic_ref->type == BTRFS_REF_METADATA) {
 		if (!parent)
-			ref_root = generic_ref->ref_root;
+			ref_root = generic_ref->tree_ref.owning_root;
 		owner = generic_ref->tree_ref.level;
 	} else if (!parent) {
-		ref_root = generic_ref->ref_root;
-		owner = generic_ref->data_ref.objectid;
+		ref_root = generic_ref->data_ref.owning_root;
+		owner = generic_ref->data_ref.ino;
 		offset = generic_ref->data_ref.offset;
 	}
 	metadata = owner < BTRFS_FIRST_FREE_OBJECTID;
@@ -799,7 +788,6 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 			dump_ref_action(fs_info, ra);
 			kfree(ref);
 			kfree(ra);
-			kfree(re);
 			goto out_unlock;
 		} else if (be->num_refs == 0) {
 			btrfs_err(fs_info,
@@ -809,7 +797,6 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 			dump_ref_action(fs_info, ra);
 			kfree(ref);
 			kfree(ra);
-			kfree(re);
 			goto out_unlock;
 		}
 
@@ -857,7 +844,6 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 "dropping a ref for a root that doesn't have a ref on the block");
 			dump_block_entry(fs_info, be);
 			dump_ref_action(fs_info, ra);
-			rb_erase(&ref->node, &be->refs);
 			kfree(ref);
 			kfree(ra);
 			goto out_unlock;
@@ -895,10 +881,8 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 out_unlock:
 	spin_unlock(&fs_info->ref_verify_lock);
 out:
-	if (ret) {
-		btrfs_free_ref_cache(fs_info);
+	if (ret)
 		btrfs_clear_opt(fs_info->mount_opt, REF_VERIFY);
-	}
 	return ret;
 }
 
@@ -998,18 +982,11 @@ int btrfs_build_ref_tree(struct btrfs_fs_info *fs_info)
 	if (!btrfs_test_opt(fs_info, REF_VERIFY))
 		return 0;
 
-	extent_root = btrfs_extent_root(fs_info, 0);
-	/* If the extent tree is damaged we cannot ignore it (IGNOREBADROOTS). */
-	if (IS_ERR(extent_root)) {
-		btrfs_warn(fs_info, "ref-verify: extent tree not available, disabling");
-		btrfs_clear_opt(fs_info->mount_opt, REF_VERIFY);
-		return 0;
-	}
-
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
 
+	extent_root = btrfs_extent_root(fs_info, 0);
 	eb = btrfs_read_lock_root_node(extent_root);
 	level = btrfs_header_level(eb);
 	path->nodes[level] = eb;
@@ -1036,8 +1013,8 @@ int btrfs_build_ref_tree(struct btrfs_fs_info *fs_info)
 		}
 	}
 	if (ret) {
-		btrfs_free_ref_cache(fs_info);
 		btrfs_clear_opt(fs_info->mount_opt, REF_VERIFY);
+		btrfs_free_ref_cache(fs_info);
 	}
 	btrfs_free_path(path);
 	return ret;

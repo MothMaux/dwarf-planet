@@ -16,7 +16,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/spi/spi.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 /* ADRF6780 Register Map */
 #define ADRF6780_REG_CONTROL			0x00

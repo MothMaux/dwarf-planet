@@ -159,7 +159,7 @@ static inline void debugfs_tx(struct ser_device *ser, const u8 *data, int size)
 #endif
 
 static void ldisc_receive(struct tty_struct *tty, const u8 *data,
-			  const u8 *flags, size_t count)
+			const char *flags, int count)
 {
 	struct sk_buff *skb = NULL;
 	struct ser_device *ser;
@@ -298,7 +298,6 @@ static void ser_release(struct work_struct *work)
 {
 	struct list_head list;
 	struct ser_device *ser, *tmp;
-	struct tty_struct *tty;
 
 	spin_lock(&ser_lock);
 	list_replace_init(&ser_release_list, &list);
@@ -307,11 +306,9 @@ static void ser_release(struct work_struct *work)
 	if (!list_empty(&list)) {
 		rtnl_lock();
 		list_for_each_entry_safe(ser, tmp, &list, node) {
-			tty = ser->tty;
 			dev_close(ser->dev);
 			unregister_netdevice(ser->dev);
 			debugfs_deinit(ser);
-			tty_kref_put(tty);
 		}
 		rtnl_unlock();
 	}
@@ -371,6 +368,8 @@ static int ldisc_open(struct tty_struct *tty)
 static void ldisc_close(struct tty_struct *tty)
 {
 	struct ser_device *ser = tty->disc_data;
+
+	tty_kref_put(ser->tty);
 
 	spin_lock(&ser_lock);
 	list_move(&ser->node, &ser_release_list);

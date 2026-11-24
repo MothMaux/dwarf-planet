@@ -466,9 +466,8 @@ static const struct iio_buffer_setup_ops ina260_setup_ops = {
 	.predisable = &ina260_buffer_disable,
 };
 
-static int ina260_probe(struct i2c_client *client)
+static int ina260_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct iio_dev *indio_dev;
 	struct ina260_chip *chip;
 	enum ina260_ids type = 0;
@@ -555,4 +554,4 @@ module_i2c_driver(ina260_driver);
 
 MODULE_AUTHOR("Raviteja Narayanam <raviteja.narayanam@xilinx.com>");
 MODULE_DESCRIPTION("Texas Instruments INA 260 ADC driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

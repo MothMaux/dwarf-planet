@@ -16,14 +16,16 @@
 #include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of_irq.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/slab.h>
 #include <linux/spi/spi.h>
 #include <linux/units.h>
 
 #include <asm/div64.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/iio.h>
@@ -223,10 +225,6 @@ enum ad4130_pin_function {
 	AD4130_PIN_FN_VBIAS = BIT(3),
 };
 
-/*
- * If you make adaptations in this struct, you most likely also have to adapt
- * ad4130_setup_info_eq(), too.
- */
 struct ad4130_setup_info {
 	unsigned int			iout0_val;
 	unsigned int			iout1_val;
@@ -307,7 +305,8 @@ struct ad4130_state {
 	 * buffers is synchronous, all of the buffers used for DMA in this
 	 * driver may share a cache line.
 	 */
-	u8			reset_buf[AD4130_RESET_BUF_SIZE] __aligned(IIO_DMA_MINALIGN);
+	/* IIO_DMA_MINALIGN is not available before 6.0 */
+	u8			reset_buf[AD4130_RESET_BUF_SIZE] __aligned(ARCH_KMALLOC_MINALIGN);
 	u8			reg_write_tx_buf[4];
 	u8			reg_read_tx_buf[1];
 	u8			reg_read_rx_buf[3];
@@ -595,40 +594,6 @@ static irqreturn_t ad4130_irq_handler(int irq, void *private)
 	return IRQ_HANDLED;
 }
 
-static bool ad4130_setup_info_eq(struct ad4130_setup_info *a,
-				 struct ad4130_setup_info *b)
-{
-	/*
-	 * This is just to make sure that the comparison is adapted after
-	 * struct ad4130_setup_info was changed.
-	 */
-	static_assert(sizeof(*a) ==
-		      sizeof(struct {
-				     unsigned int iout0_val;
-				     unsigned int iout1_val;
-				     unsigned int burnout;
-				     unsigned int pga;
-				     unsigned int fs;
-				     u32 ref_sel;
-				     enum ad4130_filter_mode filter_mode;
-				     bool ref_bufp;
-				     bool ref_bufm;
-			     }));
-
-	if (a->iout0_val != b->iout0_val ||
-	    a->iout1_val != b->iout1_val ||
-	    a->burnout != b->burnout ||
-	    a->pga != b->pga ||
-	    a->fs != b->fs ||
-	    a->ref_sel != b->ref_sel ||
-	    a->filter_mode != b->filter_mode ||
-	    a->ref_bufp != b->ref_bufp ||
-	    a->ref_bufm != b->ref_bufm)
-		return false;
-
-	return true;
-}
-
 static int ad4130_find_slot(struct ad4130_state *st,
 			    struct ad4130_setup_info *target_setup_info,
 			    unsigned int *slot, bool *overwrite)
@@ -642,7 +607,8 @@ static int ad4130_find_slot(struct ad4130_state *st,
 		struct ad4130_slot_info *slot_info = &st->slots_info[i];
 
 		/* Immediately accept a matching setup info. */
-		if (ad4130_setup_info_eq(target_setup_info, &slot_info->setup)) {
+		if (!memcmp(target_setup_info, &slot_info->setup,
+			    sizeof(*target_setup_info))) {
 			*slot = i;
 			return 0;
 		}
@@ -924,9 +890,9 @@ static int ad4130_set_filter_mode(struct iio_dev *indio_dev,
 	unsigned int old_fs;
 	int ret = 0;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 	if (setup_info->filter_mode == val)
-		return 0;
+		goto out;
 
 	old_fs = setup_info->fs;
 	old_filter_mode = setup_info->filter_mode;
@@ -948,10 +914,12 @@ static int ad4130_set_filter_mode(struct iio_dev *indio_dev,
 	if (ret) {
 		setup_info->fs = old_fs;
 		setup_info->filter_mode = old_filter_mode;
-		return ret;
 	}
 
-	return 0;
+ out:
+	mutex_unlock(&st->lock);
+
+	return ret;
 }
 
 static int ad4130_get_filter_mode(struct iio_dev *indio_dev,
@@ -962,8 +930,9 @@ static int ad4130_get_filter_mode(struct iio_dev *indio_dev,
 	struct ad4130_setup_info *setup_info = &st->chans_info[channel].setup;
 	enum ad4130_filter_mode filter_mode;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 	filter_mode = setup_info->filter_mode;
+	mutex_unlock(&st->lock);
 
 	return filter_mode;
 }
@@ -1005,7 +974,7 @@ static int ad4130_set_channel_pga(struct ad4130_state *st, unsigned int channel,
 	struct ad4130_chan_info *chan_info = &st->chans_info[channel];
 	struct ad4130_setup_info *setup_info = &chan_info->setup;
 	unsigned int pga, old_pga;
-	int ret;
+	int ret = 0;
 
 	for (pga = 0; pga < AD4130_MAX_PGA; pga++)
 		if (val == st->scale_tbls[setup_info->ref_sel][pga][0] &&
@@ -1015,20 +984,21 @@ static int ad4130_set_channel_pga(struct ad4130_state *st, unsigned int channel,
 	if (pga == AD4130_MAX_PGA)
 		return -EINVAL;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 	if (pga == setup_info->pga)
-		return 0;
+		goto out;
 
 	old_pga = setup_info->pga;
 	setup_info->pga = pga;
 
 	ret = ad4130_write_channel_setup(st, channel, false);
-	if (ret) {
+	if (ret)
 		setup_info->pga = old_pga;
-		return ret;
-	}
 
-	return 0;
+out:
+	mutex_unlock(&st->lock);
+
+	return ret;
 }
 
 static int ad4130_set_channel_freq(struct ad4130_state *st,
@@ -1037,25 +1007,26 @@ static int ad4130_set_channel_freq(struct ad4130_state *st,
 	struct ad4130_chan_info *chan_info = &st->chans_info[channel];
 	struct ad4130_setup_info *setup_info = &chan_info->setup;
 	unsigned int fs, old_fs;
-	int ret;
+	int ret = 0;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 	old_fs = setup_info->fs;
 
 	ad4130_freq_to_fs(setup_info->filter_mode, val, val2, &fs);
 
 	if (fs == setup_info->fs)
-		return 0;
+		goto out;
 
 	setup_info->fs = fs;
 
 	ret = ad4130_write_channel_setup(st, channel, false);
-	if (ret) {
+	if (ret)
 		setup_info->fs = old_fs;
-		return ret;
-	}
 
-	return 0;
+out:
+	mutex_unlock(&st->lock);
+
+	return ret;
 }
 
 static int _ad4130_read_sample(struct iio_dev *indio_dev, unsigned int channel,
@@ -1097,13 +1068,20 @@ static int _ad4130_read_sample(struct iio_dev *indio_dev, unsigned int channel,
 static int ad4130_read_sample(struct iio_dev *indio_dev, unsigned int channel,
 			      int *val)
 {
-	iio_device_claim_direct_scoped(return -EBUSY, indio_dev) {
-		struct ad4130_state *st = iio_priv(indio_dev);
+	struct ad4130_state *st = iio_priv(indio_dev);
+	int ret;
 
-		guard(mutex)(&st->lock);
-		return _ad4130_read_sample(indio_dev, channel, val);
-	}
-	unreachable();
+	ret = iio_device_claim_direct_mode(indio_dev);
+	if (ret)
+		return ret;
+
+	mutex_lock(&st->lock);
+	ret = _ad4130_read_sample(indio_dev, channel, val);
+	mutex_unlock(&st->lock);
+
+	iio_device_release_direct_mode(indio_dev);
+
+	return ret;
 }
 
 static int ad4130_read_raw(struct iio_dev *indio_dev,
@@ -1117,24 +1095,24 @@ static int ad4130_read_raw(struct iio_dev *indio_dev,
 	switch (info) {
 	case IIO_CHAN_INFO_RAW:
 		return ad4130_read_sample(indio_dev, channel, val);
-	case IIO_CHAN_INFO_SCALE: {
-		guard(mutex)(&st->lock);
+	case IIO_CHAN_INFO_SCALE:
+		mutex_lock(&st->lock);
 		*val = st->scale_tbls[setup_info->ref_sel][setup_info->pga][0];
 		*val2 = st->scale_tbls[setup_info->ref_sel][setup_info->pga][1];
+		mutex_unlock(&st->lock);
 
 		return IIO_VAL_INT_PLUS_NANO;
-	}
 	case IIO_CHAN_INFO_OFFSET:
 		*val = st->bipolar ? -BIT(chan->scan_type.realbits - 1) : 0;
 
 		return IIO_VAL_INT;
-	case IIO_CHAN_INFO_SAMP_FREQ: {
-		guard(mutex)(&st->lock);
+	case IIO_CHAN_INFO_SAMP_FREQ:
+		mutex_lock(&st->lock);
 		ad4130_fs_to_freq(setup_info->filter_mode, setup_info->fs,
 				  val, val2);
+		mutex_unlock(&st->lock);
 
 		return IIO_VAL_INT_PLUS_NANO;
-	}
 	default:
 		return -EINVAL;
 	}
@@ -1159,9 +1137,9 @@ static int ad4130_read_avail(struct iio_dev *indio_dev,
 
 		return IIO_AVAIL_LIST;
 	case IIO_CHAN_INFO_SAMP_FREQ:
-		scoped_guard(mutex, &st->lock) {
-			filter_config = &ad4130_filter_configs[setup_info->filter_mode];
-		}
+		mutex_lock(&st->lock);
+		filter_config = &ad4130_filter_configs[setup_info->filter_mode];
+		mutex_unlock(&st->lock);
 
 		*vals = (int *)filter_config->samp_freq_avail;
 		*length = filter_config->samp_freq_avail_len * 2;
@@ -1222,17 +1200,20 @@ static int ad4130_update_scan_mode(struct iio_dev *indio_dev,
 	unsigned int val = 0;
 	int ret;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 
 	for_each_set_bit(channel, scan_mask, indio_dev->num_channels) {
 		ret = ad4130_set_channel_enable(st, channel, true);
 		if (ret)
-			return ret;
+			goto out;
 
 		val++;
 	}
 
 	st->num_enabled_channels = val;
+
+out:
+	mutex_unlock(&st->lock);
 
 	return 0;
 }
@@ -1254,19 +1235,22 @@ static int ad4130_set_fifo_watermark(struct iio_dev *indio_dev, unsigned int val
 		 */
 		eff = rounddown(AD4130_FIFO_SIZE, st->num_enabled_channels);
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 
 	ret = regmap_update_bits(st->regmap, AD4130_FIFO_CONTROL_REG,
 				 AD4130_FIFO_CONTROL_WM_MASK,
 				 FIELD_PREP(AD4130_FIFO_CONTROL_WM_MASK,
 					    ad4130_watermark_reg_val(eff)));
 	if (ret)
-		return ret;
+		goto out;
 
 	st->effective_watermark = eff;
 	st->watermark = val;
 
-	return 0;
+out:
+	mutex_unlock(&st->lock);
+
+	return ret;
 }
 
 static const struct iio_info ad4130_info = {
@@ -1284,21 +1268,26 @@ static int ad4130_buffer_postenable(struct iio_dev *indio_dev)
 	struct ad4130_state *st = iio_priv(indio_dev);
 	int ret;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 
 	ret = ad4130_set_watermark_interrupt_en(st, true);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = irq_set_irq_type(st->spi->irq, st->inv_irq_trigger);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = ad4130_set_fifo_mode(st, AD4130_FIFO_MODE_WM);
 	if (ret)
-		return ret;
+		goto out;
 
-	return ad4130_set_mode(st, AD4130_MODE_CONTINUOUS);
+	ret = ad4130_set_mode(st, AD4130_MODE_CONTINUOUS);
+
+out:
+	mutex_unlock(&st->lock);
+
+	return ret;
 }
 
 static int ad4130_buffer_predisable(struct iio_dev *indio_dev)
@@ -1307,23 +1296,23 @@ static int ad4130_buffer_predisable(struct iio_dev *indio_dev)
 	unsigned int i;
 	int ret;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 
 	ret = ad4130_set_mode(st, AD4130_MODE_IDLE);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = irq_set_irq_type(st->spi->irq, st->irq_trigger);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = ad4130_set_fifo_mode(st, AD4130_FIFO_MODE_DISABLED);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = ad4130_set_watermark_interrupt_en(st, false);
 	if (ret)
-		return ret;
+		goto out;
 
 	/*
 	 * update_scan_mode() is not called in the disable path, disable all
@@ -1332,10 +1321,13 @@ static int ad4130_buffer_predisable(struct iio_dev *indio_dev)
 	for (i = 0; i < indio_dev->num_channels; i++) {
 		ret = ad4130_set_channel_enable(st, i, false);
 		if (ret)
-			return ret;
+			goto out;
 	}
 
-	return 0;
+out:
+	mutex_unlock(&st->lock);
+
+	return ret;
 }
 
 static const struct iio_buffer_setup_ops ad4130_buffer_ops = {
@@ -1349,8 +1341,9 @@ static ssize_t hwfifo_watermark_show(struct device *dev,
 	struct ad4130_state *st = iio_priv(dev_to_iio_dev(dev));
 	unsigned int val;
 
-	guard(mutex)(&st->lock);
+	mutex_lock(&st->lock);
 	val = st->watermark;
+	mutex_unlock(&st->lock);
 
 	return sysfs_emit(buf, "%d\n", val);
 }
@@ -1390,11 +1383,11 @@ static IIO_DEVICE_ATTR_RO(hwfifo_watermark_max, 0);
 static IIO_DEVICE_ATTR_RO(hwfifo_watermark, 0);
 static IIO_DEVICE_ATTR_RO(hwfifo_enabled, 0);
 
-static const struct iio_dev_attr *ad4130_fifo_attributes[] = {
-	&iio_dev_attr_hwfifo_watermark_min,
-	&iio_dev_attr_hwfifo_watermark_max,
-	&iio_dev_attr_hwfifo_watermark,
-	&iio_dev_attr_hwfifo_enabled,
+static const struct attribute *ad4130_fifo_attributes[] = {
+	&iio_dev_attr_hwfifo_watermark_min.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark_max.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark.dev_attr.attr,
+	&iio_dev_attr_hwfifo_enabled.dev_attr.attr,
 	NULL
 };
 
@@ -1637,14 +1630,17 @@ static int ad4130_parse_fw_children(struct iio_dev *indio_dev)
 {
 	struct ad4130_state *st = iio_priv(indio_dev);
 	struct device *dev = &st->spi->dev;
+	struct fwnode_handle *child;
 	int ret;
 
 	indio_dev->channels = st->chans;
 
-	device_for_each_child_node_scoped(dev, child) {
+	device_for_each_child_node(dev, child) {
 		ret = ad4130_parse_fw_channel(indio_dev, child);
-		if (ret)
+		if (ret) {
+			fwnode_handle_put(child);
 			return ret;
+		}
 	}
 
 	return 0;
@@ -1668,8 +1664,8 @@ static int ad4310_parse_fw(struct iio_dev *indio_dev)
 	st->int_pin_sel = AD4130_INT_PIN_INT;
 
 	for (i = 0; i < ARRAY_SIZE(ad4130_int_pin_names); i++) {
-		irq = fwnode_irq_get_byname(dev_fwnode(dev),
-					    ad4130_int_pin_names[i]);
+		/* fwnode_irq_get_byname is not available before 5.18 */
+		irq = of_irq_get_byname(dev->of_node, ad4130_int_pin_names[i]);
 		if (irq > 0) {
 			st->int_pin_sel = i;
 			break;
@@ -1828,9 +1824,9 @@ static int ad4130_setup_int_clk(struct ad4130_state *st)
 {
 	struct device *dev = &st->spi->dev;
 	struct device_node *of_node = dev_of_node(dev);
-	struct clk_init_data init = {};
+	struct clk_init_data init;
 	const char *clk_name;
-	int ret;
+	struct clk *clk;
 
 	if (st->int_pin_sel == AD4130_INT_PIN_CLK ||
 	    st->mclk_sel != AD4130_MCLK_76_8KHZ)
@@ -1846,12 +1842,11 @@ static int ad4130_setup_int_clk(struct ad4130_state *st)
 	init.ops = &ad4130_int_clk_ops;
 
 	st->int_clk_hw.init = &init;
-	ret = devm_clk_hw_register(dev, &st->int_clk_hw);
-	if (ret)
-		return ret;
+	clk = devm_clk_register(dev, &st->int_clk_hw);
+	if (IS_ERR(clk))
+		return PTR_ERR(clk);
 
-	return devm_of_clk_add_hw_provider(dev, of_clk_hw_simple_get,
-					   &st->int_clk_hw);
+	return of_clk_add_provider(of_node, of_clk_src_simple_get, clk);
 }
 
 static int ad4130_setup(struct iio_dev *indio_dev)
@@ -1898,14 +1893,10 @@ static int ad4130_setup(struct iio_dev *indio_dev)
 		return ret;
 
 	/*
-	 * Configure unused GPIOs for output. If configured, the interrupt
-	 * function of P2 takes priority over the GPIO out function.
+	 * Configure all GPIOs for output. If configured, the interrupt function
+	 * of P2 takes priority over the GPIO out function.
 	 */
-	val = 0;
-	for (i = 0; i < AD4130_MAX_GPIOS; i++)
-		if (st->pins_fn[i + AD4130_AIN2_P1] == AD4130_PIN_FN_NONE)
-			val |= FIELD_PREP(AD4130_IO_CONTROL_GPIO_CTRL_MASK, BIT(i));
-
+	val =  AD4130_IO_CONTROL_GPIO_CTRL_MASK;
 	val |= FIELD_PREP(AD4130_IO_CONTROL_INT_PIN_SEL_MASK, st->int_pin_sel);
 
 	ret = regmap_write(st->regmap, AD4130_IO_CONTROL_REG, val);
@@ -1920,8 +1911,8 @@ static int ad4130_setup(struct iio_dev *indio_dev)
 	if (ret)
 		return ret;
 
-	ret = regmap_clear_bits(st->regmap, AD4130_FIFO_CONTROL_REG,
-				AD4130_FIFO_CONTROL_HEADER_MASK);
+	ret = regmap_update_bits(st->regmap, AD4130_FIFO_CONTROL_REG,
+				 AD4130_FIFO_CONTROL_HEADER_MASK, 0);
 	if (ret)
 		return ret;
 

@@ -13,6 +13,7 @@
 #include <linux/interconnect.h>
 #include <linux/pm_opp.h>
 #include <linux/regulator/consumer.h>
+#include <linux/reset.h>
 
 #include "msm_drv.h"
 #include "msm_fence.h"
@@ -49,12 +50,6 @@ struct msm_gpu_funcs {
 	int (*set_param)(struct msm_gpu *gpu, struct msm_file_private *ctx,
 			 uint32_t param, uint64_t value, uint32_t len);
 	int (*hw_init)(struct msm_gpu *gpu);
-
-	/**
-	 * @ucode_load: Optional hook to upload fw to GEM objs
-	 */
-	int (*ucode_load)(struct msm_gpu *gpu);
-
 	int (*pm_suspend)(struct msm_gpu *gpu);
 	int (*pm_resume)(struct msm_gpu *gpu);
 	void (*submit)(struct msm_gpu *gpu, struct msm_gem_submit *submit);
@@ -83,15 +78,6 @@ struct msm_gpu_funcs {
 	struct msm_gem_address_space *(*create_private_address_space)
 		(struct msm_gpu *gpu);
 	uint32_t (*get_rptr)(struct msm_gpu *gpu, struct msm_ringbuffer *ring);
-
-	/**
-	 * progress: Has the GPU made progress?
-	 *
-	 * Return true if GPU position in cmdstream has advanced (or changed)
-	 * since the last call.  To avoid false negatives, this should account
-	 * for cmdstream that is buffered in this FIFO upstream of the CP fw.
-	 */
-	bool (*progress)(struct msm_gpu *gpu, struct msm_ringbuffer *ring);
 };
 
 /* Additional state for iommu faults: */
@@ -114,15 +100,11 @@ struct msm_gpu_devfreq {
 	struct mutex lock;
 
 	/**
-	 * idle_freq:
+	 * idle_constraint:
 	 *
-	 * Shadow frequency used while the GPU is idle.  From the PoV of
-	 * the devfreq governor, we are continuing to sample busyness and
-	 * adjust frequency while the GPU is idle, but we use this shadow
-	 * value as the GPU is actually clamped to minimum frequency while
-	 * it is inactive.
+	 * A PM QoS constraint to limit max freq while the GPU is idle.
 	 */
-	unsigned long idle_freq;
+	struct dev_pm_qos_request idle_freq;
 
 	/**
 	 * boost_constraint:
@@ -143,6 +125,8 @@ struct msm_gpu_devfreq {
 
 	/** idle_time: Time of last transition to idle: */
 	ktime_t idle_time;
+
+	struct devfreq_dev_status average_status;
 
 	/**
 	 * idle_work:
@@ -253,7 +237,6 @@ struct msm_gpu {
 #define DRM_MSM_INACTIVE_PERIOD   66 /* in ms (roughly four frames) */
 
 #define DRM_MSM_HANGCHECK_DEFAULT_PERIOD 500 /* in ms */
-#define DRM_MSM_HANGCHECK_PROGRESS_RETRIES 3
 	struct timer_list hangcheck_timer;
 
 	/* Fault info for most recent iova fault: */
@@ -282,19 +265,16 @@ struct msm_gpu {
 
 	struct msm_gpu_state *crashstate;
 
+	/* Enable clamping to idle freq when inactive: */
+	bool clamp_to_idle;
+
 	/* True if the hardware supports expanded apriv (a650 and newer) */
 	bool hw_apriv;
 
-	/**
-	 * @allow_relocs: allow relocs in SUBMIT ioctl
-	 *
-	 * Mesa won't use relocs for driver version 1.4.0 and later.  This
-	 * switch-over happened early enough in mesa a6xx bringup that we
-	 * can disallow relocs for a6xx and newer.
-	 */
-	bool allow_relocs;
-
 	struct thermal_cooling_device *cooling;
+
+	/* To poll for cx gdsc collapse during gpu recovery */
+	struct reset_control *cx_collapse;
 };
 
 static inline struct msm_gpu *dev_to_gpu(struct device *dev)
@@ -347,7 +327,7 @@ struct msm_gpu_perfcntr {
  * DRM_SCHED_PRIORITY_KERNEL priority level is treated specially in some
  * cases, so we don't use it (no need for kernel generated jobs).
  */
-#define NR_SCHED_PRIORITIES (1 + DRM_SCHED_PRIORITY_LOW - DRM_SCHED_PRIORITY_HIGH)
+#define NR_SCHED_PRIORITIES (1 + DRM_SCHED_PRIORITY_HIGH - DRM_SCHED_PRIORITY_MIN)
 
 /**
  * struct msm_file_private - per-drm_file context
@@ -386,18 +366,10 @@ struct msm_file_private {
 	 */
 	int sysprof;
 
-	/**
-	 * comm: Overridden task comm, see MSM_PARAM_COMM
-	 *
-	 * Accessed under msm_gpu::lock
-	 */
+	/** comm: Overridden task comm, see MSM_PARAM_COMM */
 	char *comm;
 
-	/**
-	 * cmdline: Overridden task cmdline, see MSM_PARAM_CMDLINE
-	 *
-	 * Accessed under msm_gpu::lock
-	 */
+	/** cmdline: Overridden task cmdline, see MSM_PARAM_CMDLINE */
 	char *cmdline;
 
 	/**
@@ -428,14 +400,6 @@ struct msm_file_private {
 	 * level.
 	 */
 	struct drm_sched_entity *entities[NR_SCHED_PRIORITIES * MSM_GPU_MAX_RINGS];
-
-	/**
-	 * ctx_mem:
-	 *
-	 * Total amount of memory of GEM buffers with handles attached for
-	 * this context.
-	 */
-	atomic64_t ctx_mem;
 };
 
 /**
@@ -518,7 +482,7 @@ struct msm_gpu_submitqueue {
 	struct msm_file_private *ctx;
 	struct list_head node;
 	struct idr fence_idr;
-	struct spinlock idr_lock;
+	struct mutex idr_lock;
 	struct mutex lock;
 	struct kref ref;
 	struct drm_sched_entity *entity;
@@ -527,7 +491,6 @@ struct msm_gpu_submitqueue {
 struct msm_gpu_state_bo {
 	u64 iova;
 	size_t size;
-	u32 flags;
 	void *data;
 	bool encoded;
 	char name[32];
@@ -564,12 +527,12 @@ struct msm_gpu_state {
 
 static inline void gpu_write(struct msm_gpu *gpu, u32 reg, u32 data)
 {
-	writel(data, gpu->mmio + (reg << 2));
+	msm_writel(data, gpu->mmio + (reg << 2));
 }
 
 static inline u32 gpu_read(struct msm_gpu *gpu, u32 reg)
 {
-	return readl(gpu->mmio + (reg << 2));
+	return msm_readl(gpu->mmio + (reg << 2));
 }
 
 static inline void gpu_rmw(struct msm_gpu *gpu, u32 reg, u32 mask, u32 or)
@@ -577,7 +540,7 @@ static inline void gpu_rmw(struct msm_gpu *gpu, u32 reg, u32 mask, u32 or)
 	msm_rmw(gpu->mmio + (reg << 2), mask, or);
 }
 
-static inline u64 gpu_read64(struct msm_gpu *gpu, u32 reg)
+static inline u64 gpu_read64(struct msm_gpu *gpu, u32 lo, u32 hi)
 {
 	u64 val;
 
@@ -595,17 +558,17 @@ static inline u64 gpu_read64(struct msm_gpu *gpu, u32 reg)
 	 * when the lo is read, so make sure to read the lo first to trigger
 	 * that
 	 */
-	val = (u64) readl(gpu->mmio + (reg << 2));
-	val |= ((u64) readl(gpu->mmio + ((reg + 1) << 2)) << 32);
+	val = (u64) msm_readl(gpu->mmio + (lo << 2));
+	val |= ((u64) msm_readl(gpu->mmio + (hi << 2)) << 32);
 
 	return val;
 }
 
-static inline void gpu_write64(struct msm_gpu *gpu, u32 reg, u64 val)
+static inline void gpu_write64(struct msm_gpu *gpu, u32 lo, u32 hi, u64 val)
 {
 	/* Why not a writeq here? Read the screed above */
-	writel(lower_32_bits(val), gpu->mmio + (reg << 2));
-	writel(upper_32_bits(val), gpu->mmio + ((reg + 1) << 2));
+	msm_writel(lower_32_bits(val), gpu->mmio + (lo << 2));
+	msm_writel(upper_32_bits(val), gpu->mmio + (hi << 2));
 }
 
 int msm_gpu_pm_suspend(struct msm_gpu *gpu);

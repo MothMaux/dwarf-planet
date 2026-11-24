@@ -28,7 +28,6 @@
 
 static struct kmem_cache *hfs_inode_cachep;
 
-MODULE_DESCRIPTION("Apple Macintosh file system support");
 MODULE_LICENSE("GPL");
 
 static int hfs_sync_fs(struct super_block *sb, int wait)
@@ -419,13 +418,11 @@ static int hfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto bail_no_root;
 	res = hfs_cat_find_brec(sb, HFS_ROOT_CNID, &fd);
 	if (!res) {
-		if (fd.entrylength != sizeof(rec.dir)) {
+		if (fd.entrylength > sizeof(rec) || fd.entrylength < 0) {
 			res =  -EIO;
 			goto bail_hfs_find;
 		}
 		hfs_bnode_read(fd.bnode, &rec, fd.entryoffset, fd.entrylength);
-		if (rec.type != HFS_CDR_DIR)
-			res = -EIO;
 	}
 	if (res)
 		goto bail_hfs_find;

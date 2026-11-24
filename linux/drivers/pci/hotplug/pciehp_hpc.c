@@ -14,7 +14,6 @@
 
 #define dev_fmt(fmt) "pciehp: " fmt
 
-#include <linux/bitfield.h>
 #include <linux/dmi.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -333,11 +332,17 @@ int pciehp_check_link_status(struct controller *ctrl)
 static int __pciehp_link_set(struct controller *ctrl, bool enable)
 {
 	struct pci_dev *pdev = ctrl_dev(ctrl);
+	u16 lnk_ctrl;
 
-	pcie_capability_clear_and_set_word(pdev, PCI_EXP_LNKCTL,
-					   PCI_EXP_LNKCTL_LD,
-					   enable ? 0 : PCI_EXP_LNKCTL_LD);
+	pcie_capability_read_word(pdev, PCI_EXP_LNKCTL, &lnk_ctrl);
 
+	if (enable)
+		lnk_ctrl &= ~PCI_EXP_LNKCTL_LD;
+	else
+		lnk_ctrl |= PCI_EXP_LNKCTL_LD;
+
+	pcie_capability_write_word(pdev, PCI_EXP_LNKCTL, lnk_ctrl);
+	ctrl_dbg(ctrl, "%s: lnk_ctrl = %x\n", __func__, lnk_ctrl);
 	return 0;
 }
 
@@ -485,9 +490,7 @@ int pciehp_set_raw_indicator_status(struct hotplug_slot *hotplug_slot,
 	struct pci_dev *pdev = ctrl_dev(ctrl);
 
 	pci_config_pm_runtime_get(pdev);
-
-	/* Attention and Power Indicator Control bits are supported */
-	pcie_write_cmd_nowait(ctrl, FIELD_PREP(PCI_EXP_SLTCTL_AIC | PCI_EXP_SLTCTL_PIC, status),
+	pcie_write_cmd_nowait(ctrl, status << 6,
 			      PCI_EXP_SLTCTL_AIC | PCI_EXP_SLTCTL_PIC);
 	pci_config_pm_runtime_put(pdev);
 	return 0;
@@ -719,8 +722,11 @@ static irqreturn_t pciehp_ist(int irq, void *dev_id)
 	}
 
 	/* Check Attention Button Pressed */
-	if (events & PCI_EXP_SLTSTA_ABP)
+	if (events & PCI_EXP_SLTSTA_ABP) {
+		ctrl_info(ctrl, "Slot(%s): Attention button pressed\n",
+			  slot_name(ctrl));
 		pciehp_handle_button_press(ctrl);
+	}
 
 	/* Check Power Fault Detected */
 	if (events & PCI_EXP_SLTSTA_PFD) {
@@ -805,9 +811,7 @@ static void pcie_enable_notification(struct controller *ctrl)
 	else
 		cmd |= PCI_EXP_SLTCTL_PDCE;
 	if (!pciehp_poll_mode)
-		cmd |= PCI_EXP_SLTCTL_HPIE;
-	if (!pciehp_poll_mode && !NO_CMD_CMPL(ctrl))
-		cmd |= PCI_EXP_SLTCTL_CCIE;
+		cmd |= PCI_EXP_SLTCTL_HPIE | PCI_EXP_SLTCTL_CCIE;
 
 	mask = (PCI_EXP_SLTCTL_PDCE | PCI_EXP_SLTCTL_ABPE |
 		PCI_EXP_SLTCTL_PFDE |
@@ -842,9 +846,7 @@ void pcie_enable_interrupt(struct controller *ctrl)
 {
 	u16 mask;
 
-	mask = PCI_EXP_SLTCTL_DLLSCE;
-	if (!pciehp_poll_mode)
-		mask |= PCI_EXP_SLTCTL_HPIE;
+	mask = PCI_EXP_SLTCTL_HPIE | PCI_EXP_SLTCTL_DLLSCE;
 	pcie_write_cmd(ctrl, mask, mask);
 }
 
@@ -980,7 +982,7 @@ static inline int pcie_hotplug_depth(struct pci_dev *dev)
 struct controller *pcie_init(struct pcie_device *dev)
 {
 	struct controller *ctrl;
-	u32 slot_cap, slot_cap2;
+	u32 slot_cap, slot_cap2, link_cap;
 	u8 poweron;
 	struct pci_dev *pdev = dev->port;
 	struct pci_bus *subordinate = pdev->subordinate;
@@ -1026,6 +1028,9 @@ struct controller *pcie_init(struct pcie_device *dev)
 	if (dmi_first_match(inband_presence_disabled_dmi_table))
 		ctrl->inband_presence_disabled = 1;
 
+	/* Check if Data Link Layer Link Active Reporting is implemented */
+	pcie_capability_read_dword(pdev, PCI_EXP_LNKCAP, &link_cap);
+
 	/* Clear all remaining event bits in Slot Status register. */
 	pcie_capability_write_word(pdev, PCI_EXP_SLTSTA,
 		PCI_EXP_SLTSTA_ABP | PCI_EXP_SLTSTA_PFD |
@@ -1033,7 +1038,7 @@ struct controller *pcie_init(struct pcie_device *dev)
 		PCI_EXP_SLTSTA_DLLSC | PCI_EXP_SLTSTA_PDC);
 
 	ctrl_info(ctrl, "Slot #%d AttnBtn%c PwrCtrl%c MRL%c AttnInd%c PwrInd%c HotPlug%c Surprise%c Interlock%c NoCompl%c IbPresDis%c LLActRep%c%s\n",
-		FIELD_GET(PCI_EXP_SLTCAP_PSN, slot_cap),
+		(slot_cap & PCI_EXP_SLTCAP_PSN) >> 19,
 		FLAG(slot_cap, PCI_EXP_SLTCAP_ABP),
 		FLAG(slot_cap, PCI_EXP_SLTCAP_PCP),
 		FLAG(slot_cap, PCI_EXP_SLTCAP_MRLSP),
@@ -1044,7 +1049,7 @@ struct controller *pcie_init(struct pcie_device *dev)
 		FLAG(slot_cap, PCI_EXP_SLTCAP_EIP),
 		FLAG(slot_cap, PCI_EXP_SLTCAP_NCCS),
 		FLAG(slot_cap2, PCI_EXP_SLTCAP2_IBPD),
-		FLAG(pdev->link_active_reporting, true),
+		FLAG(link_cap, PCI_EXP_LNKCAP_DLLLARC),
 		pdev->broken_cmd_compl ? " (with Cmd Compl erratum)" : "");
 
 	/*
@@ -1058,11 +1063,6 @@ struct controller *pcie_init(struct pcie_device *dev)
 			pciehp_power_off_slot(ctrl);
 		}
 	}
-
-	pdev = pci_get_slot(subordinate, PCI_DEVFN(0, 0));
-	if (pdev)
-		ctrl->dsn = pci_get_dsn(pdev);
-	pci_dev_put(pdev);
 
 	return ctrl;
 }
@@ -1085,8 +1085,6 @@ static void quirk_cmd_compl(struct pci_dev *pdev)
 	}
 }
 DECLARE_PCI_FIXUP_CLASS_EARLY(PCI_VENDOR_ID_INTEL, PCI_ANY_ID,
-			      PCI_CLASS_BRIDGE_PCI, 8, quirk_cmd_compl);
-DECLARE_PCI_FIXUP_CLASS_EARLY(PCI_VENDOR_ID_QCOM, 0x010e,
 			      PCI_CLASS_BRIDGE_PCI, 8, quirk_cmd_compl);
 DECLARE_PCI_FIXUP_CLASS_EARLY(PCI_VENDOR_ID_QCOM, 0x0110,
 			      PCI_CLASS_BRIDGE_PCI, 8, quirk_cmd_compl);

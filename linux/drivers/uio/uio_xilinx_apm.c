@@ -290,8 +290,10 @@ err_clk_dis:
 /**
  * xapm_remove - Driver remove function
  * @pdev: Pointer to the platform_device structure
+ *
+ * Return: Always returns '0'
  */
-static void xapm_remove(struct platform_device *pdev)
+static int xapm_remove(struct platform_device *pdev)
 {
 	struct xapm_dev *xapm = platform_get_drvdata(pdev);
 
@@ -299,6 +301,8 @@ static void xapm_remove(struct platform_device *pdev)
 	clk_disable_unprepare(xapm->param.clk);
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
+
+	return 0;
 }
 
 static int __maybe_unused xapm_runtime_suspend(struct device *dev)
@@ -351,4 +355,4 @@ module_platform_driver(xapm_driver);
 
 MODULE_AUTHOR("Xilinx Inc.");
 MODULE_DESCRIPTION("Xilinx AXI Performance Monitor driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

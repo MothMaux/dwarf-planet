@@ -23,9 +23,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/io.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <uapi/linux/media-bus-format.h>
 
@@ -541,12 +539,14 @@ err_clk:
 	return ret;
 }
 
-static void xilinx_csc_remove(struct platform_device *pdev)
+static int xilinx_csc_remove(struct platform_device *pdev)
 {
 	struct xilinx_csc *csc = platform_get_drvdata(pdev);
 
 	xlnx_bridge_unregister(&csc->bridge);
 	clk_disable_unprepare(csc->aclk);
+
+	return 0;
 }
 
 static const struct of_device_id xilinx_csc_of_match[] = {
@@ -568,4 +568,4 @@ module_platform_driver(csc_bridge_driver);
 
 MODULE_AUTHOR("Venkateshwar Rao <vgannava@xilinx.com>");
 MODULE_DESCRIPTION("Xilinx FPGA CSC Bridge Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

@@ -5,14 +5,13 @@
 
 #include <linux/kernel.h>
 #include <linux/bitops.h>
-#include <linux/cleanup.h>
+#include <linux/cpumask.h>
 #include <linux/irqreturn.h>
 #include <linux/irqnr.h>
 #include <linux/hardirq.h>
 #include <linux/irqflags.h>
 #include <linux/hrtimer.h>
 #include <linux/kref.h>
-#include <linux/cpumask_types.h>
 #include <linux/workqueue.h>
 #include <linux/jump_label.h>
 
@@ -68,8 +67,6 @@
  *                later.
  * IRQF_NO_DEBUG - Exclude from runnaway detection for IPI and similar handlers,
  *		   depends on IRQF_PERCPU.
- * IRQF_COND_ONESHOT - Agree to do IRQF_ONESHOT if already set for a shared
- *                 interrupt.
  */
 #define IRQF_SHARED		0x00000080
 #define IRQF_PROBE_SHARED	0x00000100
@@ -85,7 +82,6 @@
 #define IRQF_COND_SUSPEND	0x00040000
 #define IRQF_NO_AUTOEN		0x00080000
 #define IRQF_NO_DEBUG		0x00100000
-#define IRQF_COND_ONESHOT	0x00200000
 
 #define IRQF_TIMER		(__IRQF_TIMER | IRQF_NO_SUSPEND | IRQF_NO_THREAD)
 
@@ -169,7 +165,7 @@ static inline int __must_check
 request_irq(unsigned int irq, irq_handler_t handler, unsigned long flags,
 	    const char *name, void *dev)
 {
-	return request_threaded_irq(irq, handler, NULL, flags | IRQF_COND_ONESHOT, name, dev);
+	return request_threaded_irq(irq, handler, NULL, flags, name, dev);
 }
 
 extern int __must_check
@@ -215,7 +211,7 @@ static inline int __must_check
 devm_request_irq(struct device *dev, unsigned int irq, irq_handler_t handler,
 		 unsigned long irqflags, const char *devname, void *dev_id)
 {
-	return devm_request_threaded_irq(dev, irq, handler, NULL, irqflags | IRQF_COND_ONESHOT,
+	return devm_request_threaded_irq(dev, irq, handler, NULL, irqflags,
 					 devname, dev_id);
 }
 
@@ -235,9 +231,6 @@ extern void enable_irq(unsigned int irq);
 extern void enable_percpu_irq(unsigned int irq, unsigned int type);
 extern bool irq_percpu_is_enabled(unsigned int irq);
 extern void irq_wake_thread(unsigned int irq, void *dev_id);
-
-DEFINE_LOCK_GUARD_1(disable_irq, int,
-		    disable_irq(*_T->lock), enable_irq(*_T->lock))
 
 extern void disable_nmi_nosync(unsigned int irq);
 extern void disable_percpu_nmi(unsigned int irq);
@@ -276,7 +269,7 @@ struct irq_affinity_notify {
 #define	IRQ_AFFINITY_MAX_SETS  4
 
 /**
- * struct irq_affinity - Description for automatic irq affinity assignments
+ * struct irq_affinity - Description for automatic irq affinity assignements
  * @pre_vectors:	Don't apply affinity to @pre_vectors at beginning of
  *			the MSI(-X) vector space
  * @post_vectors:	Don't apply affinity to @post_vectors at end of
@@ -448,7 +441,7 @@ irq_calc_affinity_vectors(unsigned int minvec, unsigned int maxvec,
 static inline void disable_irq_nosync_lockdep(unsigned int irq)
 {
 	disable_irq_nosync(irq);
-#if defined(CONFIG_LOCKDEP) && !defined(CONFIG_PREEMPT_RT)
+#ifdef CONFIG_LOCKDEP
 	local_irq_disable();
 #endif
 }
@@ -456,7 +449,7 @@ static inline void disable_irq_nosync_lockdep(unsigned int irq)
 static inline void disable_irq_nosync_lockdep_irqsave(unsigned int irq, unsigned long *flags)
 {
 	disable_irq_nosync(irq);
-#if defined(CONFIG_LOCKDEP) && !defined(CONFIG_PREEMPT_RT)
+#ifdef CONFIG_LOCKDEP
 	local_irq_save(*flags);
 #endif
 }
@@ -471,7 +464,7 @@ static inline void disable_irq_lockdep(unsigned int irq)
 
 static inline void enable_irq_lockdep(unsigned int irq)
 {
-#if defined(CONFIG_LOCKDEP) && !defined(CONFIG_PREEMPT_RT)
+#ifdef CONFIG_LOCKDEP
 	local_irq_enable();
 #endif
 	enable_irq(irq);
@@ -479,7 +472,7 @@ static inline void enable_irq_lockdep(unsigned int irq)
 
 static inline void enable_irq_lockdep_irqrestore(unsigned int irq, unsigned long *flags)
 {
-#if defined(CONFIG_LOCKDEP) && !defined(CONFIG_PREEMPT_RT)
+#ifdef CONFIG_LOCKDEP
 	local_irq_restore(*flags);
 #endif
 	enable_irq(irq);
@@ -573,15 +566,11 @@ enum
  *
  * _ RCU:
  * 	1) rcutree_migrate_callbacks() migrates the queue.
- * 	2) rcutree_report_cpu_dead() reports the final quiescent states.
+ * 	2) rcu_report_dead() reports the final quiescent states.
  *
  * _ IRQ_POLL: irq_poll_cpu_dead() migrates the queue
- *
- * _ (HR)TIMER_SOFTIRQ: (hr)timers_dead_cpu() migrates the queue
  */
-#define SOFTIRQ_HOTPLUG_SAFE_MASK (BIT(TIMER_SOFTIRQ) | BIT(IRQ_POLL_SOFTIRQ) |\
-				   BIT(HRTIMER_SOFTIRQ) | BIT(RCU_SOFTIRQ))
-
+#define SOFTIRQ_HOTPLUG_SAFE_MASK (BIT(RCU_SOFTIRQ) | BIT(IRQ_POLL_SOFTIRQ))
 
 /* map softirq index to softirq name. update 'softirq_to_name' in
  * kernel/softirq.c when adding a new softirq.
@@ -594,7 +583,7 @@ extern const char * const softirq_to_name[NR_SOFTIRQS];
 
 struct softirq_action
 {
-	void	(*action)(void);
+	void	(*action)(struct softirq_action *);
 };
 
 asmlinkage void do_softirq(void);
@@ -609,7 +598,7 @@ static inline void do_softirq_post_smp_call_flush(unsigned int unused)
 }
 #endif
 
-extern void open_softirq(int nr, void (*action)(void));
+extern void open_softirq(int nr, void (*action)(struct softirq_action *));
 extern void softirq_init(void);
 extern void __raise_softirq_irqoff(unsigned int nr);
 

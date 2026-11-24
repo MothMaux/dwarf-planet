@@ -9,7 +9,6 @@
 #include <linux/stringify.h>
 #include <stdint.h>
 
-#include "kvm_test_harness.h"
 #include "apic.h"
 #include "test_util.h"
 #include "kvm_util.h"
@@ -49,10 +48,10 @@ static void guest_main(void)
 	const uint8_t *other_hypercall_insn;
 	uint64_t ret;
 
-	if (host_cpu_is_intel) {
+	if (is_intel_cpu()) {
 		native_hypercall_insn = vmx_vmcall;
 		other_hypercall_insn  = svm_vmmcall;
-	} else if (host_cpu_is_amd) {
+	} else if (is_amd_cpu()) {
 		native_hypercall_insn = svm_vmmcall;
 		other_hypercall_insn  = vmx_vmcall;
 	} else {
@@ -84,8 +83,6 @@ static void guest_main(void)
 	GUEST_DONE();
 }
 
-KVM_ONE_VCPU_TEST_SUITE(fix_hypercall);
-
 static void enter_guest(struct kvm_vcpu *vcpu)
 {
 	struct kvm_run *run = vcpu->run;
@@ -106,10 +103,15 @@ static void enter_guest(struct kvm_vcpu *vcpu)
 	}
 }
 
-static void test_fix_hypercall(struct kvm_vcpu *vcpu, bool disable_quirk)
+static void test_fix_hypercall(bool disable_quirk)
 {
-	struct kvm_vm *vm = vcpu->vm;
+	struct kvm_vcpu *vcpu;
+	struct kvm_vm *vm;
 
+	vm = vm_create_with_one_vcpu(&vcpu, guest_main);
+
+	vm_init_descriptor_tables(vcpu->vm);
+	vcpu_init_descriptor_tables(vcpu);
 	vm_install_exception_handler(vcpu->vm, UD_VECTOR, guest_ud_handler);
 
 	if (disable_quirk)
@@ -124,19 +126,10 @@ static void test_fix_hypercall(struct kvm_vcpu *vcpu, bool disable_quirk)
 	enter_guest(vcpu);
 }
 
-KVM_ONE_VCPU_TEST(fix_hypercall, enable_quirk, guest_main)
-{
-	test_fix_hypercall(vcpu, false);
-}
-
-KVM_ONE_VCPU_TEST(fix_hypercall, disable_quirk, guest_main)
-{
-	test_fix_hypercall(vcpu, true);
-}
-
-int main(int argc, char *argv[])
+int main(void)
 {
 	TEST_REQUIRE(kvm_check_cap(KVM_CAP_DISABLE_QUIRKS2) & KVM_X86_QUIRK_FIX_HYPERCALL_INSN);
 
-	return test_harness_run(argc, argv);
+	test_fix_hypercall(false);
+	test_fix_hypercall(true);
 }

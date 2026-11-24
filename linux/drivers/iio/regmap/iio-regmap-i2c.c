@@ -15,7 +15,8 @@
 
 #include "iio-regmap.h"
 
-static int iio_regmap_i2c_probe(struct i2c_client *client)
+static int iio_regmap_i2c_probe(struct i2c_client *client,
+				const struct i2c_device_id *id)
 {
 	struct regmap_config *regmap_cfg;
 	struct regmap *regmap;

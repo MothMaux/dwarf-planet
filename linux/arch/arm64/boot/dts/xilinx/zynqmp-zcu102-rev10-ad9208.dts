@@ -46,12 +46,25 @@
 			clock-output-names = "ad9208_clk";
 		};
 
-		rx_dma: dma-controller@9c420000 {
+		rx_dma: rx-dmac@9c420000 {
+			#dma-cells = <1>;
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x9c420000 0x10000>;
-			#dma-cells = <1>;
 			interrupts = <0 109 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&zynqmp_clk 71>;
+
+			adi,channels {
+				#size-cells = <0>;
+				#address-cells = <1>;
+
+				dma-channel@0 {
+					reg = <0>;
+					adi,source-bus-width = <128>;
+					adi,source-bus-type = <1>;
+					adi,destination-bus-width = <128>;
+					adi,destination-bus-type = <0>;
+				};
+			};
 		};
 
 		axi_ad9208_core: axi-ad9208-hpc@84a10000 {

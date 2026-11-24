@@ -25,29 +25,19 @@ static inline struct dbc_port *dbc_to_port(struct xhci_dbc *dbc)
 }
 
 static unsigned int
-dbc_kfifo_to_req(struct dbc_port *port, char *packet)
+dbc_send_packet(struct dbc_port *port, char *packet, unsigned int size)
 {
-	unsigned int	len;
+	unsigned int		len;
 
-	len = kfifo_len(&port->port.xmit_fifo);
-
-	if (len == 0)
-		return 0;
-
-	len = min(len, DBC_MAX_PACKET);
-
-	if (port->tx_boundary)
-		len = min(port->tx_boundary, len);
-
-	len = kfifo_out(&port->port.xmit_fifo, packet, len);
-
-	if (port->tx_boundary)
-		port->tx_boundary -= len;
-
-	return len;
+	len = kfifo_len(&port->write_fifo);
+	if (len < size)
+		size = len;
+	if (size != 0)
+		size = kfifo_out(&port->write_fifo, packet, size);
+	return size;
 }
 
-static int dbc_do_start_tx(struct dbc_port *port)
+static int dbc_start_tx(struct dbc_port *port)
 	__releases(&port->port_lock)
 	__acquires(&port->port_lock)
 {
@@ -57,11 +47,9 @@ static int dbc_do_start_tx(struct dbc_port *port)
 	bool			do_tty_wake = false;
 	struct list_head	*pool = &port->write_pool;
 
-	port->tx_running = true;
-
 	while (!list_empty(pool)) {
 		req = list_entry(pool->next, struct dbc_request, list_pool);
-		len = dbc_kfifo_to_req(port, req->buf);
+		len = dbc_send_packet(port, req->buf, DBC_MAX_PACKET);
 		if (len == 0)
 			break;
 		do_tty_wake = true;
@@ -79,23 +67,10 @@ static int dbc_do_start_tx(struct dbc_port *port)
 		}
 	}
 
-	port->tx_running = false;
-
 	if (do_tty_wake && port->port.tty)
 		tty_wakeup(port->port.tty);
 
 	return status;
-}
-
-/* must be called with port->port_lock held */
-static int dbc_start_tx(struct dbc_port *port)
-{
-	lockdep_assert_held(&port->port_lock);
-
-	if (port->tx_running)
-		return -EBUSY;
-
-	return dbc_do_start_tx(port);
 }
 
 static void dbc_start_rx(struct dbc_port *port)
@@ -233,47 +208,30 @@ static void dbc_tty_close(struct tty_struct *tty, struct file *file)
 	tty_port_close(&port->port, tty, file);
 }
 
-static ssize_t dbc_tty_write(struct tty_struct *tty, const u8 *buf,
-			     size_t count)
+static int dbc_tty_write(struct tty_struct *tty,
+			 const unsigned char *buf,
+			 int count)
 {
 	struct dbc_port		*port = tty->driver_data;
 	unsigned long		flags;
-	unsigned int		written = 0;
 
 	spin_lock_irqsave(&port->port_lock, flags);
-
-	/*
-	 * Treat tty write as one usb transfer. Make sure the writes are turned
-	 * into TRB request having the same size boundaries as the tty writes.
-	 * Don't add data to kfifo before previous write is turned into TRBs
-	 */
-	if (port->tx_boundary) {
-		spin_unlock_irqrestore(&port->port_lock, flags);
-		return 0;
-	}
-
-	if (count) {
-		written = kfifo_in(&port->port.xmit_fifo, buf, count);
-
-		if (written == count)
-			port->tx_boundary = kfifo_len(&port->port.xmit_fifo);
-
-		dbc_start_tx(port);
-	}
-
+	if (count)
+		count = kfifo_in(&port->write_fifo, buf, count);
+	dbc_start_tx(port);
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
-	return written;
+	return count;
 }
 
-static int dbc_tty_put_char(struct tty_struct *tty, u8 ch)
+static int dbc_tty_put_char(struct tty_struct *tty, unsigned char ch)
 {
 	struct dbc_port		*port = tty->driver_data;
 	unsigned long		flags;
 	int			status;
 
 	spin_lock_irqsave(&port->port_lock, flags);
-	status = kfifo_put(&port->port.xmit_fifo, ch);
+	status = kfifo_put(&port->write_fifo, ch);
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
 	return status;
@@ -296,11 +254,7 @@ static unsigned int dbc_tty_write_room(struct tty_struct *tty)
 	unsigned int		room;
 
 	spin_lock_irqsave(&port->port_lock, flags);
-	room = kfifo_avail(&port->port.xmit_fifo);
-
-	if (port->tx_boundary)
-		room = 0;
-
+	room = kfifo_avail(&port->write_fifo);
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
 	return room;
@@ -313,7 +267,7 @@ static unsigned int dbc_tty_chars_in_buffer(struct tty_struct *tty)
 	unsigned int		chars;
 
 	spin_lock_irqsave(&port->port_lock, flags);
-	chars = kfifo_len(&port->port.xmit_fifo);
+	chars = kfifo_len(&port->write_fifo);
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
 	return chars;
@@ -393,7 +347,7 @@ static void dbc_rx_push(struct tasklet_struct *t)
 			port->n_read = 0;
 		}
 
-		list_move_tail(&req->list_pool, &port->read_pool);
+		list_move(&req->list_pool, &port->read_pool);
 	}
 
 	if (do_push)
@@ -471,8 +425,7 @@ static int xhci_dbc_tty_register_device(struct xhci_dbc *dbc)
 		goto err_idr;
 	}
 
-	ret = kfifo_alloc(&port->port.xmit_fifo, DBC_WRITE_BUF_SIZE,
-			  GFP_KERNEL);
+	ret = kfifo_alloc(&port->write_fifo, DBC_WRITE_BUF_SIZE, GFP_KERNEL);
 	if (ret)
 		goto err_exit_port;
 
@@ -501,7 +454,7 @@ err_free_requests:
 	xhci_dbc_free_requests(&port->read_pool);
 	xhci_dbc_free_requests(&port->write_pool);
 err_free_fifo:
-	kfifo_free(&port->port.xmit_fifo);
+	kfifo_free(&port->write_fifo);
 err_exit_port:
 	idr_remove(&dbc_tty_minors, port->minor);
 err_idr:
@@ -518,12 +471,6 @@ static void xhci_dbc_tty_unregister_device(struct xhci_dbc *dbc)
 
 	if (!port->registered)
 		return;
-	/*
-	 * Hang up the TTY. This wakes up any blocked
-	 * writers and causes subsequent writes to fail.
-	 */
-	tty_port_tty_vhangup(&port->port);
-
 	tty_unregister_device(dbc_tty_driver, port->minor);
 	xhci_dbc_tty_exit_port(port);
 	port->registered = false;
@@ -532,7 +479,7 @@ static void xhci_dbc_tty_unregister_device(struct xhci_dbc *dbc)
 	idr_remove(&dbc_tty_minors, port->minor);
 	mutex_unlock(&dbc_tty_minors_lock);
 
-	kfifo_free(&port->port.xmit_fifo);
+	kfifo_free(&port->write_fifo);
 	xhci_dbc_free_requests(&port->read_pool);
 	xhci_dbc_free_requests(&port->read_queue);
 	xhci_dbc_free_requests(&port->write_pool);
@@ -606,7 +553,6 @@ int dbc_tty_init(void)
 	dbc_tty_driver->type = TTY_DRIVER_TYPE_SERIAL;
 	dbc_tty_driver->subtype = SERIAL_TYPE_NORMAL;
 	dbc_tty_driver->init_termios = tty_std_termios;
-	dbc_tty_driver->init_termios.c_lflag &= ~ECHO;
 	dbc_tty_driver->init_termios.c_cflag =
 			B9600 | CS8 | CREAD | HUPCL | CLOCAL;
 	dbc_tty_driver->init_termios.c_ispeed = 9600;

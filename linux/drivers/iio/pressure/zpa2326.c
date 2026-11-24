@@ -64,7 +64,7 @@
 #include <linux/iio/trigger.h>
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/triggered_buffer.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include "zpa2326.h"
 
 /* 200 ms should be enough for the longest conversion time in one-shot mode. */
@@ -582,11 +582,9 @@ static int zpa2326_fill_sample_buffer(struct iio_dev               *indio_dev,
 	struct {
 		u32 pressure;
 		u16 temperature;
-		aligned_s64 timestamp;
+		u64 timestamp;
 	}   sample;
 	int err;
-
-	memset(&sample, 0, sizeof(sample));
 
 	if (test_bit(0, indio_dev->active_scan_mask)) {
 		/* Get current pressure from hardware FIFO. */
@@ -831,7 +829,7 @@ static irqreturn_t zpa2326_handle_threaded_irq(int irq, void *data)
 	}
 
 	/* New sample available: dispatch internal trigger consumers. */
-	iio_trigger_poll_nested(priv->trigger);
+	iio_trigger_poll_chained(priv->trigger);
 
 	if (cont)
 		/*
@@ -863,13 +861,13 @@ static int zpa2326_wait_oneshot_completion(const struct iio_dev   *indio_dev,
 					   struct zpa2326_private *private)
 {
 	unsigned int val;
-	long time_left;
+	long     timeout;
 
 	zpa2326_dbg(indio_dev, "waiting for one shot completion interrupt");
 
-	time_left = wait_for_completion_interruptible_timeout(
+	timeout = wait_for_completion_interruptible_timeout(
 		&private->data_ready, ZPA2326_CONVERSION_JIFFIES);
-	if (time_left > 0)
+	if (timeout > 0)
 		/*
 		 * Interrupt handler completed before timeout: return operation
 		 * status.
@@ -879,10 +877,10 @@ static int zpa2326_wait_oneshot_completion(const struct iio_dev   *indio_dev,
 	/* Clear all interrupts just to be sure. */
 	regmap_read(private->regmap, ZPA2326_INT_SOURCE_REG, &val);
 
-	if (!time_left) {
+	if (!timeout) {
 		/* Timed out. */
 		zpa2326_warn(indio_dev, "no one shot interrupt occurred (%ld)",
-			     time_left);
+			     timeout);
 		return -ETIME;
 	}
 

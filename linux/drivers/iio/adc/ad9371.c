@@ -24,7 +24,7 @@
 #include <linux/of_gpio.h>
 #include <linux/gpio/consumer.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
@@ -1185,7 +1185,7 @@ static ssize_t ad9371_phy_store(struct device *dev,
 		ret = ad9371_set_radio_state(phy, val);
 		break;
 	case AD9371_INIT_CAL:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 
@@ -1210,7 +1210,7 @@ static ssize_t ad9371_phy_store(struct device *dev,
 		}
 		break;
 	case AD9371_LARGE_LO_STEP_CAL:
-		ret = kstrtobool(buf, &phy->large_freq_step_cal_en);
+		ret = strtobool(buf, &phy->large_freq_step_cal_en);
 		break;
 	default:
 		ret = -EINVAL;
@@ -1625,7 +1625,7 @@ static ssize_t ad9371_phy_rx_write(struct iio_dev *indio_dev,
 
 		break;
 	case RX_QEC:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 
 		switch (chan->channel) {
 		case CHAN_RX1:
@@ -2007,7 +2007,7 @@ static ssize_t ad9371_phy_tx_write(struct iio_dev *indio_dev,
 	case TX_DPD:
 	case TX_CLGC:
 	case TX_VSWR:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 
@@ -2026,7 +2026,7 @@ static ssize_t ad9371_phy_tx_write(struct iio_dev *indio_dev,
 
 		break;
 	case TX_DPD_ACT_EN:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 
@@ -2094,7 +2094,7 @@ static const struct iio_chan_spec_ext_info ad9371_phy_rx_ext_info[] = {
 	 * in Hz. Using scale is a bit ugly.
 	 */
 	IIO_ENUM_AVAILABLE("gain_control_mode", IIO_SHARED_BY_TYPE, &ad9371_agc_modes_available),
-	IIO_ENUM("gain_control_mode", IIO_SEPARATE, &ad9371_agc_modes_available),
+	IIO_ENUM("gain_control_mode", false, &ad9371_agc_modes_available),
 	_AD9371_EXT_RX_INFO("rssi", RSSI),
 	_AD9371_EXT_RX_INFO("quadrature_tracking_en", RX_QEC),
 	_AD9371_EXT_RX_INFO("temp_comp_gain", TEMPCOMP_GAIN),
@@ -2108,9 +2108,9 @@ static const struct iio_chan_spec_ext_info ad9371_phy_obs_rx_ext_info[] = {
 	 * in Hz. Using scale is a bit ugly.
 	 */
 	IIO_ENUM_AVAILABLE("gain_control_mode", IIO_SHARED_BY_TYPE, &ad9371_agc_modes_available),
-	IIO_ENUM("gain_control_mode", IIO_SEPARATE, &ad9371_agc_modes_available),
+	IIO_ENUM("gain_control_mode", false, &ad9371_agc_modes_available),
 	IIO_ENUM_AVAILABLE("rf_port_select", IIO_SHARED_BY_TYPE, &ad9371_rf_obs_rx_port_available),
-	IIO_ENUM("rf_port_select", IIO_SEPARATE, &ad9371_rf_obs_rx_port_available),
+	IIO_ENUM("rf_port_select", false, &ad9371_rf_obs_rx_port_available),
 	_AD9371_EXT_RX_INFO("quadrature_tracking_en", RX_QEC),
 	_AD9371_EXT_RX_INFO("rssi", RSSI),
 	_AD9371_EXT_RX_INFO("temp_comp_gain", TEMPCOMP_GAIN),
@@ -4211,7 +4211,7 @@ static char *ad9371_clk_set_dev_name(struct ad9371_rf_phy *phy,
 		return NULL;
 
 	if (*name == '-')
-		len = strscpy(dest, dev_name(&phy->spi->dev),
+		len = strlcpy(dest, dev_name(&phy->spi->dev),
 			      AD9371_MAX_CLK_NAME);
 	else
 		*dest = '\0';
@@ -4375,8 +4375,8 @@ static void ad9371_info(struct ad9371_rf_phy *phy)
 		 phy->jdev ? " via jesd204-fsm" : "");
 }
 
-static int ad9371_jesd204_link_pre_setup(struct jesd204_dev *jdev,
-					 enum jesd204_state_op_reason reason)
+int ad9371_jesd204_link_pre_setup(struct jesd204_dev *jdev,
+				  enum jesd204_state_op_reason reason)
 {
 	struct device *dev = jesd204_dev_to_device(jdev);
 	struct ad9371_jesd204_priv *priv = jesd204_dev_priv(jdev);
@@ -5109,12 +5109,10 @@ static int ad9371_probe(struct spi_device *spi)
 	if (ret < 0)
 		dev_warn(&spi->dev, "%s: failed to register debugfs", __func__);
 
-	if (!phy->jdev) {
+	if (!phy->jdev)
 		ad9371_info(phy);
-		return 0;
-	}
 
-	ret = devm_jesd204_fsm_start(&spi->dev, phy->jdev, JESD204_LINKS_ALL);
+	ret = jesd204_fsm_start(phy->jdev, JESD204_LINKS_ALL);
 	if (ret)
 		goto out_iio_device_unregister;
 

@@ -15,12 +15,55 @@
 #include <linux/vmalloc.h>
 #include <linux/err.h>
 #include <linux/kref.h>
-#include <linux/unaligned.h>
 
 #include "include/lib.h"
 #include "include/match.h"
 
 #define base_idx(X) ((X) & 0xffffff)
+
+static char nulldfa_src[] = {
+	#include "nulldfa.in"
+};
+struct aa_dfa *nulldfa;
+
+static char stacksplitdfa_src[] = {
+	#include "stacksplitdfa.in"
+};
+struct aa_dfa *stacksplitdfa;
+
+int aa_setup_dfa_engine(void)
+{
+	int error;
+
+	nulldfa = aa_dfa_unpack(nulldfa_src, sizeof(nulldfa_src),
+				TO_ACCEPT1_FLAG(YYTD_DATA32) |
+				TO_ACCEPT2_FLAG(YYTD_DATA32));
+	if (IS_ERR(nulldfa)) {
+		error = PTR_ERR(nulldfa);
+		nulldfa = NULL;
+		return error;
+	}
+
+	stacksplitdfa = aa_dfa_unpack(stacksplitdfa_src,
+				      sizeof(stacksplitdfa_src),
+				      TO_ACCEPT1_FLAG(YYTD_DATA32) |
+				      TO_ACCEPT2_FLAG(YYTD_DATA32));
+	if (IS_ERR(stacksplitdfa)) {
+		aa_put_dfa(nulldfa);
+		nulldfa = NULL;
+		error = PTR_ERR(stacksplitdfa);
+		stacksplitdfa = NULL;
+		return error;
+	}
+
+	return 0;
+}
+
+void aa_teardown_dfa_engine(void)
+{
+	aa_put_dfa(stacksplitdfa);
+	aa_put_dfa(nulldfa);
+}
 
 /**
  * unpack_table - unpack a dfa table (one of accept, default, base, next check)
@@ -43,11 +86,11 @@ static struct table_header *unpack_table(char *blob, size_t bsize)
 	/* loaded td_id's start at 1, subtract 1 now to avoid doing
 	 * it every time we use td_id as an index
 	 */
-	th.td_id = get_unaligned_be16(blob) - 1;
+	th.td_id = be16_to_cpu(*(__be16 *) (blob)) - 1;
 	if (th.td_id > YYTD_ID_MAX)
 		goto out;
-	th.td_flags = get_unaligned_be16(blob + 2);
-	th.td_lolen = get_unaligned_be32(blob + 8);
+	th.td_flags = be16_to_cpu(*(__be16 *) (blob + 2));
+	th.td_lolen = be32_to_cpu(*(__be32 *) (blob + 8));
 	blob += sizeof(struct table_header);
 
 	if (!(th.td_flags == YYTD_DATA16 || th.td_flags == YYTD_DATA32 ||
@@ -67,13 +110,14 @@ static struct table_header *unpack_table(char *blob, size_t bsize)
 		table->td_flags = th.td_flags;
 		table->td_lolen = th.td_lolen;
 		if (th.td_flags == YYTD_DATA8)
-			memcpy(table->td_data, blob, th.td_lolen);
+			UNPACK_ARRAY(table->td_data, blob, th.td_lolen,
+				     u8, u8, byte_to_byte);
 		else if (th.td_flags == YYTD_DATA16)
 			UNPACK_ARRAY(table->td_data, blob, th.td_lolen,
-				     u16, __be16, get_unaligned_be16);
+				     u16, __be16, be16_to_cpu);
 		else if (th.td_flags == YYTD_DATA32)
 			UNPACK_ARRAY(table->td_data, blob, th.td_lolen,
-				     u32, __be32, get_unaligned_be32);
+				     u32, __be32, be32_to_cpu);
 		else
 			goto fail;
 		/* if table was vmalloced make sure the page tables are synced
@@ -92,7 +136,7 @@ fail:
 
 /**
  * verify_table_headers - verify that the tables headers are as expected
- * @tables: array of dfa tables to check (NOT NULL)
+ * @tables - array of dfa tables to check (NOT NULL)
  * @flags: flags controlling what type of accept table are acceptable
  *
  * Assumes dfa has gone through the first pass verification done by unpacking
@@ -160,10 +204,9 @@ static int verify_dfa(struct aa_dfa *dfa)
 	if (state_count == 0)
 		goto out;
 	for (i = 0; i < state_count; i++) {
-		if (DEFAULT_TABLE(dfa)[i] >= state_count) {
-			pr_err("AppArmor DFA default state out of bounds");
+		if (!(BASE_TABLE(dfa)[i] & MATCH_FLAG_DIFF_ENCODE) &&
+		    (DEFAULT_TABLE(dfa)[i] >= state_count))
 			goto out;
-		}
 		if (BASE_TABLE(dfa)[i] & MATCH_FLAGS_INVALID) {
 			pr_err("AppArmor DFA state with invalid match flags");
 			goto out;
@@ -202,30 +245,15 @@ static int verify_dfa(struct aa_dfa *dfa)
 		size_t j, k;
 
 		for (j = i;
-		     ((BASE_TABLE(dfa)[j] & MATCH_FLAG_DIFF_ENCODE) &&
-		      !(BASE_TABLE(dfa)[j] & MARK_DIFF_ENCODE_VERIFIED));
+		     (BASE_TABLE(dfa)[j] & MATCH_FLAG_DIFF_ENCODE) &&
+		     !(BASE_TABLE(dfa)[j] & MARK_DIFF_ENCODE);
 		     j = k) {
-			if (BASE_TABLE(dfa)[j] & MARK_DIFF_ENCODE)
-				/* loop in current chain */
-				goto out;
 			k = DEFAULT_TABLE(dfa)[j];
 			if (j == k)
-				/* self loop */
 				goto out;
+			if (k < j)
+				break;		/* already verified */
 			BASE_TABLE(dfa)[j] |= MARK_DIFF_ENCODE;
-		}
-		/* move mark to verified */
-		for (j = i;
-		     (BASE_TABLE(dfa)[j] & MATCH_FLAG_DIFF_ENCODE);
-		     j = k) {
-			k = DEFAULT_TABLE(dfa)[j];
-			if (j < i)
-				/* jumps to state/chain that has been
-				 * verified
-				 */
-				break;
-			BASE_TABLE(dfa)[j] &= ~MARK_DIFF_ENCODE;
-			BASE_TABLE(dfa)[j] |= MARK_DIFF_ENCODE_VERIFIED;
 		}
 	}
 	error = 0;
@@ -255,7 +283,7 @@ static void dfa_free(struct aa_dfa *dfa)
 
 /**
  * aa_dfa_free_kref - free aa_dfa by kref (called by aa_put_dfa)
- * @kref: kref callback for freeing of a dfa  (NOT NULL)
+ * @kr: kref callback for freeing of a dfa  (NOT NULL)
  */
 void aa_dfa_free_kref(struct kref *kref)
 {
@@ -293,14 +321,14 @@ struct aa_dfa *aa_dfa_unpack(void *blob, size_t size, int flags)
 	if (size < sizeof(struct table_set_header))
 		goto fail;
 
-	if (get_unaligned_be32(data) != YYTH_MAGIC)
+	if (ntohl(*(__be32 *) data) != YYTH_MAGIC)
 		goto fail;
 
-	hsize = get_unaligned_be32(data + 4);
+	hsize = ntohl(*(__be32 *) (data + 4));
 	if (size < hsize)
 		goto fail;
 
-	dfa->flags = get_unaligned_be16(data + 12);
+	dfa->flags = ntohs(*(__be16 *) (data + 12));
 	if (dfa->flags & ~(YYTH_FLAGS))
 		goto fail;
 
@@ -309,7 +337,7 @@ struct aa_dfa *aa_dfa_unpack(void *blob, size_t size, int flags)
 	 * if (dfa->flags & YYTH_FLAGS_OOB_TRANS) {
 	 *	if (hsize < 16 + 4)
 	 *		goto fail;
-	 *	dfa->max_oob = get_unaligned_be32(data + 16);
+	 *	dfa->max_oob = ntol(*(__be32 *) (data + 16));
 	 *	if (dfa->max <= MAX_OOB_SUPPORTED) {
 	 *		pr_err("AppArmor DFA OOB greater than supported\n");
 	 *		goto fail;
@@ -408,34 +436,29 @@ do {							\
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_match_len(struct aa_dfa *dfa, aa_state_t start,
-			    const char *str, int len)
+unsigned int aa_dfa_match_len(struct aa_dfa *dfa, unsigned int start,
+			      const char *str, int len)
 {
 	u16 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
 	u16 *next = NEXT_TABLE(dfa);
 	u16 *check = CHECK_TABLE(dfa);
-	aa_state_t state = start;
+	unsigned int state = start;
 
-	if (state == DFA_NOMATCH)
-		return DFA_NOMATCH;
+	if (state == 0)
+		return 0;
 
 	/* current state is <state>, matching character *str */
 	if (dfa->tables[YYTD_ID_EC]) {
 		/* Equivalence class table defined */
 		u8 *equiv = EQUIV_TABLE(dfa);
-		for (; len; len--) {
-			u8 c = equiv[(u8) *str];
-
-			match_char(state, def, base, next, check, c);
-			str++;
-		}
+		for (; len; len--)
+			match_char(state, def, base, next, check,
+				   equiv[(u8) *str++]);
 	} else {
 		/* default is direct to next state */
-		for (; len; len--) {
-			match_char(state, def, base, next, check, (u8) *str);
-			str++;
-		}
+		for (; len; len--)
+			match_char(state, def, base, next, check, (u8) *str++);
 	}
 
 	return state;
@@ -453,34 +476,30 @@ aa_state_t aa_dfa_match_len(struct aa_dfa *dfa, aa_state_t start,
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_match(struct aa_dfa *dfa, aa_state_t start, const char *str)
+unsigned int aa_dfa_match(struct aa_dfa *dfa, unsigned int start,
+			  const char *str)
 {
 	u16 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
 	u16 *next = NEXT_TABLE(dfa);
 	u16 *check = CHECK_TABLE(dfa);
-	aa_state_t state = start;
+	unsigned int state = start;
 
-	if (state == DFA_NOMATCH)
-		return DFA_NOMATCH;
+	if (state == 0)
+		return 0;
 
 	/* current state is <state>, matching character *str */
 	if (dfa->tables[YYTD_ID_EC]) {
 		/* Equivalence class table defined */
 		u8 *equiv = EQUIV_TABLE(dfa);
 		/* default is direct to next state */
-		while (*str) {
-			u8 c = equiv[(u8) *str];
-
-			match_char(state, def, base, next, check, c);
-			str++;
-		}
+		while (*str)
+			match_char(state, def, base, next, check,
+				   equiv[(u8) *str++]);
 	} else {
 		/* default is direct to next state */
-		while (*str) {
-			match_char(state, def, base, next, check, (u8) *str);
-			str++;
-		}
+		while (*str)
+			match_char(state, def, base, next, check, (u8) *str++);
 	}
 
 	return state;
@@ -496,7 +515,8 @@ aa_state_t aa_dfa_match(struct aa_dfa *dfa, aa_state_t start, const char *str)
  *
  * Returns: state reach after input @c
  */
-aa_state_t aa_dfa_next(struct aa_dfa *dfa, aa_state_t state, const char c)
+unsigned int aa_dfa_next(struct aa_dfa *dfa, unsigned int state,
+			  const char c)
 {
 	u16 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
@@ -514,7 +534,7 @@ aa_state_t aa_dfa_next(struct aa_dfa *dfa, aa_state_t state, const char c)
 	return state;
 }
 
-aa_state_t aa_dfa_outofband_transition(struct aa_dfa *dfa, aa_state_t state)
+unsigned int aa_dfa_outofband_transition(struct aa_dfa *dfa, unsigned int state)
 {
 	u16 *def = DEFAULT_TABLE(dfa);
 	u32 *base = BASE_TABLE(dfa);
@@ -544,7 +564,7 @@ aa_state_t aa_dfa_outofband_transition(struct aa_dfa *dfa, aa_state_t state)
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_match_until(struct aa_dfa *dfa, aa_state_t start,
+unsigned int aa_dfa_match_until(struct aa_dfa *dfa, unsigned int start,
 				const char *str, const char **retpos)
 {
 	u16 *def = DEFAULT_TABLE(dfa);
@@ -552,10 +572,10 @@ aa_state_t aa_dfa_match_until(struct aa_dfa *dfa, aa_state_t start,
 	u16 *next = NEXT_TABLE(dfa);
 	u16 *check = CHECK_TABLE(dfa);
 	u32 *accept = ACCEPT_TABLE(dfa);
-	aa_state_t state = start, pos;
+	unsigned int state = start, pos;
 
-	if (state == DFA_NOMATCH)
-		return DFA_NOMATCH;
+	if (state == 0)
+		return 0;
 
 	/* current state is <state>, matching character *str */
 	if (dfa->tables[YYTD_ID_EC]) {
@@ -605,7 +625,7 @@ aa_state_t aa_dfa_match_until(struct aa_dfa *dfa, aa_state_t start,
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_matchn_until(struct aa_dfa *dfa, aa_state_t start,
+unsigned int aa_dfa_matchn_until(struct aa_dfa *dfa, unsigned int start,
 				 const char *str, int n, const char **retpos)
 {
 	u16 *def = DEFAULT_TABLE(dfa);
@@ -613,11 +633,11 @@ aa_state_t aa_dfa_matchn_until(struct aa_dfa *dfa, aa_state_t start,
 	u16 *next = NEXT_TABLE(dfa);
 	u16 *check = CHECK_TABLE(dfa);
 	u32 *accept = ACCEPT_TABLE(dfa);
-	aa_state_t state = start, pos;
+	unsigned int state = start, pos;
 
 	*retpos = NULL;
-	if (state == DFA_NOMATCH)
-		return DFA_NOMATCH;
+	if (state == 0)
+		return 0;
 
 	/* current state is <state>, matching character *str */
 	if (dfa->tables[YYTD_ID_EC]) {
@@ -650,38 +670,37 @@ aa_state_t aa_dfa_matchn_until(struct aa_dfa *dfa, aa_state_t start,
 	return state;
 }
 
-#define inc_wb_pos(wb)							\
-do {									\
-	BUILD_BUG_ON_NOT_POWER_OF_2(WB_HISTORY_SIZE);			\
+#define inc_wb_pos(wb)						\
+do {								\
 	wb->pos = (wb->pos + 1) & (WB_HISTORY_SIZE - 1);		\
-	wb->len = (wb->len + 1) > WB_HISTORY_SIZE ? WB_HISTORY_SIZE :	\
-				wb->len + 1;				\
+	wb->len = (wb->len + 1) & (WB_HISTORY_SIZE - 1);		\
 } while (0)
 
 /* For DFAs that don't support extended tagging of states */
-/* adjust is only set if is_loop returns true */
-static bool is_loop(struct match_workbuf *wb, aa_state_t state,
+static bool is_loop(struct match_workbuf *wb, unsigned int state,
 		    unsigned int *adjust)
 {
-	int pos = wb->pos;
-	int i;
+	unsigned int pos = wb->pos;
+	unsigned int i;
 
 	if (wb->history[pos] < state)
 		return false;
 
-	for (i = 0; i < wb->len; i++) {
+	for (i = 0; i <= wb->len; i++) {
 		if (wb->history[pos] == state) {
 			*adjust = i;
 			return true;
 		}
-		/* -1 wraps to WB_HISTORY_SIZE - 1 */
-		pos = (pos - 1) & (WB_HISTORY_SIZE - 1);
+		if (pos == 0)
+			pos = WB_HISTORY_SIZE;
+		pos--;
 	}
 
-	return false;
+	*adjust = i;
+	return true;
 }
 
-static aa_state_t leftmatch_fb(struct aa_dfa *dfa, aa_state_t start,
+static unsigned int leftmatch_fb(struct aa_dfa *dfa, unsigned int start,
 				 const char *str, struct match_workbuf *wb,
 				 unsigned int *count)
 {
@@ -689,7 +708,7 @@ static aa_state_t leftmatch_fb(struct aa_dfa *dfa, aa_state_t start,
 	u32 *base = BASE_TABLE(dfa);
 	u16 *next = NEXT_TABLE(dfa);
 	u16 *check = CHECK_TABLE(dfa);
-	aa_state_t state = start, pos;
+	unsigned int state = start, pos;
 
 	AA_BUG(!dfa);
 	AA_BUG(!str);
@@ -697,8 +716,8 @@ static aa_state_t leftmatch_fb(struct aa_dfa *dfa, aa_state_t start,
 	AA_BUG(!count);
 
 	*count = 0;
-	if (state == DFA_NOMATCH)
-		return DFA_NOMATCH;
+	if (state == 0)
+		return 0;
 
 	/* current state is <state>, matching character *str */
 	if (dfa->tables[YYTD_ID_EC]) {
@@ -762,8 +781,8 @@ out:
  *
  * Returns: final state reached after input is consumed
  */
-aa_state_t aa_dfa_leftmatch(struct aa_dfa *dfa, aa_state_t start,
-			    const char *str, unsigned int *count)
+unsigned int aa_dfa_leftmatch(struct aa_dfa *dfa, unsigned int start,
+			      const char *str, unsigned int *count)
 {
 	DEFINE_MATCH_WB(wb);
 

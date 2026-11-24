@@ -644,8 +644,7 @@ static int rproc_handle_devmem(struct rproc *rproc, void *ptr,
 	if (!mapping)
 		return -ENOMEM;
 
-	ret = iommu_map(rproc->domain, rsc->da, rsc->pa, rsc->len, rsc->flags,
-			GFP_KERNEL);
+	ret = iommu_map(rproc->domain, rsc->da, rsc->pa, rsc->len, rsc->flags);
 	if (ret) {
 		dev_err(dev, "failed to map devmem: %d\n", ret);
 		goto out;
@@ -739,7 +738,7 @@ static int rproc_alloc_carveout(struct rproc *rproc,
 		}
 
 		ret = iommu_map(rproc->domain, mem->da, dma, mem->len,
-				mem->flags, GFP_KERNEL);
+				mem->flags);
 		if (ret) {
 			dev_err(dev, "iommu_map failed: %d\n", ret);
 			goto free_mapping;
@@ -1617,7 +1616,7 @@ static int rproc_attach(struct rproc *rproc)
 	ret = rproc_set_rsc_table(rproc);
 	if (ret) {
 		dev_err(dev, "can't load resource table: %d\n", ret);
-		goto clean_up_resources;
+		goto unprepare_device;
 	}
 
 	/* reset max_notifyid */
@@ -1634,7 +1633,7 @@ static int rproc_attach(struct rproc *rproc)
 	ret = rproc_handle_resources(rproc, rproc_loading_handlers);
 	if (ret) {
 		dev_err(dev, "Failed to process resources: %d\n", ret);
-		goto clean_up_resources;
+		goto unprepare_device;
 	}
 
 	/* Allocate carveout resources associated to rproc */
@@ -1653,9 +1652,9 @@ static int rproc_attach(struct rproc *rproc)
 
 clean_up_resources:
 	rproc_resource_cleanup(rproc);
+unprepare_device:
 	/* release HW resources if needed */
 	rproc_unprepare_device(rproc);
-	kfree(rproc->clean_table);
 disable_iommu:
 	rproc_disable_iommu(rproc);
 	return ret;
@@ -1870,16 +1869,10 @@ static void rproc_crash_handler_work(struct work_struct *work)
 
 	mutex_lock(&rproc->lock);
 
-	if (rproc->state == RPROC_CRASHED) {
+	if (rproc->state == RPROC_CRASHED || rproc->state == RPROC_OFFLINE) {
 		/* handle only the first crash detected */
 		mutex_unlock(&rproc->lock);
 		return;
-	}
-
-	if (rproc->state == RPROC_OFFLINE) {
-		/* Don't recover if the remote processor was stopped */
-		mutex_unlock(&rproc->lock);
-		goto out;
 	}
 
 	rproc->state = RPROC_CRASHED;
@@ -1891,7 +1884,6 @@ static void rproc_crash_handler_work(struct work_struct *work)
 	if (!rproc->recovery_disabled)
 		rproc_trigger_recovery(rproc);
 
-out:
 	pm_relax(rproc->dev.parent);
 }
 
@@ -2025,7 +2017,6 @@ int rproc_shutdown(struct rproc *rproc)
 	kfree(rproc->cached_table);
 	rproc->cached_table = NULL;
 	rproc->table_ptr = NULL;
-	rproc->table_sz = 0;
 out:
 	mutex_unlock(&rproc->lock);
 	return ret;
@@ -2113,6 +2104,7 @@ EXPORT_SYMBOL(rproc_detach);
 #ifdef CONFIG_OF
 struct rproc *rproc_get_by_phandle(phandle phandle)
 {
+	struct platform_device *cluster_pdev;
 	struct rproc *rproc = NULL, *r;
 	struct device_driver *driver;
 	struct device_node *np;
@@ -2123,7 +2115,7 @@ struct rproc *rproc_get_by_phandle(phandle phandle)
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(r, &rproc_list, node) {
-		if (r->dev.parent && device_match_of_node(r->dev.parent, np)) {
+		if (r->dev.parent && r->dev.parent->of_node == np) {
 			/* prevent underlying implementation from being removed */
 
 			/*
@@ -2138,10 +2130,14 @@ struct rproc *rproc_get_by_phandle(phandle phandle)
 			 * look for the driver associated with the cluster.
 			 */
 			if (!driver) {
-				if (r->dev.parent->parent)
-					driver = r->dev.parent->parent->driver;
-				if (!driver)
+				cluster_pdev = of_find_device_by_node(np->parent);
+				if (!cluster_pdev) {
+					dev_err(&r->dev, "can't get parent\n");
 					break;
+				}
+
+				driver = cluster_pdev->dev.driver;
+				put_device(&cluster_pdev->dev);
 			}
 
 			if (!try_module_get(driver->owner)) {
@@ -2487,13 +2483,6 @@ struct rproc *rproc_alloc(struct device *dev, const char *name,
 	rproc->dev.driver_data = rproc;
 	idr_init(&rproc->notifyids);
 
-	/* Assign a unique device index and name */
-	rproc->index = ida_alloc(&rproc_dev_index, GFP_KERNEL);
-	if (rproc->index < 0) {
-		dev_err(dev, "ida_alloc failed: %d\n", rproc->index);
-		goto put_device;
-	}
-
 	rproc->name = kstrdup_const(name, GFP_KERNEL);
 	if (!rproc->name)
 		goto put_device;
@@ -2503,6 +2492,13 @@ struct rproc *rproc_alloc(struct device *dev, const char *name,
 
 	if (rproc_alloc_ops(rproc, ops))
 		goto put_device;
+
+	/* Assign a unique device index and name */
+	rproc->index = ida_alloc(&rproc_dev_index, GFP_KERNEL);
+	if (rproc->index < 0) {
+		dev_err(dev, "ida_alloc failed: %d\n", rproc->index);
+		goto put_device;
+	}
 
 	dev_set_name(&rproc->dev, "remoteproc%d", rproc->index);
 
@@ -2555,11 +2551,19 @@ EXPORT_SYMBOL(rproc_free);
  */
 void rproc_put(struct rproc *rproc)
 {
-	if (rproc->dev.parent->driver)
-		module_put(rproc->dev.parent->driver->owner);
-	else
-		module_put(rproc->dev.parent->parent->driver->owner);
+	struct platform_device *cluster_pdev;
 
+	if (rproc->dev.parent) {
+		if (rproc->dev.parent->driver) {
+			module_put(rproc->dev.parent->driver->owner);
+		} else {
+			cluster_pdev = of_find_device_by_node(rproc->dev.parent->of_node->parent);
+			if (cluster_pdev) {
+				module_put(cluster_pdev->dev.driver->owner);
+				put_device(&cluster_pdev->dev);
+			}
+		}
+	}
 	put_device(&rproc->dev);
 }
 EXPORT_SYMBOL(rproc_put);
@@ -2792,4 +2796,5 @@ static void __exit remoteproc_exit(void)
 }
 module_exit(remoteproc_exit);
 
+MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Generic Remote Processor Framework");

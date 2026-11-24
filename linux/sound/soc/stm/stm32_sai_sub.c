@@ -317,7 +317,7 @@ static int stm32_sai_get_clk_div(struct stm32_sai_sub_data *sai,
 	int div;
 
 	div = DIV_ROUND_CLOSEST(input_rate, output_rate);
-	if (div > SAI_XCR1_MCKDIV_MAX(version) || div <= 0) {
+	if (div > SAI_XCR1_MCKDIV_MAX(version)) {
 		dev_err(&sai->pdev->dev, "Divider %d out of range\n", div);
 		return -EINVAL;
 	}
@@ -378,8 +378,8 @@ static long stm32_sai_mclk_round_rate(struct clk_hw *hw, unsigned long rate,
 	int div;
 
 	div = stm32_sai_get_clk_div(sai, *prate, rate);
-	if (div <= 0)
-		return -EINVAL;
+	if (div < 0)
+		return div;
 
 	mclk->freq = *prate / div;
 
@@ -550,14 +550,6 @@ static int stm32_sai_set_sysclk(struct snd_soc_dai *cpu_dai,
 {
 	struct stm32_sai_sub_data *sai = snd_soc_dai_get_drvdata(cpu_dai);
 	int ret;
-
-	/*
-	 * The mclk rate is determined at runtime from the audio stream rate.
-	 * Skip calls to the set_sysclk callback that are not relevant during the
-	 * initialization phase.
-	 */
-	if (!snd_soc_card_is_instantiated(cpu_dai->component->card))
-		return 0;
 
 	if (dir == SND_SOC_CLOCK_OUT && sai->sai_mclk) {
 		ret = stm32_sai_sub_reg_up(sai, STM_SAI_CR1_REGX,
@@ -1230,19 +1222,6 @@ static int stm32_sai_dai_probe(struct snd_soc_dai *cpu_dai)
 }
 
 static const struct snd_soc_dai_ops stm32_sai_pcm_dai_ops = {
-	.probe		= stm32_sai_dai_probe,
-	.set_sysclk	= stm32_sai_set_sysclk,
-	.set_fmt	= stm32_sai_set_dai_fmt,
-	.set_tdm_slot	= stm32_sai_set_dai_tdm_slot,
-	.startup	= stm32_sai_startup,
-	.hw_params	= stm32_sai_hw_params,
-	.trigger	= stm32_sai_trigger,
-	.shutdown	= stm32_sai_shutdown,
-	.pcm_new	= stm32_sai_pcm_new,
-};
-
-static const struct snd_soc_dai_ops stm32_sai_pcm_dai_ops2 = {
-	.probe		= stm32_sai_dai_probe,
 	.set_sysclk	= stm32_sai_set_sysclk,
 	.set_fmt	= stm32_sai_set_dai_fmt,
 	.set_tdm_slot	= stm32_sai_set_dai_tdm_slot,
@@ -1254,11 +1233,11 @@ static const struct snd_soc_dai_ops stm32_sai_pcm_dai_ops2 = {
 
 static int stm32_sai_pcm_process_spdif(struct snd_pcm_substream *substream,
 				       int channel, unsigned long hwoff,
-				       unsigned long bytes)
+				       void *buf, unsigned long bytes)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
-	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
 	struct stm32_sai_sub_data *sai = dev_get_drvdata(cpu_dai->dev);
 	int *ptr = (int *)(runtime->dma_area + hwoff +
 			   channel * (runtime->dma_bytes / runtime->channels));
@@ -1308,6 +1287,8 @@ static const struct snd_pcm_hardware stm32_sai_pcm_hw = {
 };
 
 static struct snd_soc_dai_driver stm32_sai_playback_dai = {
+		.probe = stm32_sai_dai_probe,
+		.pcm_new = stm32_sai_pcm_new,
 		.id = 1, /* avoid call to fmt_single_name() */
 		.playback = {
 			.channels_min = 1,
@@ -1325,6 +1306,7 @@ static struct snd_soc_dai_driver stm32_sai_playback_dai = {
 };
 
 static struct snd_soc_dai_driver stm32_sai_capture_dai = {
+		.probe = stm32_sai_dai_probe,
 		.id = 1, /* avoid call to fmt_single_name() */
 		.capture = {
 			.channels_min = 1,
@@ -1338,7 +1320,7 @@ static struct snd_soc_dai_driver stm32_sai_capture_dai = {
 				SNDRV_PCM_FMTBIT_S16_LE |
 				SNDRV_PCM_FMTBIT_S32_LE,
 		},
-		.ops = &stm32_sai_pcm_dai_ops2,
+		.ops = &stm32_sai_pcm_dai_ops,
 };
 
 static const struct snd_dmaengine_pcm_config stm32_sai_pcm_config = {
@@ -1412,7 +1394,7 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 
 	/* Get spdif iec60958 property */
 	sai->spdif = false;
-	if (of_property_present(np, "st,iec60958")) {
+	if (of_get_property(np, "st,iec60958", NULL)) {
 		if (!STM_SAI_HAS_SPDIF(sai) ||
 		    sai->dir == SNDRV_PCM_STREAM_CAPTURE) {
 			dev_err(&pdev->dev, "S/PDIF IEC60958 not supported\n");
@@ -1453,8 +1435,7 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 				dev_err(&pdev->dev,
 					"External synchro not supported\n");
 				of_node_put(args.np);
-				ret = -EINVAL;
-				goto err_put_sync_provider;
+				return -EINVAL;
 			}
 			sai->sync = SAI_SYNC_EXTERNAL;
 
@@ -1463,8 +1444,7 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 			    (sai->synci > (SAI_GCR_SYNCIN_MAX + 1))) {
 				dev_err(&pdev->dev, "Wrong SAI index\n");
 				of_node_put(args.np);
-				ret = -EINVAL;
-				goto err_put_sync_provider;
+				return -EINVAL;
 			}
 
 			if (of_property_match_string(args.np, "compatible",
@@ -1478,8 +1458,7 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 			if (!sai->synco) {
 				dev_err(&pdev->dev, "Unknown SAI sub-block\n");
 				of_node_put(args.np);
-				ret = -EINVAL;
-				goto err_put_sync_provider;
+				return -EINVAL;
 			}
 		}
 
@@ -1489,45 +1468,38 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 
 	of_node_put(args.np);
 	sai->sai_ck = devm_clk_get(&pdev->dev, "sai_ck");
-	if (IS_ERR(sai->sai_ck)) {
-		ret = dev_err_probe(&pdev->dev, PTR_ERR(sai->sai_ck),
-				    "Missing kernel clock sai_ck\n");
-		goto err_put_sync_provider;
-	}
+	if (IS_ERR(sai->sai_ck))
+		return dev_err_probe(&pdev->dev, PTR_ERR(sai->sai_ck),
+				     "Missing kernel clock sai_ck\n");
 
 	ret = clk_prepare(sai->pdata->pclk);
 	if (ret < 0)
-		goto err_put_sync_provider;
+		return ret;
 
 	if (STM_SAI_IS_F4(sai->pdata))
 		return 0;
 
 	/* Register mclk provider if requested */
-	if (of_property_present(np, "#clock-cells")) {
+	if (of_find_property(np, "#clock-cells", NULL)) {
 		ret = stm32_sai_add_mclk_provider(sai);
 		if (ret < 0)
-			goto err_unprepare_pclk;
+			return ret;
 	} else {
-		sai->sai_mclk = devm_clk_get_optional(&pdev->dev, "MCLK");
+		sai->sai_mclk = devm_clk_get(&pdev->dev, "MCLK");
 		if (IS_ERR(sai->sai_mclk)) {
-			ret = PTR_ERR(sai->sai_mclk);
-			goto err_unprepare_pclk;
+			if (PTR_ERR(sai->sai_mclk) != -ENOENT)
+				return PTR_ERR(sai->sai_mclk);
+			sai->sai_mclk = NULL;
 		}
 	}
 
 	return 0;
-
-err_unprepare_pclk:
-	clk_unprepare(sai->pdata->pclk);
-err_put_sync_provider:
-	of_node_put(sai->np_sync_provider);
-
-	return ret;
 }
 
 static int stm32_sai_sub_probe(struct platform_device *pdev)
 {
 	struct stm32_sai_sub_data *sai;
+	const struct of_device_id *of_id;
 	const struct snd_dmaengine_pcm_config *conf = &stm32_sai_pcm_config;
 	int ret;
 
@@ -1535,7 +1507,10 @@ static int stm32_sai_sub_probe(struct platform_device *pdev)
 	if (!sai)
 		return -ENOMEM;
 
-	sai->id = (uintptr_t)device_get_match_data(&pdev->dev);
+	of_id = of_match_device(stm32_sai_sub_ids, &pdev->dev);
+	if (!of_id)
+		return -EINVAL;
+	sai->id = (uintptr_t)of_id->data;
 
 	sai->pdev = pdev;
 	mutex_init(&sai->ctrl_lock);
@@ -1562,37 +1537,29 @@ static int stm32_sai_sub_probe(struct platform_device *pdev)
 			       IRQF_SHARED, dev_name(&pdev->dev), sai);
 	if (ret) {
 		dev_err(&pdev->dev, "IRQ request returned %d\n", ret);
-		goto err_unprepare_pclk;
+		return ret;
 	}
 
 	if (STM_SAI_PROTOCOL_IS_SPDIF(sai))
 		conf = &stm32_sai_pcm_config_spdif;
 
 	ret = snd_dmaengine_pcm_register(&pdev->dev, conf, 0);
-	if (ret) {
-		ret = dev_err_probe(&pdev->dev, ret, "Could not register pcm dma\n");
-		goto err_unprepare_pclk;
-	}
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "Could not register pcm dma\n");
 
 	ret = snd_soc_register_component(&pdev->dev, &stm32_component,
 					 &sai->cpu_dai_drv, 1);
 	if (ret) {
 		snd_dmaengine_pcm_unregister(&pdev->dev);
-		goto err_unprepare_pclk;
+		return ret;
 	}
 
 	pm_runtime_enable(&pdev->dev);
 
 	return 0;
-
-err_unprepare_pclk:
-	clk_unprepare(sai->pdata->pclk);
-	of_node_put(sai->np_sync_provider);
-
-	return ret;
 }
 
-static void stm32_sai_sub_remove(struct platform_device *pdev)
+static int stm32_sai_sub_remove(struct platform_device *pdev)
 {
 	struct stm32_sai_sub_data *sai = dev_get_drvdata(&pdev->dev);
 
@@ -1600,7 +1567,8 @@ static void stm32_sai_sub_remove(struct platform_device *pdev)
 	snd_dmaengine_pcm_unregister(&pdev->dev);
 	snd_soc_unregister_component(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
-	of_node_put(sai->np_sync_provider);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP

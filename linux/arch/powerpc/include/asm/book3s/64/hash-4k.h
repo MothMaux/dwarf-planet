@@ -74,33 +74,20 @@
 #define remap_4k_pfn(vma, addr, pfn, prot)	\
 	remap_pfn_range((vma), (addr), (pfn), PAGE_SIZE, (prot))
 
-/*
- * With 4K page size the real_pte machinery is all nops.
- */
-static inline real_pte_t __real_pte(pte_t pte, pte_t *ptep, int offset)
+#ifdef CONFIG_HUGETLB_PAGE
+static inline int hash__hugepd_ok(hugepd_t hpd)
 {
-	return (real_pte_t){pte};
+	unsigned long hpdval = hpd_val(hpd);
+	/*
+	 * if it is not a pte and have hugepd shift mask
+	 * set, then it is a hugepd directory pointer
+	 */
+	if (!(hpdval & _PAGE_PTE) && (hpdval & _PAGE_PRESENT) &&
+	    ((hpdval & HUGEPD_SHIFT_MASK) != 0))
+		return true;
+	return false;
 }
-
-#define __rpte_to_pte(r)	((r).pte)
-
-static inline unsigned long __rpte_to_hidx(real_pte_t rpte, unsigned long index)
-{
-	return pte_val(__rpte_to_pte(rpte)) >> H_PAGE_F_GIX_SHIFT;
-}
-
-#define pte_iterate_hashed_subpages(rpte, psize, va, index, shift)       \
-	do {							         \
-		index = 0;					         \
-		shift = mmu_psize_defs[psize].shift;		         \
-
-#define pte_iterate_hashed_end() } while(0)
-
-/*
- * We expect this to be called only for user addresses or kernel virtual
- * addresses other than the linear mapping.
- */
-#define pte_pagesize_index(mm, addr, pte)	MMU_PAGE_4K
+#endif
 
 /*
  * 4K PTE format is different from 64K PTE format. Saving the hash_slot is just
@@ -146,6 +133,12 @@ static inline void mark_hpte_slot_valid(unsigned char *hpte_slot_array,
 
 static inline int hash__pmd_trans_huge(pmd_t pmd)
 {
+	return 0;
+}
+
+static inline int hash__pmd_same(pmd_t pmd_a, pmd_t pmd_b)
+{
+	BUG();
 	return 0;
 }
 

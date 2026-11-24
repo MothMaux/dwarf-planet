@@ -16,54 +16,72 @@
  * Get an online page for a pfn if it's in the LRU list.  Otherwise, returns
  * NULL.
  *
- * The body of this function is stolen from the 'page_idle_get_folio()'.  We
+ * The body of this function is stolen from the 'page_idle_get_page()'.  We
  * steal rather than reuse it because the code is quite simple.
  */
-struct folio *damon_get_folio(unsigned long pfn)
+struct page *damon_get_page(unsigned long pfn)
 {
 	struct page *page = pfn_to_online_page(pfn);
-	struct folio *folio;
+
+	if (!page || !PageLRU(page) || !get_page_unless_zero(page))
+		return NULL;
+
+	if (unlikely(!PageLRU(page))) {
+		put_page(page);
+		page = NULL;
+	}
+	return page;
+}
+
+void damon_ptep_mkold(pte_t *pte, struct mm_struct *mm, unsigned long addr)
+{
+	bool referenced = false;
+	struct page *page = damon_get_page(pte_pfn(*pte));
 
 	if (!page)
-		return NULL;
-
-	folio = page_folio(page);
-	if (!folio_test_lru(folio) || !folio_try_get(folio))
-		return NULL;
-	if (unlikely(page_folio(page) != folio || !folio_test_lru(folio))) {
-		folio_put(folio);
-		folio = NULL;
-	}
-	return folio;
-}
-
-void damon_ptep_mkold(pte_t *pte, struct vm_area_struct *vma, unsigned long addr)
-{
-	struct folio *folio = damon_get_folio(pte_pfn(ptep_get(pte)));
-
-	if (!folio)
 		return;
 
-	if (ptep_clear_young_notify(vma, addr, pte))
-		folio_set_young(folio);
+	if (pte_young(*pte)) {
+		referenced = true;
+		*pte = pte_mkold(*pte);
+	}
 
-	folio_set_idle(folio);
-	folio_put(folio);
+#ifdef CONFIG_MMU_NOTIFIER
+	if (mmu_notifier_clear_young(mm, addr, addr + PAGE_SIZE))
+		referenced = true;
+#endif /* CONFIG_MMU_NOTIFIER */
+
+	if (referenced)
+		set_page_young(page);
+
+	set_page_idle(page);
+	put_page(page);
 }
 
-void damon_pmdp_mkold(pmd_t *pmd, struct vm_area_struct *vma, unsigned long addr)
+void damon_pmdp_mkold(pmd_t *pmd, struct mm_struct *mm, unsigned long addr)
 {
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	struct folio *folio = damon_get_folio(pmd_pfn(pmdp_get(pmd)));
+	bool referenced = false;
+	struct page *page = damon_get_page(pmd_pfn(*pmd));
 
-	if (!folio)
+	if (!page)
 		return;
 
-	if (pmdp_clear_young_notify(vma, addr, pmd))
-		folio_set_young(folio);
+	if (pmd_young(*pmd)) {
+		referenced = true;
+		*pmd = pmd_mkold(*pmd);
+	}
 
-	folio_set_idle(folio);
-	folio_put(folio);
+#ifdef CONFIG_MMU_NOTIFIER
+	if (mmu_notifier_clear_young(mm, addr, addr + HPAGE_PMD_SIZE))
+		referenced = true;
+#endif /* CONFIG_MMU_NOTIFIER */
+
+	if (referenced)
+		set_page_young(page);
+
+	set_page_idle(page);
+	put_page(page);
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 }
 
@@ -73,6 +91,7 @@ void damon_pmdp_mkold(pmd_t *pmd, struct vm_area_struct *vma, unsigned long addr
 int damon_hot_score(struct damon_ctx *c, struct damon_region *r,
 			struct damos *s)
 {
+	unsigned int max_nr_accesses;
 	int freq_subscore;
 	unsigned int age_in_sec;
 	int age_in_log, age_subscore;
@@ -80,8 +99,8 @@ int damon_hot_score(struct damon_ctx *c, struct damon_region *r,
 	unsigned int age_weight = s->quota.weight_age;
 	int hotness;
 
-	freq_subscore = r->nr_accesses * DAMON_MAX_SUBSCORE /
-		damon_max_nr_accesses(&c->attrs);
+	max_nr_accesses = c->attrs.aggr_interval / c->attrs.sample_interval;
+	freq_subscore = r->nr_accesses * DAMON_MAX_SUBSCORE / max_nr_accesses;
 
 	age_in_sec = (unsigned long)r->age * c->attrs.aggr_interval / 1000000;
 	for (age_in_log = 0; age_in_log < DAMON_MAX_AGE_IN_LOG && age_in_sec;

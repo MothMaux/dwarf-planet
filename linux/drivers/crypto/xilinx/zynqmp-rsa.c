@@ -195,7 +195,6 @@ static int zynqmp_rsa_probe(struct platform_device *pdev)
 		return PTR_ERR(rsa_dd->alg);
 	}
 
-	dev_warn(dev, "This driver is deprecated. Please migrate to xilinx-rsa driver\n");
 	rsa_dd->dev = dev;
 	platform_set_drvdata(pdev, rsa_dd);
 
@@ -224,13 +223,15 @@ err_algs:
 	return ret;
 }
 
-static void zynqmp_rsa_remove(struct platform_device *pdev)
+static int zynqmp_rsa_remove(struct platform_device *pdev)
 {
 	struct zynqmp_rsa_dev *drv_ctx;
 
 	drv_ctx = platform_get_drvdata(pdev);
 
 	crypto_unregister_skcipher(drv_ctx->alg);
+
+	return 0;
 }
 
 static struct platform_driver xilinx_rsa_driver = {
@@ -241,20 +242,19 @@ static struct platform_driver xilinx_rsa_driver = {
 	},
 };
 
-static struct platform_device *platform_dev;
-
 static int __init rsa_driver_init(void)
 {
+	struct platform_device *pdev;
 	int ret;
 
 	ret = platform_driver_register(&xilinx_rsa_driver);
 	if (ret)
 		return ret;
 
-	platform_dev = platform_device_register_simple(xilinx_rsa_driver.driver.name,
+	pdev = platform_device_register_simple(xilinx_rsa_driver.driver.name,
 					       0, NULL, 0);
-	if (IS_ERR(platform_dev)) {
-		ret = PTR_ERR(platform_dev);
+	if (IS_ERR(pdev)) {
+		ret = PTR_ERR(pdev);
 		platform_driver_unregister(&xilinx_rsa_driver);
 	}
 
@@ -263,7 +263,6 @@ static int __init rsa_driver_init(void)
 
 static void __exit rsa_driver_exit(void)
 {
-	platform_device_unregister(platform_dev);
 	platform_driver_unregister(&xilinx_rsa_driver);
 }
 

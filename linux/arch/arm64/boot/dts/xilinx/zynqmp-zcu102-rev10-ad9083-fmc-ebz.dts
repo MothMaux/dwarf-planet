@@ -31,12 +31,11 @@
 		#size-cells = <0x1>;
 		ranges = <0 0 0 0xffffffff>;
 
-		rx_dma: dma-controller@9c400000 {
+		rx_dma: dma@9c400000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x9c400000 0x10000>;
 			#dma-cells = <1>;
 			#clock-cells = <0>;
-			dma-coherent;
 			interrupts = <0 109 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&zynqmp_clk 73>;
 		};
@@ -53,7 +52,7 @@
 			jesd204-inputs = <&axi_ad9083_rx_jesd 0 0>;
 		};
 
-		axi_ad9083_rx_jesd: axi-jesd204-rx@84AA0000 {
+		axi_ad9083_rx_jesd: axi-jesd204-rx@0x84AA0000 {
 			compatible = "adi,axi-jesd204-rx-1.0";
 			reg = <0x84AA0000 0x1000>;
 

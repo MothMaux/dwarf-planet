@@ -24,23 +24,25 @@
 #include "amdgpu_reset.h"
 #include "aldebaran.h"
 #include "sienna_cichlid.h"
-#include "smu_v13_0_10.h"
+
+int amdgpu_reset_add_handler(struct amdgpu_reset_control *reset_ctl,
+			     struct amdgpu_reset_handler *handler)
+{
+	/* TODO: Check if handler exists? */
+	list_add_tail(&handler->handler_list, &reset_ctl->reset_handlers);
+	return 0;
+}
 
 int amdgpu_reset_init(struct amdgpu_device *adev)
 {
 	int ret = 0;
 
-	switch (amdgpu_ip_version(adev, MP1_HWIP, 0)) {
+	switch (adev->ip_versions[MP1_HWIP][0]) {
 	case IP_VERSION(13, 0, 2):
-	case IP_VERSION(13, 0, 6):
-	case IP_VERSION(13, 0, 14):
 		ret = aldebaran_reset_init(adev);
 		break;
 	case IP_VERSION(11, 0, 7):
 		ret = sienna_cichlid_reset_init(adev);
-		break;
-	case IP_VERSION(13, 0, 10):
-		ret = smu_v13_0_10_reset_init(adev);
 		break;
 	default:
 		break;
@@ -53,17 +55,12 @@ int amdgpu_reset_fini(struct amdgpu_device *adev)
 {
 	int ret = 0;
 
-	switch (amdgpu_ip_version(adev, MP1_HWIP, 0)) {
+	switch (adev->ip_versions[MP1_HWIP][0]) {
 	case IP_VERSION(13, 0, 2):
-	case IP_VERSION(13, 0, 6):
-	case IP_VERSION(13, 0, 14):
 		ret = aldebaran_reset_fini(adev);
 		break;
 	case IP_VERSION(11, 0, 7):
 		ret = sienna_cichlid_reset_fini(adev);
-		break;
-	case IP_VERSION(13, 0, 10):
-		ret = smu_v13_0_10_reset_fini(adev);
 		break;
 	default:
 		break;
@@ -81,7 +78,7 @@ int amdgpu_reset_prepare_hwcontext(struct amdgpu_device *adev,
 		reset_handler = adev->reset_cntl->get_reset_handler(
 			adev->reset_cntl, reset_context);
 	if (!reset_handler)
-		return -EOPNOTSUPP;
+		return -ENOSYS;
 
 	return reset_handler->prepare_hwcontext(adev->reset_cntl,
 						reset_context);
@@ -97,7 +94,7 @@ int amdgpu_reset_perform_reset(struct amdgpu_device *adev,
 		reset_handler = adev->reset_cntl->get_reset_handler(
 			adev->reset_cntl, reset_context);
 	if (!reset_handler)
-		return -EOPNOTSUPP;
+		return -ENOSYS;
 
 	ret = reset_handler->perform_reset(adev->reset_cntl, reset_context);
 	if (ret)
@@ -161,34 +158,5 @@ void amdgpu_device_unlock_reset_domain(struct amdgpu_reset_domain *reset_domain)
 	up_write(&reset_domain->sem);
 }
 
-void amdgpu_reset_get_desc(struct amdgpu_reset_context *rst_ctxt, char *buf,
-			   size_t len)
-{
-	if (!buf || !len)
-		return;
 
-	switch (rst_ctxt->src) {
-	case AMDGPU_RESET_SRC_JOB:
-		if (rst_ctxt->job) {
-			snprintf(buf, len, "job hang on ring:%s",
-				 rst_ctxt->job->base.sched->name);
-		} else {
-			strscpy(buf, "job hang", len);
-		}
-		break;
-	case AMDGPU_RESET_SRC_RAS:
-		strscpy(buf, "RAS error", len);
-		break;
-	case AMDGPU_RESET_SRC_MES:
-		strscpy(buf, "MES hang", len);
-		break;
-	case AMDGPU_RESET_SRC_HWS:
-		strscpy(buf, "HWS hang", len);
-		break;
-	case AMDGPU_RESET_SRC_USER:
-		strscpy(buf, "user trigger", len);
-		break;
-	default:
-		strscpy(buf, "unknown", len);
-	}
-}
+

@@ -100,7 +100,8 @@ static int tpm_cr50_i2c_wait_tpm_ready(struct tpm_chip *chip)
 	}
 
 	/* Wait for interrupt to indicate TPM is ready to respond */
-	if (!wait_for_completion_timeout(&priv->tpm_ready, chip->timeout_a)) {
+	if (!wait_for_completion_timeout(&priv->tpm_ready,
+					 msecs_to_jiffies(chip->timeout_a))) {
 		dev_warn(&chip->dev, "Timeout waiting for TPM ready\n");
 		return -ETIMEDOUT;
 	}
@@ -235,7 +236,7 @@ out:
  * @len:	Number of bytes to write.
  *
  * The provided address is prepended to the data in 'buffer', the
- * combined address+data is sent to the TPM, then wait for TPM to
+ * cobined address+data is sent to the TPM, then wait for TPM to
  * indicate it is done writing.
  *
  * Return:
@@ -671,6 +672,7 @@ MODULE_DEVICE_TABLE(of, of_cr50_i2c_match);
 /**
  * tpm_cr50_i2c_probe() - Driver probe function.
  * @client:	I2C client information.
+ * @id:		I2C device id.
  *
  * Return:
  * - 0:		Success.
@@ -712,7 +714,8 @@ static int tpm_cr50_i2c_probe(struct i2c_client *client)
 
 	if (client->irq > 0) {
 		rc = devm_request_irq(dev, client->irq, tpm_cr50_i2c_int_handler,
-				      IRQF_TRIGGER_FALLING | IRQF_NO_AUTOEN,
+				      IRQF_TRIGGER_FALLING | IRQF_ONESHOT |
+				      IRQF_NO_AUTOEN,
 				      dev->driver->name, chip);
 		if (rc < 0) {
 			dev_err(dev, "Failed to probe IRQ %d\n", client->irq);
@@ -777,7 +780,7 @@ static void tpm_cr50_i2c_remove(struct i2c_client *client)
 static SIMPLE_DEV_PM_OPS(cr50_i2c_pm, tpm_pm_suspend, tpm_pm_resume);
 
 static struct i2c_driver cr50_i2c_driver = {
-	.probe = tpm_cr50_i2c_probe,
+	.probe_new = tpm_cr50_i2c_probe,
 	.remove = tpm_cr50_i2c_remove,
 	.driver = {
 		.name = "cr50_i2c",

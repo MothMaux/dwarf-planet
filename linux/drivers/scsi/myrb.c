@@ -16,7 +16,7 @@
 #include <linux/interrupt.h>
 #include <linux/pci.h>
 #include <linux/raid_class.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_device.h>
@@ -112,8 +112,9 @@ static bool myrb_create_mempools(struct pci_dev *pdev, struct myrb_hba *cb)
 		return false;
 	}
 
-	cb->work_q = alloc_ordered_workqueue("myrb_wq_%d", WQ_MEM_RECLAIM,
-					     cb->host->host_no);
+	snprintf(cb->work_q_name, sizeof(cb->work_q_name),
+		 "myrb_wq_%d", cb->host->host_no);
+	cb->work_q = create_singlethread_workqueue(cb->work_q_name);
 	if (!cb->work_q) {
 		dma_pool_destroy(cb->dcdb_pool);
 		cb->dcdb_pool = NULL;
@@ -1774,9 +1775,9 @@ static ssize_t raid_state_show(struct device *dev,
 
 		name = myrb_devstate_name(ldev_info->state);
 		if (name)
-			ret = snprintf(buf, 64, "%s\n", name);
+			ret = snprintf(buf, 32, "%s\n", name);
 		else
-			ret = snprintf(buf, 64, "Invalid (%02X)\n",
+			ret = snprintf(buf, 32, "Invalid (%02X)\n",
 				       ldev_info->state);
 	} else {
 		struct myrb_pdev_state *pdev_info = sdev->hostdata;
@@ -1795,9 +1796,9 @@ static ssize_t raid_state_show(struct device *dev,
 		else
 			name = myrb_devstate_name(pdev_info->state);
 		if (name)
-			ret = snprintf(buf, 64, "%s\n", name);
+			ret = snprintf(buf, 32, "%s\n", name);
 		else
-			ret = snprintf(buf, 64, "Invalid (%02X)\n",
+			ret = snprintf(buf, 32, "Invalid (%02X)\n",
 				       pdev_info->state);
 	}
 	return ret;
@@ -1885,11 +1886,11 @@ static ssize_t raid_level_show(struct device *dev,
 
 		name = myrb_raidlevel_name(ldev_info->raid_level);
 		if (!name)
-			return snprintf(buf, 64, "Invalid (%02X)\n",
+			return snprintf(buf, 32, "Invalid (%02X)\n",
 					ldev_info->state);
-		return snprintf(buf, 64, "%s\n", name);
+		return snprintf(buf, 32, "%s\n", name);
 	}
-	return snprintf(buf, 64, "Physical Drive\n");
+	return snprintf(buf, 32, "Physical Drive\n");
 }
 static DEVICE_ATTR_RO(raid_level);
 
@@ -1902,15 +1903,15 @@ static ssize_t rebuild_show(struct device *dev,
 	unsigned char status;
 
 	if (sdev->channel < myrb_logical_channel(sdev->host))
-		return snprintf(buf, 64, "physical device - not rebuilding\n");
+		return snprintf(buf, 32, "physical device - not rebuilding\n");
 
 	status = myrb_get_rbld_progress(cb, &rbld_buf);
 
 	if (rbld_buf.ldev_num != sdev->id ||
 	    status != MYRB_STATUS_SUCCESS)
-		return snprintf(buf, 64, "not rebuilding\n");
+		return snprintf(buf, 32, "not rebuilding\n");
 
-	return snprintf(buf, 64, "rebuilding block %u of %u\n",
+	return snprintf(buf, 32, "rebuilding block %u of %u\n",
 			rbld_buf.ldev_size - rbld_buf.blocks_left,
 			rbld_buf.ldev_size);
 }
@@ -2202,7 +2203,7 @@ static struct attribute *myrb_shost_attrs[] = {
 
 ATTRIBUTE_GROUPS(myrb_shost);
 
-static const struct scsi_host_template myrb_template = {
+static struct scsi_host_template myrb_template = {
 	.module			= THIS_MODULE,
 	.name			= "DAC960",
 	.proc_name		= "myrb",

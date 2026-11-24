@@ -93,7 +93,6 @@ static struct workqueue_struct *ib_unreg_wq;
 static DEFINE_XARRAY_FLAGS(devices, XA_FLAGS_ALLOC);
 static DECLARE_RWSEM(devices_rwsem);
 #define DEVICE_REGISTERED XA_MARK_1
-#define DEVICE_GID_UPDATES XA_MARK_2
 
 static u32 highest_client_id;
 #define CLIENT_REGISTERED XA_MARK_1
@@ -504,7 +503,6 @@ static void ib_device_release(struct device *device)
 			  rcu_head);
 	}
 
-	mutex_destroy(&dev->subdev_lock);
 	mutex_destroy(&dev->unregistration_lock);
 	mutex_destroy(&dev->compat_devs_mutex);
 
@@ -513,7 +511,7 @@ static void ib_device_release(struct device *device)
 	kfree_rcu(dev, rcu_head);
 }
 
-static int ib_device_uevent(const struct device *device,
+static int ib_device_uevent(struct device *device,
 			    struct kobj_uevent_env *env)
 {
 	if (add_uevent_var(env, "NAME=%s", dev_name(device)))
@@ -526,9 +524,9 @@ static int ib_device_uevent(const struct device *device,
 	return 0;
 }
 
-static const void *net_namespace(const struct device *d)
+static const void *net_namespace(struct device *d)
 {
-	const struct ib_core_device *coredev =
+	struct ib_core_device *coredev =
 			container_of(d, struct ib_core_device, dev);
 
 	return read_pnet(&coredev->rdma_net);
@@ -545,8 +543,6 @@ static struct class ib_class = {
 static void rdma_init_coredev(struct ib_core_device *coredev,
 			      struct ib_device *dev, struct net *net)
 {
-	bool is_full_dev = &dev->coredev == coredev;
-
 	/* This BUILD_BUG_ON is intended to catch layout change
 	 * of union of ib_core_device and device.
 	 * dev must be the first element as ib_core and providers
@@ -558,13 +554,6 @@ static void rdma_init_coredev(struct ib_core_device *coredev,
 
 	coredev->dev.class = &ib_class;
 	coredev->dev.groups = dev->groups;
-
-	/*
-	 * Don't expose hw counters outside of the init namespace.
-	 */
-	if (!is_full_dev && dev->hw_stats_attr_index)
-		coredev->dev.groups[dev->hw_stats_attr_index] = NULL;
-
 	device_initialize(&coredev->dev);
 	coredev->owner = dev;
 	INIT_LIST_HEAD(&coredev->port_list);
@@ -652,11 +641,6 @@ struct ib_device *_ib_alloc_device(size_t size)
 		BIT_ULL(IB_USER_VERBS_CMD_REG_MR) |
 		BIT_ULL(IB_USER_VERBS_CMD_REREG_MR) |
 		BIT_ULL(IB_USER_VERBS_CMD_RESIZE_CQ);
-
-	mutex_init(&device->subdev_lock);
-	INIT_LIST_HEAD(&device->subdev_list_head);
-	INIT_LIST_HEAD(&device->subdev_list);
-
 	return device;
 }
 EXPORT_SYMBOL(_ib_alloc_device);
@@ -820,7 +804,7 @@ static int alloc_port_data(struct ib_device *device)
 	 * empty slots at the beginning.
 	 */
 	pdata_rcu = kzalloc(struct_size(pdata_rcu, pdata,
-					size_add(rdma_end_port(device), 1)),
+					rdma_end_port(device) + 1),
 			    GFP_KERNEL);
 	if (!pdata_rcu)
 		return -ENOMEM;
@@ -1361,37 +1345,6 @@ static void prevent_dealloc_device(struct ib_device *ib_dev)
 {
 }
 
-static void ib_device_notify_register(struct ib_device *device)
-{
-	struct net_device *netdev;
-	u32 port;
-	int ret;
-
-	down_read(&devices_rwsem);
-
-	/* Mark for userspace that device is ready */
-	kobject_uevent(&device->dev.kobj, KOBJ_ADD);
-
-	ret = rdma_nl_notify_event(device, 0, RDMA_REGISTER_EVENT);
-	if (ret)
-		goto out;
-
-	rdma_for_each_port(device, port) {
-		netdev = ib_device_get_netdev(device, port);
-		if (!netdev)
-			continue;
-
-		ret = rdma_nl_notify_event(device, port,
-					   RDMA_NETDEV_ATTACH_EVENT);
-		dev_put(netdev);
-		if (ret)
-			goto out;
-	}
-
-out:
-	up_read(&devices_rwsem);
-}
-
 /**
  * ib_register_device - Register an IB device with IB core
  * @device: Device to register
@@ -1488,9 +1441,8 @@ int ib_register_device(struct ib_device *device, const char *name,
 		return ret;
 	}
 	dev_set_uevent_suppress(&device->dev, false);
-
-	ib_device_notify_register(device);
-
+	/* Mark for userspace that device is ready */
+	kobject_uevent(&device->dev.kobj, KOBJ_ADD);
 	ib_device_put(device);
 
 	return 0;
@@ -1509,18 +1461,6 @@ EXPORT_SYMBOL(ib_register_device);
 /* Callers must hold a get on the device. */
 static void __ib_unregister_device(struct ib_device *ib_dev)
 {
-	struct ib_device *sub, *tmp;
-
-	mutex_lock(&ib_dev->subdev_lock);
-	list_for_each_entry_safe_reverse(sub, tmp,
-					 &ib_dev->subdev_list_head,
-					 subdev_list) {
-		list_del(&sub->subdev_list);
-		ib_dev->ops.del_sub_dev(sub);
-		ib_device_put(ib_dev);
-	}
-	mutex_unlock(&ib_dev->subdev_lock);
-
 	/*
 	 * We have a registration lock so that all the calls to unregister are
 	 * fully fenced, once any unregister returns the device is truely
@@ -1533,7 +1473,6 @@ static void __ib_unregister_device(struct ib_device *ib_dev)
 		goto out;
 
 	disable_device(ib_dev);
-	rdma_nl_notify_event(ib_dev, 0, RDMA_UNREGISTER_EVENT);
 
 	/* Expedite removing unregistered pointers from the hash table */
 	free_netdevs(ib_dev);
@@ -1791,7 +1730,7 @@ static int assign_client_id(struct ib_client *client)
 {
 	int ret;
 
-	lockdep_assert_held(&clients_rwsem);
+	down_write(&clients_rwsem);
 	/*
 	 * The add/remove callbacks must be called in FIFO/LIFO order. To
 	 * achieve this we assign client_ids so they are sorted in
@@ -1800,11 +1739,14 @@ static int assign_client_id(struct ib_client *client)
 	client->client_id = highest_client_id;
 	ret = xa_insert(&clients, client->client_id, client, GFP_KERNEL);
 	if (ret)
-		return ret;
+		goto out;
 
 	highest_client_id++;
 	xa_set_mark(&clients, client->client_id, CLIENT_REGISTERED);
-	return 0;
+
+out:
+	up_write(&clients_rwsem);
+	return ret;
 }
 
 static void remove_client_id(struct ib_client *client)
@@ -1834,35 +1776,25 @@ int ib_register_client(struct ib_client *client)
 {
 	struct ib_device *device;
 	unsigned long index;
-	bool need_unreg = false;
 	int ret;
 
 	refcount_set(&client->uses, 1);
 	init_completion(&client->uses_zero);
-
-	/*
-	 * The devices_rwsem is held in write mode to ensure that a racing
-	 * ib_register_device() sees a consisent view of clients and devices.
-	 */
-	down_write(&devices_rwsem);
-	down_write(&clients_rwsem);
 	ret = assign_client_id(client);
 	if (ret)
-		goto out;
+		return ret;
 
-	need_unreg = true;
+	down_read(&devices_rwsem);
 	xa_for_each_marked (&devices, index, device, DEVICE_REGISTERED) {
 		ret = add_client_context(device, client);
-		if (ret)
-			goto out;
+		if (ret) {
+			up_read(&devices_rwsem);
+			ib_unregister_client(client);
+			return ret;
+		}
 	}
-	ret = 0;
-out:
-	up_write(&clients_rwsem);
-	up_write(&devices_rwsem);
-	if (need_unreg && ret)
-		ib_unregister_client(client);
-	return ret;
+	up_read(&devices_rwsem);
+	return 0;
 }
 EXPORT_SYMBOL(ib_register_client);
 
@@ -2202,14 +2134,10 @@ static void add_ndev_hash(struct ib_port_data *pdata)
 int ib_device_set_netdev(struct ib_device *ib_dev, struct net_device *ndev,
 			 u32 port)
 {
-	enum rdma_nl_notify_event_type etype;
 	struct net_device *old_ndev;
 	struct ib_port_data *pdata;
 	unsigned long flags;
 	int ret;
-
-	if (!rdma_is_port_valid(ib_dev, port))
-		return -EINVAL;
 
 	/*
 	 * Drivers wish to call this before ib_register_driver, so we have to
@@ -2218,6 +2146,9 @@ int ib_device_set_netdev(struct ib_device *ib_dev, struct net_device *ndev,
 	ret = alloc_port_data(ib_dev);
 	if (ret)
 		return ret;
+
+	if (!rdma_is_port_valid(ib_dev, port))
+		return -EINVAL;
 
 	pdata = &ib_dev->port_data[port];
 	spin_lock_irqsave(&pdata->netdev_lock, flags);
@@ -2228,19 +2159,14 @@ int ib_device_set_netdev(struct ib_device *ib_dev, struct net_device *ndev,
 		return 0;
 	}
 
+	if (ndev)
+		dev_hold(ndev);
 	rcu_assign_pointer(pdata->netdev, ndev);
-	netdev_put(old_ndev, &pdata->netdev_tracker);
-	netdev_hold(ndev, &pdata->netdev_tracker, GFP_ATOMIC);
 	spin_unlock_irqrestore(&pdata->netdev_lock, flags);
 
 	add_ndev_hash(pdata);
-
-	/* Make sure that the device is registered before we send events */
-	if (xa_load(&devices, ib_dev->index) != ib_dev)
-		return 0;
-
-	etype = ndev ? RDMA_NETDEV_ATTACH_EVENT : RDMA_NETDEV_DETACH_EVENT;
-	rdma_nl_notify_event(ib_dev, port, etype);
+	if (old_ndev)
+		dev_put(old_ndev);
 
 	return 0;
 }
@@ -2273,7 +2199,7 @@ static void free_netdevs(struct ib_device *ib_dev)
 			 * comparisons after the put
 			 */
 			rcu_assign_pointer(pdata->netdev, NULL);
-			netdev_put(ndev, &pdata->netdev_tracker);
+			dev_put(ndev);
 		}
 		spin_unlock_irqrestore(&pdata->netdev_lock, flags);
 	}
@@ -2288,9 +2214,6 @@ struct net_device *ib_device_get_netdev(struct ib_device *ib_dev,
 	if (!rdma_is_port_valid(ib_dev, port))
 		return NULL;
 
-	if (!ib_dev->port_data)
-		return NULL;
-
 	pdata = &ib_dev->port_data[port];
 
 	/*
@@ -2303,13 +2226,22 @@ struct net_device *ib_device_get_netdev(struct ib_device *ib_dev,
 		spin_lock(&pdata->netdev_lock);
 		res = rcu_dereference_protected(
 			pdata->netdev, lockdep_is_held(&pdata->netdev_lock));
-		dev_hold(res);
+		if (res)
+			dev_hold(res);
 		spin_unlock(&pdata->netdev_lock);
+	}
+
+	/*
+	 * If we are starting to unregister expedite things by preventing
+	 * propagation of an unregistering netdev.
+	 */
+	if (res && res->reg_state != NETREG_REGISTERED) {
+		dev_put(res);
+		return NULL;
 	}
 
 	return res;
 }
-EXPORT_SYMBOL(ib_device_get_netdev);
 
 /**
  * ib_device_get_by_netdev - Find an IB device associated with a netdev
@@ -2370,7 +2302,9 @@ void ib_enum_roce_netdev(struct ib_device *ib_dev,
 
 			if (filter(ib_dev, port, idev, filter_cookie))
 				cb(ib_dev, port, idev, cookie);
-			dev_put(idev);
+
+			if (idev)
+				dev_put(idev);
 		}
 }
 
@@ -2394,40 +2328,9 @@ void ib_enum_all_roce_netdevs(roce_netdev_filter filter,
 	unsigned long index;
 
 	down_read(&devices_rwsem);
-	xa_for_each_marked(&devices, index, dev, DEVICE_GID_UPDATES)
+	xa_for_each_marked (&devices, index, dev, DEVICE_REGISTERED)
 		ib_enum_roce_netdev(dev, filter, filter_cookie, cb, cookie);
 	up_read(&devices_rwsem);
-}
-
-/**
- * ib_device_enable_gid_updates - Mark device as ready for GID cache updates
- * @device: Device to mark
- *
- * Called after GID table is allocated and initialized. After this mark is set,
- * netdevice event handlers can update the device's GID cache. This allows
- * events that arrive during device registration to be processed, avoiding
- * stale GID entries when netdev properties change during the device
- * registration process.
- */
-void ib_device_enable_gid_updates(struct ib_device *device)
-{
-	down_write(&devices_rwsem);
-	xa_set_mark(&devices, device->index, DEVICE_GID_UPDATES);
-	up_write(&devices_rwsem);
-}
-
-/**
- * ib_device_disable_gid_updates - Clear the GID updates mark
- * @device: Device to unmark
- *
- * Called before GID table cleanup to prevent event handlers from accessing
- * the device while it's being torn down.
- */
-void ib_device_disable_gid_updates(struct ib_device *device)
-{
-	down_write(&devices_rwsem);
-	xa_clear_mark(&devices, device->index, DEVICE_GID_UPDATES);
-	up_write(&devices_rwsem);
 }
 
 /*
@@ -2689,7 +2592,6 @@ void ib_set_device_ops(struct ib_device *dev, const struct ib_device_ops *ops)
 		ops->uverbs_no_driver_id_binding;
 
 	SET_DEVICE_OP(dev_ops, add_gid);
-	SET_DEVICE_OP(dev_ops, add_sub_dev);
 	SET_DEVICE_OP(dev_ops, advise_mr);
 	SET_DEVICE_OP(dev_ops, alloc_dm);
 	SET_DEVICE_OP(dev_ops, alloc_hw_device_stats);
@@ -2724,7 +2626,6 @@ void ib_set_device_ops(struct ib_device *dev, const struct ib_device_ops *ops)
 	SET_DEVICE_OP(dev_ops, dealloc_ucontext);
 	SET_DEVICE_OP(dev_ops, dealloc_xrcd);
 	SET_DEVICE_OP(dev_ops, del_gid);
-	SET_DEVICE_OP(dev_ops, del_sub_dev);
 	SET_DEVICE_OP(dev_ops, dereg_mr);
 	SET_DEVICE_OP(dev_ops, destroy_ah);
 	SET_DEVICE_OP(dev_ops, destroy_counters);
@@ -2748,8 +2649,6 @@ void ib_set_device_ops(struct ib_device *dev, const struct ib_device_ops *ops)
 	SET_DEVICE_OP(dev_ops, fill_res_mr_entry_raw);
 	SET_DEVICE_OP(dev_ops, fill_res_qp_entry);
 	SET_DEVICE_OP(dev_ops, fill_res_qp_entry_raw);
-	SET_DEVICE_OP(dev_ops, fill_res_srq_entry);
-	SET_DEVICE_OP(dev_ops, fill_res_srq_entry_raw);
 	SET_DEVICE_OP(dev_ops, fill_stat_mr_entry);
 	SET_DEVICE_OP(dev_ops, get_dev_fw_str);
 	SET_DEVICE_OP(dev_ops, get_dma_mr);
@@ -2820,57 +2719,6 @@ void ib_set_device_ops(struct ib_device *dev, const struct ib_device_ops *ops)
 	SET_OBJ_SIZE(dev_ops, ib_xrcd);
 }
 EXPORT_SYMBOL(ib_set_device_ops);
-
-int ib_add_sub_device(struct ib_device *parent,
-		      enum rdma_nl_dev_type type,
-		      const char *name)
-{
-	struct ib_device *sub;
-	int ret = 0;
-
-	if (!parent->ops.add_sub_dev || !parent->ops.del_sub_dev)
-		return -EOPNOTSUPP;
-
-	if (!ib_device_try_get(parent))
-		return -EINVAL;
-
-	sub = parent->ops.add_sub_dev(parent, type, name);
-	if (IS_ERR(sub)) {
-		ib_device_put(parent);
-		return PTR_ERR(sub);
-	}
-
-	sub->type = type;
-	sub->parent = parent;
-
-	mutex_lock(&parent->subdev_lock);
-	list_add_tail(&parent->subdev_list_head, &sub->subdev_list);
-	mutex_unlock(&parent->subdev_lock);
-
-	return ret;
-}
-EXPORT_SYMBOL(ib_add_sub_device);
-
-int ib_del_sub_device_and_put(struct ib_device *sub)
-{
-	struct ib_device *parent = sub->parent;
-
-	if (!parent) {
-		ib_device_put(sub);
-		return -EOPNOTSUPP;
-	}
-
-	mutex_lock(&parent->subdev_lock);
-	list_del(&sub->subdev_list);
-	mutex_unlock(&parent->subdev_lock);
-
-	ib_device_put(sub);
-	parent->ops.del_sub_dev(sub);
-	ib_device_put(parent);
-
-	return 0;
-}
-EXPORT_SYMBOL(ib_del_sub_device_and_put);
 
 #ifdef CONFIG_INFINIBAND_VIRT_DMA
 int ib_dma_virt_map_sg(struct ib_device *dev, struct scatterlist *sg, int nents)
@@ -3003,8 +2851,8 @@ err:
 static void __exit ib_core_cleanup(void)
 {
 	roce_gid_mgmt_cleanup();
-	rdma_nl_unregister(RDMA_NL_LS);
 	nldev_exit();
+	rdma_nl_unregister(RDMA_NL_LS);
 	unregister_pernet_device(&rdma_dev_net_ops);
 	unregister_blocking_lsm_notifier(&ibdev_lsm_nb);
 	ib_sa_cleanup();

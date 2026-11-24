@@ -14,7 +14,6 @@
 #else
 #include <stdio.h>
 #include <stdint.h>
-#include <stdarg.h>
 #endif
 
 #ifdef __cplusplus

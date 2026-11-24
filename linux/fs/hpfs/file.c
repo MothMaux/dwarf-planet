@@ -163,6 +163,11 @@ static int hpfs_read_folio(struct file *file, struct folio *folio)
 	return mpage_read_folio(folio, hpfs_get_block);
 }
 
+static int hpfs_writepage(struct page *page, struct writeback_control *wbc)
+{
+	return block_write_full_page(page, hpfs_get_block, wbc);
+}
+
 static void hpfs_readahead(struct readahead_control *rac)
 {
 	mpage_readahead(rac, hpfs_get_block);
@@ -190,11 +195,12 @@ static void hpfs_write_failed(struct address_space *mapping, loff_t to)
 
 static int hpfs_write_begin(struct file *file, struct address_space *mapping,
 			loff_t pos, unsigned len,
-			struct folio **foliop, void **fsdata)
+			struct page **pagep, void **fsdata)
 {
 	int ret;
 
-	ret = cont_write_begin(file, mapping, pos, len, foliop, fsdata,
+	*pagep = NULL;
+	ret = cont_write_begin(file, mapping, pos, len, pagep, fsdata,
 				hpfs_get_block,
 				&hpfs_i(mapping->host)->mmu_private);
 	if (unlikely(ret))
@@ -205,11 +211,11 @@ static int hpfs_write_begin(struct file *file, struct address_space *mapping,
 
 static int hpfs_write_end(struct file *file, struct address_space *mapping,
 			loff_t pos, unsigned len, unsigned copied,
-			struct folio *folio, void *fsdata)
+			struct page *pagep, void *fsdata)
 {
 	struct inode *inode = mapping->host;
 	int err;
-	err = generic_write_end(file, mapping, pos, len, copied, folio, fsdata);
+	err = generic_write_end(file, mapping, pos, len, copied, pagep, fsdata);
 	if (err < len)
 		hpfs_write_failed(mapping, pos + len);
 	if (!(err < 0)) {
@@ -242,12 +248,12 @@ const struct address_space_operations hpfs_aops = {
 	.dirty_folio	= block_dirty_folio,
 	.invalidate_folio = block_invalidate_folio,
 	.read_folio = hpfs_read_folio,
+	.writepage = hpfs_writepage,
 	.readahead = hpfs_readahead,
 	.writepages = hpfs_writepages,
 	.write_begin = hpfs_write_begin,
 	.write_end = hpfs_write_end,
-	.bmap = _hpfs_bmap,
-	.migrate_folio = buffer_migrate_folio,
+	.bmap = _hpfs_bmap
 };
 
 const struct file_operations hpfs_file_ops =
@@ -258,7 +264,7 @@ const struct file_operations hpfs_file_ops =
 	.mmap		= generic_file_mmap,
 	.release	= hpfs_file_release,
 	.fsync		= hpfs_file_fsync,
-	.splice_read	= filemap_splice_read,
+	.splice_read	= generic_file_splice_read,
 	.unlocked_ioctl	= hpfs_ioctl,
 	.compat_ioctl	= compat_ptr_ioctl,
 };

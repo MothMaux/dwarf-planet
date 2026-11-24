@@ -227,8 +227,10 @@ static int qcom_ipcc_setup_mbox(struct qcom_ipcc *ipcc,
 			ret = of_parse_phandle_with_args(client_dn, "mboxes",
 						"#mbox-cells", j, &curr_ph);
 			of_node_put(curr_ph.np);
-			if (!ret && curr_ph.np == controller_dn)
+			if (!ret && curr_ph.np == controller_dn) {
 				ipcc->num_chans++;
+				break;
+			}
 		}
 	}
 
@@ -326,12 +328,14 @@ err_mbox:
 	return ret;
 }
 
-static void qcom_ipcc_remove(struct platform_device *pdev)
+static int qcom_ipcc_remove(struct platform_device *pdev)
 {
 	struct qcom_ipcc *ipcc = platform_get_drvdata(pdev);
 
 	disable_irq_wake(ipcc->irq);
 	irq_domain_remove(ipcc->irq_domain);
+
+	return 0;
 }
 
 static const struct of_device_id qcom_ipcc_of_match[] = {
@@ -346,7 +350,7 @@ static const struct dev_pm_ops qcom_ipcc_dev_pm_ops = {
 
 static struct platform_driver qcom_ipcc_driver = {
 	.probe = qcom_ipcc_probe,
-	.remove_new = qcom_ipcc_remove,
+	.remove = qcom_ipcc_remove,
 	.driver = {
 		.name = "qcom-ipcc",
 		.of_match_table = qcom_ipcc_of_match,

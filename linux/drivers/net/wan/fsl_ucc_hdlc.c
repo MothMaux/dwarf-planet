@@ -34,8 +34,6 @@
 #define TDM_PPPOHT_SLIC_MAXIN
 #define RX_BD_ERRORS (R_CD_S | R_OV_S | R_CR_S | R_AB_S | R_NO_S | R_LG_S)
 
-static int uhdlc_close(struct net_device *dev);
-
 static struct ucc_tdm_info utdm_primary_info = {
 	.uf_info = {
 		.tsa = 0,
@@ -710,7 +708,6 @@ static int uhdlc_open(struct net_device *dev)
 	hdlc_device *hdlc = dev_to_hdlc(dev);
 	struct ucc_hdlc_private *priv = hdlc->priv;
 	struct ucc_tdm *utdm = priv->utdm;
-	int rc = 0;
 
 	if (priv->hdlc_busy != 1) {
 		if (request_irq(priv->ut_info->uf_info.irq,
@@ -734,13 +731,10 @@ static int uhdlc_open(struct net_device *dev)
 		napi_enable(&priv->napi);
 		netdev_reset_queue(dev);
 		netif_start_queue(dev);
-
-		rc = hdlc_open(dev);
-		if (rc)
-			uhdlc_close(dev);
+		hdlc_open(dev);
 	}
 
-	return rc;
+	return 0;
 }
 
 static void uhdlc_memclean(struct ucc_hdlc_private *priv)
@@ -790,14 +784,18 @@ static void uhdlc_memclean(struct ucc_hdlc_private *priv)
 
 	if (priv->rx_buffer) {
 		dma_free_coherent(priv->dev,
-				  (RX_BD_RING_LEN + TX_BD_RING_LEN) * MAX_RX_BUF_LENGTH,
+				  RX_BD_RING_LEN * MAX_RX_BUF_LENGTH,
 				  priv->rx_buffer, priv->dma_rx_addr);
 		priv->rx_buffer = NULL;
 		priv->dma_rx_addr = 0;
+	}
 
+	if (priv->tx_buffer) {
+		dma_free_coherent(priv->dev,
+				  TX_BD_RING_LEN * MAX_RX_BUF_LENGTH,
+				  priv->tx_buffer, priv->dma_tx_addr);
 		priv->tx_buffer = NULL;
 		priv->dma_tx_addr = 0;
-
 	}
 }
 
@@ -825,8 +823,6 @@ static int uhdlc_close(struct net_device *dev)
 	netif_stop_queue(dev);
 	netdev_reset_queue(dev);
 	priv->hdlc_busy = 0;
-
-	hdlc_close(dev);
 
 	return 0;
 }
@@ -1181,9 +1177,14 @@ static int ucc_hdlc_probe(struct platform_device *pdev)
 	uhdlc_priv->dev = &pdev->dev;
 	uhdlc_priv->ut_info = ut_info;
 
-	uhdlc_priv->tsa = of_property_read_bool(np, "fsl,tdm-interface");
-	uhdlc_priv->loopback = of_property_read_bool(np, "fsl,ucc-internal-loopback");
-	uhdlc_priv->hdlc_bus = of_property_read_bool(np, "fsl,hdlc-bus");
+	if (of_get_property(np, "fsl,tdm-interface", NULL))
+		uhdlc_priv->tsa = 1;
+
+	if (of_get_property(np, "fsl,ucc-internal-loopback", NULL))
+		uhdlc_priv->loopback = 1;
+
+	if (of_get_property(np, "fsl,hdlc-bus", NULL))
+		uhdlc_priv->hdlc_bus = 1;
 
 	if (uhdlc_priv->tsa == 1) {
 		utdm = kzalloc(sizeof(*utdm), GFP_KERNEL);
@@ -1242,11 +1243,9 @@ static int ucc_hdlc_probe(struct platform_device *pdev)
 free_dev:
 	free_netdev(dev);
 undo_uhdlc_init:
-	if (utdm)
-		iounmap(utdm->siram);
+	iounmap(utdm->siram);
 unmap_si_regs:
-	if (utdm)
-		iounmap(utdm->si_regs);
+	iounmap(utdm->si_regs);
 free_utdm:
 	if (uhdlc_priv->tsa)
 		kfree(utdm);
@@ -1255,7 +1254,7 @@ free_uhdlc_priv:
 	return ret;
 }
 
-static void ucc_hdlc_remove(struct platform_device *pdev)
+static int ucc_hdlc_remove(struct platform_device *pdev)
 {
 	struct ucc_hdlc_private *priv = dev_get_drvdata(&pdev->dev);
 
@@ -1273,6 +1272,8 @@ static void ucc_hdlc_remove(struct platform_device *pdev)
 	kfree(priv);
 
 	dev_info(&pdev->dev, "UCC based hdlc module removed\n");
+
+	return 0;
 }
 
 static const struct of_device_id fsl_ucc_hdlc_of_match[] = {
@@ -1286,7 +1287,7 @@ MODULE_DEVICE_TABLE(of, fsl_ucc_hdlc_of_match);
 
 static struct platform_driver ucc_hdlc_driver = {
 	.probe	= ucc_hdlc_probe,
-	.remove_new = ucc_hdlc_remove,
+	.remove	= ucc_hdlc_remove,
 	.driver	= {
 		.name		= DRV_NAME,
 		.pm		= HDLC_PM_OPS,

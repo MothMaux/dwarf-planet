@@ -11,7 +11,7 @@
 #include <linux/io.h>
 #include <linux/mailbox_controller.h>
 #include <linux/module.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 
@@ -62,6 +62,7 @@ struct sprd_mbox_priv {
 	void __iomem		*outbox_base;
 	/*  Base register address for supplementary outbox */
 	void __iomem		*supp_base;
+	struct clk		*clk;
 	u32			outbox_fifo_depth;
 
 	struct mutex		lock;
@@ -166,11 +167,6 @@ static irqreturn_t sprd_mbox_inbox_isr(int irq, void *data)
 		return IRQ_NONE;
 	}
 
-	/* Clear FIFO delivery and overflow status first */
-	writel(fifo_sts &
-	       (SPRD_INBOX_FIFO_DELIVER_MASK | SPRD_INBOX_FIFO_OVERLOW_MASK),
-	       priv->inbox_base + SPRD_MBOX_FIFO_RST);
-
 	while (send_sts) {
 		id = __ffs(send_sts);
 		send_sts &= (send_sts - 1);
@@ -185,6 +181,11 @@ static irqreturn_t sprd_mbox_inbox_isr(int irq, void *data)
 		if (!(busy & BIT(id)))
 			mbox_chan_txdone(chan, 0);
 	}
+
+	/* Clear FIFO delivery and overflow status */
+	writel(fifo_sts &
+	       (SPRD_INBOX_FIFO_DELIVER_MASK | SPRD_INBOX_FIFO_OVERLOW_MASK),
+	       priv->inbox_base + SPRD_MBOX_FIFO_RST);
 
 	/* Clear irq status */
 	writel(SPRD_MBOX_IRQ_CLR, priv->inbox_base + SPRD_MBOX_IRQ_STS);
@@ -243,19 +244,21 @@ static int sprd_mbox_startup(struct mbox_chan *chan)
 		/* Select outbox FIFO mode and reset the outbox FIFO status */
 		writel(0x0, priv->outbox_base + SPRD_MBOX_FIFO_RST);
 
-		/* Enable inbox FIFO delivery interrupt */
-		val = SPRD_INBOX_FIFO_IRQ_MASK;
-		val &= ~SPRD_INBOX_FIFO_DELIVER_IRQ;
+		/* Enable inbox FIFO overflow and delivery interrupt */
+		val = readl(priv->inbox_base + SPRD_MBOX_IRQ_MSK);
+		val &= ~(SPRD_INBOX_FIFO_OVERFLOW_IRQ | SPRD_INBOX_FIFO_DELIVER_IRQ);
 		writel(val, priv->inbox_base + SPRD_MBOX_IRQ_MSK);
 
 		/* Enable outbox FIFO not empty interrupt */
-		val = SPRD_OUTBOX_FIFO_IRQ_MASK;
+		val = readl(priv->outbox_base + SPRD_MBOX_IRQ_MSK);
 		val &= ~SPRD_OUTBOX_FIFO_NOT_EMPTY_IRQ;
 		writel(val, priv->outbox_base + SPRD_MBOX_IRQ_MSK);
 
 		/* Enable supplementary outbox as the fundamental one */
 		if (priv->supp_base) {
 			writel(0x0, priv->supp_base + SPRD_MBOX_FIFO_RST);
+			val = readl(priv->supp_base + SPRD_MBOX_IRQ_MSK);
+			val &= ~SPRD_OUTBOX_FIFO_NOT_EMPTY_IRQ;
 			writel(val, priv->supp_base + SPRD_MBOX_IRQ_MSK);
 		}
 	}
@@ -288,13 +291,19 @@ static const struct mbox_chan_ops sprd_mbox_ops = {
 	.shutdown	= sprd_mbox_shutdown,
 };
 
+static void sprd_mbox_disable(void *data)
+{
+	struct sprd_mbox_priv *priv = data;
+
+	clk_disable_unprepare(priv->clk);
+}
+
 static int sprd_mbox_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct sprd_mbox_priv *priv;
 	int ret, inbox_irq, outbox_irq, supp_irq;
 	unsigned long id, supp;
-	struct clk *clk;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -322,10 +331,20 @@ static int sprd_mbox_probe(struct platform_device *pdev)
 	if (IS_ERR(priv->outbox_base))
 		return PTR_ERR(priv->outbox_base);
 
-	clk = devm_clk_get_enabled(dev, "enable");
-	if (IS_ERR(clk)) {
+	priv->clk = devm_clk_get(dev, "enable");
+	if (IS_ERR(priv->clk)) {
 		dev_err(dev, "failed to get mailbox clock\n");
-		return PTR_ERR(clk);
+		return PTR_ERR(priv->clk);
+	}
+
+	ret = clk_prepare_enable(priv->clk);
+	if (ret)
+		return ret;
+
+	ret = devm_add_action_or_reset(dev, sprd_mbox_disable, priv);
+	if (ret) {
+		dev_err(dev, "failed to add mailbox disable action\n");
+		return ret;
 	}
 
 	inbox_irq = platform_get_irq_byname(pdev, "inbox");

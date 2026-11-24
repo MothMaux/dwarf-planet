@@ -8,6 +8,7 @@
  * hypercalls are properly masked or unmasked to the guest when disabled or
  * enabled from the KVM userspace, respectively.
  */
+
 #include <errno.h>
 #include <linux/arm-smccc.h>
 #include <asm/kvm.h>
@@ -104,17 +105,15 @@ static void guest_test_hvc(const struct test_hvc_info *hc_info)
 		switch (stage) {
 		case TEST_STAGE_HVC_IFACE_FEAT_DISABLED:
 		case TEST_STAGE_HVC_IFACE_FALSE_INFO:
-			__GUEST_ASSERT(res.a0 == SMCCC_RET_NOT_SUPPORTED,
-				       "a0 = 0x%lx, func_id = 0x%x, arg1 = 0x%lx, stage = %u",
-					res.a0, hc_info->func_id, hc_info->arg1, stage);
+			GUEST_ASSERT_3(res.a0 == SMCCC_RET_NOT_SUPPORTED,
+					res.a0, hc_info->func_id, hc_info->arg1);
 			break;
 		case TEST_STAGE_HVC_IFACE_FEAT_ENABLED:
-			__GUEST_ASSERT(res.a0 != SMCCC_RET_NOT_SUPPORTED,
-				       "a0 = 0x%lx, func_id = 0x%x, arg1 = 0x%lx, stage = %u",
-					res.a0, hc_info->func_id, hc_info->arg1, stage);
+			GUEST_ASSERT_3(res.a0 != SMCCC_RET_NOT_SUPPORTED,
+					res.a0, hc_info->func_id, hc_info->arg1);
 			break;
 		default:
-			GUEST_FAIL("Unexpected stage = %u", stage);
+			GUEST_ASSERT_1(0, stage);
 		}
 	}
 }
@@ -133,7 +132,7 @@ static void guest_code(void)
 			guest_test_hvc(false_hvc_info);
 			break;
 		default:
-			GUEST_FAIL("Unexpected stage = %u", stage);
+			GUEST_ASSERT_1(0, stage);
 		}
 
 		GUEST_SYNC(stage);
@@ -175,18 +174,18 @@ static void test_fw_regs_before_vm_start(struct kvm_vcpu *vcpu)
 		/* First 'read' should be an upper limit of the features supported */
 		vcpu_get_reg(vcpu, reg_info->reg, &val);
 		TEST_ASSERT(val == FW_REG_ULIMIT_VAL(reg_info->max_feat_bit),
-			"Expected all the features to be set for reg: 0x%lx; expected: 0x%lx; read: 0x%lx",
+			"Expected all the features to be set for reg: 0x%lx; expected: 0x%lx; read: 0x%lx\n",
 			reg_info->reg, FW_REG_ULIMIT_VAL(reg_info->max_feat_bit), val);
 
 		/* Test a 'write' by disabling all the features of the register map */
 		ret = __vcpu_set_reg(vcpu, reg_info->reg, 0);
 		TEST_ASSERT(ret == 0,
-			"Failed to clear all the features of reg: 0x%lx; ret: %d",
+			"Failed to clear all the features of reg: 0x%lx; ret: %d\n",
 			reg_info->reg, errno);
 
 		vcpu_get_reg(vcpu, reg_info->reg, &val);
 		TEST_ASSERT(val == 0,
-			"Expected all the features to be cleared for reg: 0x%lx", reg_info->reg);
+			"Expected all the features to be cleared for reg: 0x%lx\n", reg_info->reg);
 
 		/*
 		 * Test enabling a feature that's not supported.
@@ -195,7 +194,7 @@ static void test_fw_regs_before_vm_start(struct kvm_vcpu *vcpu)
 		if (reg_info->max_feat_bit < 63) {
 			ret = __vcpu_set_reg(vcpu, reg_info->reg, BIT(reg_info->max_feat_bit + 1));
 			TEST_ASSERT(ret != 0 && errno == EINVAL,
-			"Unexpected behavior or return value (%d) while setting an unsupported feature for reg: 0x%lx",
+			"Unexpected behavior or return value (%d) while setting an unsupported feature for reg: 0x%lx\n",
 			errno, reg_info->reg);
 		}
 	}
@@ -216,7 +215,7 @@ static void test_fw_regs_after_vm_start(struct kvm_vcpu *vcpu)
 		 */
 		vcpu_get_reg(vcpu, reg_info->reg, &val);
 		TEST_ASSERT(val == 0,
-			"Expected all the features to be cleared for reg: 0x%lx",
+			"Expected all the features to be cleared for reg: 0x%lx\n",
 			reg_info->reg);
 
 		/*
@@ -226,7 +225,7 @@ static void test_fw_regs_after_vm_start(struct kvm_vcpu *vcpu)
 		 */
 		ret = __vcpu_set_reg(vcpu, reg_info->reg, FW_REG_ULIMIT_VAL(reg_info->max_feat_bit));
 		TEST_ASSERT(ret != 0 && errno == EBUSY,
-		"Unexpected behavior or return value (%d) while setting a feature while VM is running for reg: 0x%lx",
+		"Unexpected behavior or return value (%d) while setting a feature while VM is running for reg: 0x%lx\n",
 		errno, reg_info->reg);
 	}
 }
@@ -237,6 +236,7 @@ static struct kvm_vm *test_vm_create(struct kvm_vcpu **vcpu)
 
 	vm = vm_create_with_one_vcpu(vcpu, guest_code);
 
+	ucall_init(vm, NULL);
 	steal_time_init(*vcpu);
 
 	return vm;
@@ -265,7 +265,7 @@ static void test_guest_stage(struct kvm_vm **vm, struct kvm_vcpu **vcpu)
 	case TEST_STAGE_HVC_IFACE_FALSE_INFO:
 		break;
 	default:
-		TEST_FAIL("Unknown test stage: %d", prev_stage);
+		TEST_FAIL("Unknown test stage: %d\n", prev_stage);
 	}
 }
 
@@ -291,10 +291,13 @@ static void test_run(void)
 			guest_done = true;
 			break;
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT(uc);
+			REPORT_GUEST_ASSERT_N(uc, "values: 0x%lx, 0x%lx; 0x%lx, stage: %u",
+					      GUEST_ASSERT_ARG(uc, 0),
+					      GUEST_ASSERT_ARG(uc, 1),
+					      GUEST_ASSERT_ARG(uc, 2), stage);
 			break;
 		default:
-			TEST_FAIL("Unexpected guest exit");
+			TEST_FAIL("Unexpected guest exit\n");
 		}
 	}
 
@@ -303,6 +306,8 @@ static void test_run(void)
 
 int main(void)
 {
+	setbuf(stdout, NULL);
+
 	test_run();
 	return 0;
 }

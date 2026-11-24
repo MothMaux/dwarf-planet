@@ -194,18 +194,6 @@
 	        #clock-cells = <0>;
 	        clock-frequency = <26000000>;
 	};
-
-	dpcon {
-		compatible = "dp-connector";
-		label = "P11";
-		type = "full-size";
-
-		port {
-			dpcon_in: endpoint {
-				remote-endpoint = <&dpsub_dp_out>;
-			};
-		};
-	};
 };
 
 &psgtr {
@@ -244,14 +232,22 @@
 	phy-names = "dp-phy0", "dp-phy1";
 	phys = <&psgtr 3 PHY_TYPE_DP 0 2>,
 	       <&psgtr 2 PHY_TYPE_DP 1 2>;
+};
 
-	ports {
-		port@5 {
-			dpsub_dp_out: endpoint {
-				remote-endpoint = <&dpcon_in>;
-			};
-		};
-	};
+&zynqmp_dp_snd_pcm0 {
+	status = "okay";
+};
+
+&zynqmp_dp_snd_pcm1 {
+	status = "okay";
+};
+
+&zynqmp_dp_snd_card0 {
+	status = "okay";
+};
+
+&zynqmp_dp_snd_codec0 {
+	status = "okay";
 };
 
 &zynqmp_dpdma {
@@ -560,22 +556,48 @@
 };
 
 &fpga_axi {
-	i2s_tx_dma: dma-controller@81001000 {
+	i2s_tx_dma: dma@81001000  {
 		compatible = "adi,axi-dmac-1.00.a";
 		reg = <0x0 0x81001000 0x1000>;
 		#dma-cells = <1>;
 		#clock-cells = <0>;
 		interrupts = <0 95 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&zynqmp_clk 73>;
+
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <64>;
+				adi,source-bus-type = <0>;
+				adi,destination-bus-width = <32>;
+				adi,destination-bus-type = <1>;
+			};
+		};
 	};
 
-	i2s_rx_dma: dma-controller@81000000 {
+	i2s_rx_dma: dma@81000000  {
 		compatible = "adi,axi-dmac-1.00.a";
 		reg = <0x0 0x81000000 0x1000>;
 		#dma-cells = <1>;
 		#clock-cells = <0>;
 		interrupts = <0 96 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&zynqmp_clk 73>;
+
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <32>;
+				adi,source-bus-type = <1>;
+				adi,destination-bus-width = <64>;
+				adi,destination-bus-type = <0>;
+			};
+		};
 	};
 
 	axi_i2s_adi: axi-i2s-adi@82000000 {

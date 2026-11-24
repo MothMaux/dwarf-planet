@@ -10,7 +10,6 @@
 #include <linux/linkage.h>
 #include <linux/lockdep.h>
 #include <linux/ptrace.h>
-#include <linux/resume_user_mode.h>
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
 #include <linux/thread_info.h>
@@ -31,7 +30,7 @@
 /*
  * Handle IRQ/context state management when entering from kernel mode.
  * Before this function is called it is not safe to call regular kernel code,
- * instrumentable code, or any code which may trigger an exception.
+ * intrumentable code, or any code which may trigger an exception.
  *
  * This is intended to match the logic in irqentry_enter(), handling the kernel
  * mode transitions only.
@@ -64,7 +63,7 @@ static void noinstr enter_from_kernel_mode(struct pt_regs *regs)
 /*
  * Handle IRQ/context state management when exiting to kernel mode.
  * After this function returns it is not safe to call regular kernel code,
- * instrumentable code, or any code which may trigger an exception.
+ * intrumentable code, or any code which may trigger an exception.
  *
  * This is intended to match the logic in irqentry_exit(), handling the kernel
  * mode transitions only, and with preemption handled elsewhere.
@@ -98,12 +97,12 @@ static void noinstr exit_to_kernel_mode(struct pt_regs *regs)
 /*
  * Handle IRQ/context state management when entering from user mode.
  * Before this function is called it is not safe to call regular kernel code,
- * instrumentable code, or any code which may trigger an exception.
+ * intrumentable code, or any code which may trigger an exception.
  */
 static __always_inline void __enter_from_user_mode(void)
 {
 	lockdep_hardirqs_off(CALLER_ADDR0);
-	CT_WARN_ON(ct_state() != CT_STATE_USER);
+	CT_WARN_ON(ct_state() != CONTEXT_USER);
 	user_exit_irqoff();
 	trace_hardirqs_off_finish();
 	mte_disable_tco_entry(current);
@@ -117,7 +116,7 @@ static __always_inline void enter_from_user_mode(struct pt_regs *regs)
 /*
  * Handle IRQ/context state management when exiting to user mode.
  * After this function returns it is not safe to call regular kernel code,
- * instrumentable code, or any code which may trigger an exception.
+ * intrumentable code, or any code which may trigger an exception.
  */
 static __always_inline void __exit_to_user_mode(void)
 {
@@ -127,55 +126,20 @@ static __always_inline void __exit_to_user_mode(void)
 	lockdep_hardirqs_on(CALLER_ADDR0);
 }
 
-static void do_notify_resume(struct pt_regs *regs, unsigned long thread_flags)
-{
-	do {
-		local_irq_enable();
-
-		if (thread_flags & _TIF_NEED_RESCHED)
-			schedule();
-
-		if (thread_flags & _TIF_UPROBE)
-			uprobe_notify_resume(regs);
-
-		if (thread_flags & _TIF_MTE_ASYNC_FAULT) {
-			clear_thread_flag(TIF_MTE_ASYNC_FAULT);
-			send_sig_fault(SIGSEGV, SEGV_MTEAERR,
-				       (void __user *)NULL, current);
-		}
-
-		if (thread_flags & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
-			do_signal(regs);
-
-		if (thread_flags & _TIF_NOTIFY_RESUME)
-			resume_user_mode_work(regs);
-
-		if (thread_flags & _TIF_FOREIGN_FPSTATE)
-			fpsimd_restore_current_state();
-
-		local_irq_disable();
-		thread_flags = read_thread_flags();
-	} while (thread_flags & _TIF_WORK_MASK);
-}
-
-static __always_inline void exit_to_user_mode_prepare(struct pt_regs *regs)
+static __always_inline void prepare_exit_to_user_mode(struct pt_regs *regs)
 {
 	unsigned long flags;
 
-	local_irq_disable();
+	local_daif_mask();
 
 	flags = read_thread_flags();
 	if (unlikely(flags & _TIF_WORK_MASK))
 		do_notify_resume(regs, flags);
-
-	local_daif_mask();
-
-	lockdep_sys_exit();
 }
 
 static __always_inline void exit_to_user_mode(struct pt_regs *regs)
 {
-	exit_to_user_mode_prepare(regs);
+	prepare_exit_to_user_mode(regs);
 	mte_check_tfsr_exit();
 	__exit_to_user_mode();
 }
@@ -188,7 +152,7 @@ asmlinkage void noinstr asm_exit_to_user_mode(struct pt_regs *regs)
 /*
  * Handle IRQ/context state management when entering an NMI from user/kernel
  * mode. Before this function is called it is not safe to call regular kernel
- * code, instrumentable code, or any code which may trigger an exception.
+ * code, intrumentable code, or any code which may trigger an exception.
  */
 static void noinstr arm64_enter_nmi(struct pt_regs *regs)
 {
@@ -206,7 +170,7 @@ static void noinstr arm64_enter_nmi(struct pt_regs *regs)
 /*
  * Handle IRQ/context state management when exiting an NMI from user/kernel
  * mode. After this function returns it is not safe to call regular kernel
- * code, instrumentable code, or any code which may trigger an exception.
+ * code, intrumentable code, or any code which may trigger an exception.
  */
 static void noinstr arm64_exit_nmi(struct pt_regs *regs)
 {
@@ -228,7 +192,7 @@ static void noinstr arm64_exit_nmi(struct pt_regs *regs)
 /*
  * Handle IRQ/context state management when entering a debug exception from
  * kernel mode. Before this function is called it is not safe to call regular
- * kernel code, instrumentable code, or any code which may trigger an exception.
+ * kernel code, intrumentable code, or any code which may trigger an exception.
  */
 static void noinstr arm64_enter_el1_dbg(struct pt_regs *regs)
 {
@@ -243,7 +207,7 @@ static void noinstr arm64_enter_el1_dbg(struct pt_regs *regs)
 /*
  * Handle IRQ/context state management when exiting a debug exception from
  * kernel mode. After this function returns it is not safe to call regular
- * kernel code, instrumentable code, or any code which may trigger an exception.
+ * kernel code, intrumentable code, or any code which may trigger an exception.
  */
 static void noinstr arm64_exit_el1_dbg(struct pt_regs *regs)
 {
@@ -389,58 +353,6 @@ static bool cortex_a76_erratum_1463225_debug_handler(struct pt_regs *regs)
 }
 #endif /* CONFIG_ARM64_ERRATUM_1463225 */
 
-/*
- * As per the ABI exit SME streaming mode and clear the SVE state not
- * shared with FPSIMD on syscall entry.
- */
-static inline void fpsimd_syscall_enter(void)
-{
-	/* Ensure PSTATE.SM is clear, but leave PSTATE.ZA as-is. */
-	if (system_supports_sme())
-		sme_smstop_sm();
-
-	/*
-	 * The CPU is not in streaming mode. If non-streaming SVE is not
-	 * supported, there is no SVE state that needs to be discarded.
-	 */
-	if (!system_supports_sve())
-		return;
-
-	if (test_thread_flag(TIF_SVE)) {
-		unsigned int sve_vq_minus_one;
-
-		sve_vq_minus_one = sve_vq_from_vl(task_get_sve_vl(current)) - 1;
-		sve_flush_live(true, sve_vq_minus_one);
-	}
-
-	/*
-	 * Any live non-FPSIMD SVE state has been zeroed. Allow
-	 * fpsimd_save_user_state() to lazily discard SVE state until either
-	 * the live state is unbound or fpsimd_syscall_exit() is called.
-	 */
-	__this_cpu_write(fpsimd_last_state.to_save, FP_STATE_FPSIMD);
-}
-
-static __always_inline void fpsimd_syscall_exit(void)
-{
-	if (!system_supports_sve())
-		return;
-
-	/*
-	 * The current task's user FPSIMD/SVE/SME state is now bound to this
-	 * CPU. The fpsimd_last_state.to_save value is either:
-	 *
-	 * - FP_STATE_FPSIMD, if the state has not been reloaded on this CPU
-	 *   since fpsimd_syscall_enter().
-	 *
-	 * - FP_STATE_CURRENT, if the state has been reloaded on this CPU at
-	 *   any point.
-	 *
-	 * Reset this to FP_STATE_CURRENT to stop lazy discarding.
-	 */
-	__this_cpu_write(fpsimd_last_state.to_save, FP_STATE_CURRENT);
-}
-
 UNHANDLED(el1t, 64, sync)
 UNHANDLED(el1t, 64, irq)
 UNHANDLED(el1t, 64, fiq)
@@ -472,7 +384,7 @@ static void noinstr el1_undef(struct pt_regs *regs, unsigned long esr)
 {
 	enter_from_kernel_mode(regs);
 	local_daif_inherit(regs);
-	do_el1_undef(regs, esr);
+	do_undefinstr(regs, esr);
 	local_daif_mask();
 	exit_to_kernel_mode(regs);
 }
@@ -658,7 +570,7 @@ static void noinstr el0_sys(struct pt_regs *regs, unsigned long esr)
 {
 	enter_from_user_mode(regs);
 	local_daif_restore(DAIF_PROCCTX);
-	do_el0_sys(esr, regs);
+	do_sysinstr(esr, regs);
 	exit_to_user_mode(regs);
 }
 
@@ -687,7 +599,7 @@ static void noinstr el0_undef(struct pt_regs *regs, unsigned long esr)
 {
 	enter_from_user_mode(regs);
 	local_daif_restore(DAIF_PROCCTX);
-	do_el0_undef(regs, esr);
+	do_undefinstr(regs, esr);
 	exit_to_user_mode(regs);
 }
 
@@ -696,14 +608,6 @@ static void noinstr el0_bti(struct pt_regs *regs)
 	enter_from_user_mode(regs);
 	local_daif_restore(DAIF_PROCCTX);
 	do_el0_bti(regs);
-	exit_to_user_mode(regs);
-}
-
-static void noinstr el0_mops(struct pt_regs *regs, unsigned long esr)
-{
-	enter_from_user_mode(regs);
-	local_daif_restore(DAIF_PROCCTX);
-	do_el0_mops(regs, esr);
 	exit_to_user_mode(regs);
 }
 
@@ -730,11 +634,8 @@ static void noinstr el0_svc(struct pt_regs *regs)
 {
 	enter_from_user_mode(regs);
 	cortex_a76_erratum_1463225_svc_handler();
-	fpsimd_syscall_enter();
-	local_daif_restore(DAIF_PROCCTX);
 	do_el0_svc(regs);
 	exit_to_user_mode(regs);
-	fpsimd_syscall_exit();
 }
 
 static void noinstr el0_fpac(struct pt_regs *regs, unsigned long esr)
@@ -786,9 +687,6 @@ asmlinkage void noinstr el0t_64_sync_handler(struct pt_regs *regs)
 		break;
 	case ESR_ELx_EC_BTI:
 		el0_bti(regs);
-		break;
-	case ESR_ELx_EC_MOPS:
-		el0_mops(regs, esr);
 		break;
 	case ESR_ELx_EC_BREAKPT_LOW:
 	case ESR_ELx_EC_SOFTSTP_LOW:
@@ -864,7 +762,7 @@ static void noinstr el0_cp15(struct pt_regs *regs, unsigned long esr)
 {
 	enter_from_user_mode(regs);
 	local_daif_restore(DAIF_PROCCTX);
-	do_el0_cp15(esr, regs);
+	do_cp15instr(esr, regs);
 	exit_to_user_mode(regs);
 }
 
@@ -872,7 +770,6 @@ static void noinstr el0_svc_compat(struct pt_regs *regs)
 {
 	enter_from_user_mode(regs);
 	cortex_a76_erratum_1463225_svc_handler();
-	local_daif_restore(DAIF_PROCCTX);
 	do_el0_svc_compat(regs);
 	exit_to_user_mode(regs);
 }
@@ -943,7 +840,7 @@ UNHANDLED(el0t, 32, error)
 #endif /* CONFIG_COMPAT */
 
 #ifdef CONFIG_VMAP_STACK
-asmlinkage void noinstr __noreturn handle_bad_stack(struct pt_regs *regs)
+asmlinkage void noinstr handle_bad_stack(struct pt_regs *regs)
 {
 	unsigned long esr = read_sysreg(esr_el1);
 	unsigned long far = read_sysreg(far_el1);

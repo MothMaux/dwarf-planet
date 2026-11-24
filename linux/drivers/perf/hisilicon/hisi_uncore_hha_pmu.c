@@ -510,11 +510,6 @@ static int hisi_hha_pmu_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "hisi_sccl%u_hha%u",
-			      hha_pmu->sccl_id, hha_pmu->index_id);
-	if (!name)
-		return -ENOMEM;
-
 	ret = cpuhp_state_add_instance(CPUHP_AP_PERF_ARM_HISI_HHA_ONLINE,
 				       &hha_pmu->node);
 	if (ret) {
@@ -522,7 +517,9 @@ static int hisi_hha_pmu_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	hisi_pmu_init(hha_pmu, THIS_MODULE);
+	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "hisi_sccl%u_hha%u",
+			      hha_pmu->sccl_id, hha_pmu->index_id);
+	hisi_pmu_init(&hha_pmu->pmu, name, hha_pmu->pmu_events.attr_groups, THIS_MODULE);
 
 	ret = perf_pmu_register(&hha_pmu->pmu, name, -1);
 	if (ret) {
@@ -534,13 +531,14 @@ static int hisi_hha_pmu_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void hisi_hha_pmu_remove(struct platform_device *pdev)
+static int hisi_hha_pmu_remove(struct platform_device *pdev)
 {
 	struct hisi_pmu *hha_pmu = platform_get_drvdata(pdev);
 
 	perf_pmu_unregister(&hha_pmu->pmu);
 	cpuhp_state_remove_instance_nocalls(CPUHP_AP_PERF_ARM_HISI_HHA_ONLINE,
 					    &hha_pmu->node);
+	return 0;
 }
 
 static struct platform_driver hisi_hha_pmu_driver = {
@@ -550,7 +548,7 @@ static struct platform_driver hisi_hha_pmu_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe = hisi_hha_pmu_probe,
-	.remove_new = hisi_hha_pmu_remove,
+	.remove = hisi_hha_pmu_remove,
 };
 
 static int __init hisi_hha_pmu_module_init(void)

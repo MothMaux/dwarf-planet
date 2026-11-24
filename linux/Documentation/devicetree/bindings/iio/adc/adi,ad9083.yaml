@@ -15,9 +15,6 @@ description: |
   here:
     https://www.analog.com/media/en/technical-documentation/data-sheets/ad9083.pdf
 
-allOf:
-  - $ref: /schemas/jesd204/jesd204-device-props.yaml#
-
 properties:
   compatible:
     enum:
@@ -26,6 +23,10 @@ properties:
   reg:
     maxItems: 1
 
+  jesd204-device:
+    description: Device is added to the jesd204-fsm framework
+    type: boolean
+
   '#jesd204-cells':
     const: 2
 
@@ -33,11 +34,11 @@ properties:
     const: 0
 
   jesd204-link-ids:
-    items:
-      - const: 0
+    const: 0
 
   jesd204-inputs:
-    maxItems: 1
+    description: JESD204-fsm devices phandles and specifiers (used to build the link topology)
+    $ref: "/schemas/types.yaml#/definitions/phandle"
 
   spi-max-frequency:
     const: 1000000
@@ -46,7 +47,7 @@ properties:
     maxItems: 1
 
   clock-names:
-    const: adc_ref_clk
+    const: "adc_ref_clk"
     description: AD9083 reference clock name
 
   adi,adc-frequency-hz:
@@ -140,48 +141,48 @@ properties:
 
   adi,octets-per-frame:
     description: Number of octets per frame (F)
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint8
 
   adi,frames-per-multiframe:
     description: Number of frames per multi-frame (K)
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint16
 
   adi,converter-resolution:
     description: Converter resolution (N)
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint8
 
   adi,bits-per-sample:
     description: Number of bits per sample (N')
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint8
 
   adi,converters-per-device:
     description: Number of converter per device (M)
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint8
 
   adi,control-bits-per-sample:
     description: Number of control bits per conversion sample (CS)
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint8
 
   adi,lanes-per-device:
     description: Number of lanes per link (L)
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint8
 
   adi,subclass:
     description: The JESD204B sublcass
-    $ref: /schemas/types.yaml#/definitions/uint32
+    $ref: /schemas/types.yaml#/definitions/uint8
 
 required:
   - compatible
   - reg
   - jesd204-device
-  - '#jesd204-cells'
+  - '#jesd-cells'
   - jesd204-top-device
   - jesd204-link-ids
   - jesd204-inputs
   - clocks
   - clock-names
 
-unevaluatedProperties: false
+additionalProperties: false
 
 examples:
   - |
@@ -194,7 +195,6 @@ examples:
       adc0_ad9083: ad9083@0 {
         compatible = "adi,ad9083";
         reg = <0>;
-
         jesd204-device;
         #jesd204-cells = <2>;
         jesd204-top-device = <0>;
@@ -204,6 +204,7 @@ examples:
         spi-max-frequency = <1000000>;
         clocks = <&ad9528 13>;
         clock-names = "adc_ref_clk";
+        adi,sampling-frequency-hz = /bits/ 64 <125000000>;
 
         /* adi_ad9083 config */
 

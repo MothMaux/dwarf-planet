@@ -13,12 +13,13 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/i2c.h>
+#include <linux/gpio.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/gpio/consumer.h>
-#include <linux/of.h>
+#include <linux/of_device.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -259,7 +260,7 @@ static const struct regmap_config cs35l32_regmap = {
 	.volatile_reg = cs35l32_volatile_register,
 	.readable_reg = cs35l32_readable_register,
 	.precious_reg = cs35l32_precious_register,
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 
 	.use_single_read = true,
 	.use_single_write = true,
@@ -558,7 +559,7 @@ MODULE_DEVICE_TABLE(of, cs35l32_of_match);
 
 
 static const struct i2c_device_id cs35l32_id[] = {
-	{"cs35l32"},
+	{"cs35l32", 0},
 	{}
 };
 
@@ -571,7 +572,7 @@ static struct i2c_driver cs35l32_i2c_driver = {
 		   .of_match_table = cs35l32_of_match,
 		   },
 	.id_table = cs35l32_id,
-	.probe = cs35l32_i2c_probe,
+	.probe_new = cs35l32_i2c_probe,
 	.remove = cs35l32_i2c_remove,
 };
 

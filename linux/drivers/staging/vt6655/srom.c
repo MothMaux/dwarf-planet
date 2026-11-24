@@ -49,7 +49,7 @@
  * Parameters:
  *  In:
  *      iobase          - I/O base address
- *      contnt_offset  - address of EEPROM
+ *      byContntOffset  - address of EEPROM
  *  Out:
  *      none
  *
@@ -57,19 +57,20 @@
  *
  */
 unsigned char SROMbyReadEmbedded(void __iomem *iobase,
-				 unsigned char contnt_offset)
+				 unsigned char byContntOffset)
 {
 	unsigned short wDelay, wNoACK;
 	unsigned char byWait;
 	unsigned char byData;
 	unsigned char byOrg;
 
+	byData = 0xFF;
 	byOrg = ioread8(iobase + MAC_REG_I2MCFG);
 	/* turn off hardware retry for getting NACK */
 	iowrite8(byOrg & (~I2MCFG_NORETRY), iobase + MAC_REG_I2MCFG);
 	for (wNoACK = 0; wNoACK < W_MAX_I2CRETRY; wNoACK++) {
 		iowrite8(EEP_I2C_DEV_ID, iobase + MAC_REG_I2MTGID);
-		iowrite8(contnt_offset, iobase + MAC_REG_I2MTGAD);
+		iowrite8(byContntOffset, iobase + MAC_REG_I2MTGAD);
 
 		/* issue read command */
 		iowrite8(I2MCSR_EEMR, iobase + MAC_REG_I2MCSR);

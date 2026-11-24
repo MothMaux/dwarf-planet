@@ -1,10 +1,8 @@
 #include <linux/linkage.h>
-#include <linux/export.h>
+#include <asm-generic/export.h>
 #include <asm/asm.h>
 #include <asm/asm-extable.h>
 #include <asm/csr.h>
-#include <asm/hwcap.h>
-#include <asm/alternative-macros.h>
 
 	.macro fixup op reg addr lbl
 100:
@@ -12,24 +10,15 @@
 	_asm_extable	100b, \lbl
 	.endm
 
-SYM_FUNC_START(__asm_copy_to_user)
-#ifdef CONFIG_RISCV_ISA_V
-	ALTERNATIVE("j fallback_scalar_usercopy", "nop", 0, RISCV_ISA_EXT_ZVE32X, CONFIG_RISCV_ISA_V)
-	REG_L	t0, riscv_v_usercopy_threshold
-	bltu	a2, t0, fallback_scalar_usercopy
-	tail enter_vector_usercopy
-#endif
-SYM_FUNC_START(fallback_scalar_usercopy)
+ENTRY(__asm_copy_to_user)
+ENTRY(__asm_copy_from_user)
 
 	/* Enable access to user memory */
 	li t6, SR_SUM
 	csrs CSR_STATUS, t6
 
-	/*
-	 * Save the terminal address which will be used to compute the number
-	 * of bytes copied in case of a fixup exception.
-	 */
-	add	t5, a0, a2
+	/* Save for return value */
+	mv	t5, a2
 
 	/*
 	 * Register allocation for code below:
@@ -44,7 +33,7 @@ SYM_FUNC_START(fallback_scalar_usercopy)
 	 * Use byte copy only if too small.
 	 * SZREG holds 4 for RV32 and 8 for RV64
 	 */
-	li	a3, 9*SZREG-1 /* size must >= (word_copy stride + SZREG-1) */
+	li	a3, 9*SZREG /* size must be larger than size in word_copy */
 	bltu	a2, a3, .Lbyte_copy_tail
 
 	/*
@@ -103,7 +92,7 @@ SYM_FUNC_START(fallback_scalar_usercopy)
 	fixup REG_S   t4,  7*SZREG(a0), 10f
 	addi	a0, a0, 8*SZREG
 	addi	a1, a1, 8*SZREG
-	bleu	a0, t0, 2b
+	bltu	a0, t0, 2b
 
 	addi	t0, t0, 8*SZREG /* revert to original value */
 	j	.Lbyte_copy_tail
@@ -187,16 +176,15 @@ SYM_FUNC_START(fallback_scalar_usercopy)
 10:
 	/* Disable access to user memory */
 	csrc CSR_STATUS, t6
-	sub a0, t5, a0
+	mv a0, t5
 	ret
-SYM_FUNC_END(__asm_copy_to_user)
-SYM_FUNC_END(fallback_scalar_usercopy)
+ENDPROC(__asm_copy_to_user)
+ENDPROC(__asm_copy_from_user)
 EXPORT_SYMBOL(__asm_copy_to_user)
-SYM_FUNC_ALIAS(__asm_copy_from_user, __asm_copy_to_user)
 EXPORT_SYMBOL(__asm_copy_from_user)
 
 
-SYM_FUNC_START(__clear_user)
+ENTRY(__clear_user)
 
 	/* Enable access to user memory */
 	li t6, SR_SUM
@@ -240,7 +228,7 @@ SYM_FUNC_START(__clear_user)
 11:
 	/* Disable access to user memory */
 	csrc CSR_STATUS, t6
-	sub a0, a3, a0
+	mv a0, a1
 	ret
-SYM_FUNC_END(__clear_user)
+ENDPROC(__clear_user)
 EXPORT_SYMBOL(__clear_user)

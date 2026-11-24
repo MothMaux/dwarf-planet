@@ -491,7 +491,7 @@ static int print_links(struct device *dev, void *data)
 	return 0;
 }
 
-static int most_match(struct device *dev, const struct device_driver *drv)
+static int most_match(struct device *dev, struct device_driver *drv)
 {
 	if (!strcmp(dev_name(dev), "most"))
 		return 0;
@@ -499,7 +499,7 @@ static int most_match(struct device *dev, const struct device_driver *drv)
 		return 1;
 }
 
-static const struct bus_type mostbus = {
+static struct bus_type mostbus = {
 	.name = "most",
 	.match = most_match,
 };
@@ -538,8 +538,8 @@ static struct most_channel *get_channel(char *mdev, char *mdev_ch)
 	dev = bus_find_device_by_name(&mostbus, NULL, mdev);
 	if (!dev)
 		return NULL;
-	iface = dev_get_drvdata(dev);
 	put_device(dev);
+	iface = dev_get_drvdata(dev);
 	list_for_each_entry_safe(c, tmp, &iface->p->channel_list, list) {
 		if (!strcmp(dev_name(&c->dev), mdev_ch))
 			return c;
@@ -1282,28 +1282,19 @@ int most_register_interface(struct most_interface *iface)
 	int id;
 	struct most_channel *c;
 
-	if (!iface)
+	if (!iface || !iface->enqueue || !iface->configure ||
+	    !iface->poison_channel || (iface->num_channels > MAX_CHANNELS))
 		return -EINVAL;
 
-	device_initialize(iface->dev);
-
-	if (!iface->enqueue || !iface->configure || !iface->poison_channel ||
-	    (iface->num_channels > MAX_CHANNELS)) {
-		put_device(iface->dev);
-		return -EINVAL;
-	}
-
-	id = ida_alloc(&mdev_id, GFP_KERNEL);
+	id = ida_simple_get(&mdev_id, 0, 0, GFP_KERNEL);
 	if (id < 0) {
 		dev_err(iface->dev, "Failed to allocate device ID\n");
-		put_device(iface->dev);
 		return id;
 	}
 
 	iface->p = kzalloc(sizeof(*iface->p), GFP_KERNEL);
 	if (!iface->p) {
-		ida_free(&mdev_id, id);
-		put_device(iface->dev);
+		ida_simple_remove(&mdev_id, id);
 		return -ENOMEM;
 	}
 
@@ -1313,11 +1304,11 @@ int most_register_interface(struct most_interface *iface)
 	iface->dev->bus = &mostbus;
 	iface->dev->groups = interface_attr_groups;
 	dev_set_drvdata(iface->dev, iface);
-	if (device_add(iface->dev)) {
+	if (device_register(iface->dev)) {
 		dev_err(iface->dev, "Failed to register interface device\n");
 		kfree(iface->p);
 		put_device(iface->dev);
-		ida_free(&mdev_id, id);
+		ida_simple_remove(&mdev_id, id);
 		return -ENOMEM;
 	}
 
@@ -1375,7 +1366,7 @@ err_free_resources:
 	}
 	kfree(iface->p);
 	device_unregister(iface->dev);
-	ida_free(&mdev_id, id);
+	ida_simple_remove(&mdev_id, id);
 	return -ENOMEM;
 }
 EXPORT_SYMBOL_GPL(most_register_interface);
@@ -1406,7 +1397,7 @@ void most_deregister_interface(struct most_interface *iface)
 		device_unregister(&c->dev);
 	}
 
-	ida_free(&mdev_id, iface->p->dev_id);
+	ida_simple_remove(&mdev_id, iface->p->dev_id);
 	kfree(iface->p);
 	device_unregister(iface->dev);
 }

@@ -37,12 +37,12 @@ static void __iomem *zynq_clkc_base;
 #define SLCR_CAN_MIOCLK_CTRL		(zynq_clkc_base + 0x60)
 #define SLCR_DBG_CLK_CTRL		(zynq_clkc_base + 0x64)
 #define SLCR_PCAP_CLK_CTRL		(zynq_clkc_base + 0x68)
+#define SLCR_TOPSW_CLK_CTRL		(zynq_clkc_base + 0x6c)
 #define SLCR_FPGA0_CLK_CTRL		(zynq_clkc_base + 0x70)
 #define SLCR_621_TRUE			(zynq_clkc_base + 0xc4)
 #define SLCR_SWDT_CLK_SEL		(zynq_clkc_base + 0x204)
 
 #define NUM_MIO_PINS	54
-#define CLK_NAME_LEN	16
 
 #define DBG_CLK_CTRL_CLKACT_TRC		BIT(0)
 #define DBG_CLK_CTRL_CPU_1XCLKACT	BIT(1)
@@ -99,6 +99,48 @@ static const char *const gem1_emio_input_names[] __initconst = {
 	"gem1_emio_clk"};
 static const char *const swdt_ext_clk_input_names[] __initconst = {
 	"swdt_ext_clk"};
+
+#ifdef CONFIG_SUSPEND
+static struct clk *iopll_save_parent;
+
+#define TOPSW_CLK_CTRL_DIS_MASK	BIT(0)
+
+int zynq_clk_suspend_early(void)
+{
+	int ret;
+
+	iopll_save_parent = clk_get_parent(clks[iopll]);
+
+	ret = clk_set_parent(clks[iopll], ps_clk);
+	if (ret)
+		pr_info("%s: reparent iopll failed %d\n", __func__, ret);
+
+	return 0;
+}
+
+void zynq_clk_resume_late(void)
+{
+	clk_set_parent(clks[iopll], iopll_save_parent);
+}
+
+void zynq_clk_topswitch_enable(void)
+{
+	u32 reg;
+
+	reg = readl(SLCR_TOPSW_CLK_CTRL);
+	reg &= ~TOPSW_CLK_CTRL_DIS_MASK;
+	writel(reg, SLCR_TOPSW_CLK_CTRL);
+}
+
+void zynq_clk_topswitch_disable(void)
+{
+	u32 reg;
+
+	reg = readl(SLCR_TOPSW_CLK_CTRL);
+	reg |= TOPSW_CLK_CTRL_DIS_MASK;
+	writel(reg, SLCR_TOPSW_CLK_CTRL);
+}
+#endif
 
 static void __init zynq_clk_register_fclk(enum zynq_clk fclk,
 		const char *clk_name, void __iomem *fclk_ctrl_reg,
@@ -216,7 +258,7 @@ static void __init zynq_clk_setup(struct device_node *np)
 	int i;
 	u32 tmp;
 	int ret;
-	char clk_name[CLK_NAME_LEN];
+	char *clk_name;
 	unsigned int fclk_enable = 0;
 	const char *clk_output_name[clk_max];
 	const char *cpu_parents[4];
@@ -427,10 +469,12 @@ static void __init zynq_clk_setup(struct device_node *np)
 			"gem1_emio_mux", CLK_SET_RATE_PARENT,
 			SLCR_GEM1_CLK_CTRL, 0, 0, &gem1clk_lock);
 
+	tmp = strlen("mio_clk_00x");
+	clk_name = kmalloc(tmp, GFP_KERNEL);
 	for (i = 0; i < NUM_MIO_PINS; i++) {
 		int idx;
 
-		snprintf(clk_name, CLK_NAME_LEN, "mio_clk_%2.2d", i);
+		snprintf(clk_name, tmp, "mio_clk_%2.2d", i);
 		idx = of_property_match_string(np, "clock-names", clk_name);
 		if (idx >= 0)
 			can_mio_mux_parents[i] = of_clk_get_parent_name(np,
@@ -438,6 +482,7 @@ static void __init zynq_clk_setup(struct device_node *np)
 		else
 			can_mio_mux_parents[i] = dummy_nm;
 	}
+	kfree(clk_name);
 	clk_register_mux(NULL, "can_mux", periph_parents, 4,
 			CLK_SET_RATE_NO_REPARENT, SLCR_CAN_CLK_CTRL, 4, 2, 0,
 			&canclk_lock);

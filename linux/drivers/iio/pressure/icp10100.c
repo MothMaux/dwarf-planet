@@ -530,7 +530,8 @@ static void icp10100_pm_disable(void *data)
 	pm_runtime_disable(dev);
 }
 
-static int icp10100_probe(struct i2c_client *client)
+static int icp10100_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
 	struct iio_dev *indio_dev;
 	struct icp10100_state *st;
@@ -637,7 +638,7 @@ static const struct of_device_id icp10100_of_match[] = {
 MODULE_DEVICE_TABLE(of, icp10100_of_match);
 
 static const struct i2c_device_id icp10100_id[] = {
-	{ "icp10100" },
+	{ "icp10100", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, icp10100_id);

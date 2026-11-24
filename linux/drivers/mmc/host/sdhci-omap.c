@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/*
+/**
  * SDHCI Controller driver for TI's OMAP SoCs
  *
  * Copyright (C) 2017 Texas Instruments
@@ -11,6 +11,7 @@
 #include <linux/mmc/slot-gpio.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -369,7 +370,7 @@ static int sdhci_omap_execute_tuning(struct mmc_host *mmc, u32 opcode)
 
 	/*
 	 * Stage 1: Search for a maximum pass window ignoring any
-	 * single point failures. If the tuning value ends up
+	 * any single point failures. If the tuning value ends up
 	 * near it, move away from it in stage 2 below
 	 */
 	while (phase_delay <= MAX_PHASE_DELAY) {
@@ -925,7 +926,7 @@ static void sdhci_omap_set_timeout(struct sdhci_host *host,
 	__sdhci_set_timeout(host, cmd);
 }
 
-static const struct sdhci_ops sdhci_omap_ops = {
+static struct sdhci_ops sdhci_omap_ops = {
 	.set_clock = sdhci_omap_set_clock,
 	.set_power = sdhci_omap_set_power,
 	.enable_dma = sdhci_omap_enable_dma,
@@ -1339,8 +1340,8 @@ static int sdhci_omap_probe(struct platform_device *pdev)
 	/* R1B responses is required to properly manage HW busy detection. */
 	mmc->caps |= MMC_CAP_NEED_RSP_BUSY;
 
-	/*  Enable SDIO card power off. */
-	mmc->caps |= MMC_CAP_POWER_OFF_CARD;
+	/* Allow card power off and runtime PM for eMMC/SD card devices */
+	mmc->caps |= MMC_CAP_POWER_OFF_CARD | MMC_CAP_AGGRESSIVE_PM;
 
 	ret = sdhci_setup_host(host);
 	if (ret)
@@ -1393,7 +1394,7 @@ err_pltfm_free:
 	return ret;
 }
 
-static void sdhci_omap_remove(struct platform_device *pdev)
+static int sdhci_omap_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct sdhci_host *host = platform_get_drvdata(pdev);
@@ -1407,6 +1408,8 @@ static void sdhci_omap_remove(struct platform_device *pdev)
 	/* Ensure device gets disabled despite userspace sysfs config */
 	pm_runtime_force_suspend(dev);
 	sdhci_pltfm_free(pdev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -1438,9 +1441,6 @@ static int __maybe_unused sdhci_omap_runtime_suspend(struct device *dev)
 	struct sdhci_host *host = dev_get_drvdata(dev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_omap_host *omap_host = sdhci_pltfm_priv(pltfm_host);
-
-	if (host->tuning_mode != SDHCI_TUNING_MODE_3)
-		mmc_retune_needed(host->mmc);
 
 	if (omap_host->con != -EINVAL)
 		sdhci_runtime_suspend_host(host);
@@ -1478,7 +1478,7 @@ static const struct dev_pm_ops sdhci_omap_dev_pm_ops = {
 
 static struct platform_driver sdhci_omap_driver = {
 	.probe = sdhci_omap_probe,
-	.remove_new = sdhci_omap_remove,
+	.remove = sdhci_omap_remove,
 	.driver = {
 		   .name = "sdhci-omap",
 		   .probe_type = PROBE_PREFER_ASYNCHRONOUS,

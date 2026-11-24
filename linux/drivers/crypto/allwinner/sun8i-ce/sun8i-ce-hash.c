@@ -7,48 +7,50 @@
  *
  * This file add support for MD5 and SHA1/SHA224/SHA256/SHA384/SHA512.
  *
- * You could find the datasheet in Documentation/arch/arm/sunxi.rst
+ * You could find the datasheet in Documentation/arm/sunxi.rst
  */
-
-#include <crypto/internal/hash.h>
-#include <crypto/md5.h>
-#include <crypto/sha1.h>
-#include <crypto/sha2.h>
 #include <linux/bottom_half.h>
 #include <linux/dma-mapping.h>
-#include <linux/kernel.h>
 #include <linux/pm_runtime.h>
 #include <linux/scatterlist.h>
-#include <linux/slab.h>
-#include <linux/string.h>
+#include <crypto/internal/hash.h>
+#include <crypto/sha1.h>
+#include <crypto/sha2.h>
+#include <crypto/md5.h>
 #include "sun8i-ce.h"
 
-int sun8i_ce_hash_init_tfm(struct crypto_ahash *tfm)
+int sun8i_ce_hash_crainit(struct crypto_tfm *tfm)
 {
-	struct sun8i_ce_hash_tfm_ctx *op = crypto_ahash_ctx(tfm);
-	struct ahash_alg *alg = crypto_ahash_alg(tfm);
+	struct sun8i_ce_hash_tfm_ctx *op = crypto_tfm_ctx(tfm);
+	struct ahash_alg *alg = __crypto_ahash_alg(tfm->__crt_alg);
 	struct sun8i_ce_alg_template *algt;
 	int err;
 
-	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash.base);
+	memset(op, 0, sizeof(struct sun8i_ce_hash_tfm_ctx));
+
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash);
 	op->ce = algt->ce;
 
+	op->enginectx.op.do_one_request = sun8i_ce_hash_run;
+	op->enginectx.op.prepare_request = NULL;
+	op->enginectx.op.unprepare_request = NULL;
+
 	/* FALLBACK */
-	op->fallback_tfm = crypto_alloc_ahash(crypto_ahash_alg_name(tfm), 0,
+	op->fallback_tfm = crypto_alloc_ahash(crypto_tfm_alg_name(tfm), 0,
 					      CRYPTO_ALG_NEED_FALLBACK);
 	if (IS_ERR(op->fallback_tfm)) {
 		dev_err(algt->ce->dev, "Fallback driver could no be loaded\n");
 		return PTR_ERR(op->fallback_tfm);
 	}
 
-	crypto_ahash_set_statesize(tfm,
-				   crypto_ahash_statesize(op->fallback_tfm));
+	if (algt->alg.hash.halg.statesize < crypto_ahash_statesize(op->fallback_tfm))
+		algt->alg.hash.halg.statesize = crypto_ahash_statesize(op->fallback_tfm);
 
-	crypto_ahash_set_reqsize(tfm,
+	crypto_ahash_set_reqsize(__crypto_ahash_cast(tfm),
 				 sizeof(struct sun8i_ce_hash_reqctx) +
 				 crypto_ahash_reqsize(op->fallback_tfm));
 
-	memcpy(algt->fbname, crypto_ahash_driver_name(op->fallback_tfm),
+	memcpy(algt->fbname, crypto_tfm_alg_driver_name(&op->fallback_tfm->base),
 	       CRYPTO_MAX_ALG_NAME);
 
 	err = pm_runtime_get_sync(op->ce->dev);
@@ -61,9 +63,9 @@ error_pm:
 	return err;
 }
 
-void sun8i_ce_hash_exit_tfm(struct crypto_ahash *tfm)
+void sun8i_ce_hash_craexit(struct crypto_tfm *tfm)
 {
-	struct sun8i_ce_hash_tfm_ctx *tfmctx = crypto_ahash_ctx(tfm);
+	struct sun8i_ce_hash_tfm_ctx *tfmctx = crypto_tfm_ctx(tfm);
 
 	crypto_free_ahash(tfmctx->fallback_tfm);
 	pm_runtime_put_sync_suspend(tfmctx->ce->dev);
@@ -112,22 +114,20 @@ int sun8i_ce_hash_final(struct ahash_request *areq)
 	struct sun8i_ce_hash_reqctx *rctx = ahash_request_ctx(areq);
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(areq);
 	struct sun8i_ce_hash_tfm_ctx *tfmctx = crypto_ahash_ctx(tfm);
+#ifdef CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG
+	struct ahash_alg *alg = __crypto_ahash_alg(tfm->base.__crt_alg);
+	struct sun8i_ce_alg_template *algt;
+#endif
 
 	ahash_request_set_tfm(&rctx->fallback_req, tfmctx->fallback_tfm);
 	rctx->fallback_req.base.flags = areq->base.flags &
 					CRYPTO_TFM_REQ_MAY_SLEEP;
 	rctx->fallback_req.result = areq->result;
 
-	if (IS_ENABLED(CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG)) {
-		struct sun8i_ce_alg_template *algt __maybe_unused;
-		struct ahash_alg *alg = crypto_ahash_alg(tfm);
-
-		algt = container_of(alg, struct sun8i_ce_alg_template,
-				    alg.hash.base);
 #ifdef CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG
-		algt->stat_fb++;
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash);
+	algt->stat_fb++;
 #endif
-	}
 
 	return crypto_ahash_final(&rctx->fallback_req);
 }
@@ -152,6 +152,10 @@ int sun8i_ce_hash_finup(struct ahash_request *areq)
 	struct sun8i_ce_hash_reqctx *rctx = ahash_request_ctx(areq);
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(areq);
 	struct sun8i_ce_hash_tfm_ctx *tfmctx = crypto_ahash_ctx(tfm);
+#ifdef CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG
+	struct ahash_alg *alg = __crypto_ahash_alg(tfm->base.__crt_alg);
+	struct sun8i_ce_alg_template *algt;
+#endif
 
 	ahash_request_set_tfm(&rctx->fallback_req, tfmctx->fallback_tfm);
 	rctx->fallback_req.base.flags = areq->base.flags &
@@ -160,17 +164,10 @@ int sun8i_ce_hash_finup(struct ahash_request *areq)
 	rctx->fallback_req.nbytes = areq->nbytes;
 	rctx->fallback_req.src = areq->src;
 	rctx->fallback_req.result = areq->result;
-
-	if (IS_ENABLED(CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG)) {
-		struct sun8i_ce_alg_template *algt __maybe_unused;
-		struct ahash_alg *alg = crypto_ahash_alg(tfm);
-
-		algt = container_of(alg, struct sun8i_ce_alg_template,
-				    alg.hash.base);
 #ifdef CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG
-		algt->stat_fb++;
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash);
+	algt->stat_fb++;
 #endif
-	}
 
 	return crypto_ahash_finup(&rctx->fallback_req);
 }
@@ -180,6 +177,10 @@ static int sun8i_ce_hash_digest_fb(struct ahash_request *areq)
 	struct sun8i_ce_hash_reqctx *rctx = ahash_request_ctx(areq);
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(areq);
 	struct sun8i_ce_hash_tfm_ctx *tfmctx = crypto_ahash_ctx(tfm);
+#ifdef CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG
+	struct ahash_alg *alg = __crypto_ahash_alg(tfm->base.__crt_alg);
+	struct sun8i_ce_alg_template *algt;
+#endif
 
 	ahash_request_set_tfm(&rctx->fallback_req, tfmctx->fallback_tfm);
 	rctx->fallback_req.base.flags = areq->base.flags &
@@ -188,17 +189,10 @@ static int sun8i_ce_hash_digest_fb(struct ahash_request *areq)
 	rctx->fallback_req.nbytes = areq->nbytes;
 	rctx->fallback_req.src = areq->src;
 	rctx->fallback_req.result = areq->result;
-
-	if (IS_ENABLED(CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG)) {
-		struct sun8i_ce_alg_template *algt __maybe_unused;
-		struct ahash_alg *alg = crypto_ahash_alg(tfm);
-
-		algt = container_of(alg, struct sun8i_ce_alg_template,
-				    alg.hash.base);
 #ifdef CONFIG_CRYPTO_DEV_SUN8I_CE_DEBUG
-		algt->stat_fb++;
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash);
+	algt->stat_fb++;
 #endif
-	}
 
 	return crypto_ahash_digest(&rctx->fallback_req);
 }
@@ -210,7 +204,7 @@ static bool sun8i_ce_hash_need_fallback(struct ahash_request *areq)
 	struct sun8i_ce_alg_template *algt;
 	struct scatterlist *sg;
 
-	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash.base);
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash);
 
 	if (areq->nbytes == 0) {
 		algt->stat_fb_len0++;
@@ -259,7 +253,7 @@ int sun8i_ce_hash_digest(struct ahash_request *areq)
 			return sun8i_ce_hash_digest_fb(areq);
 	}
 
-	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash.base);
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash);
 	ce = algt->ce;
 
 	e = sun8i_ce_get_engine_number(ce);
@@ -343,35 +337,36 @@ int sun8i_ce_hash_run(struct crypto_engine *engine, void *breq)
 	u32 common;
 	u64 byte_count;
 	__le32 *bf;
-	void *buf, *result;
+	void *buf = NULL;
 	int j, i, todo;
+	void *result = NULL;
 	u64 bs;
 	int digestsize;
 	dma_addr_t addr_res, addr_pad;
 	int ns = sg_nents_for_len(areq->src, areq->nbytes);
 
-	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash.base);
+	algt = container_of(alg, struct sun8i_ce_alg_template, alg.hash);
 	ce = algt->ce;
 
-	bs = algt->alg.hash.base.halg.base.cra_blocksize;
-	digestsize = algt->alg.hash.base.halg.digestsize;
+	bs = algt->alg.hash.halg.base.cra_blocksize;
+	digestsize = algt->alg.hash.halg.digestsize;
 	if (digestsize == SHA224_DIGEST_SIZE)
 		digestsize = SHA256_DIGEST_SIZE;
 	if (digestsize == SHA384_DIGEST_SIZE)
 		digestsize = SHA512_DIGEST_SIZE;
 
 	/* the padding could be up to two block. */
-	buf = kcalloc(2, bs, GFP_KERNEL | GFP_DMA);
+	buf = kzalloc(bs * 2, GFP_KERNEL | GFP_DMA);
 	if (!buf) {
 		err = -ENOMEM;
-		goto err_out;
+		goto theend;
 	}
 	bf = (__le32 *)buf;
 
 	result = kzalloc(digestsize, GFP_KERNEL | GFP_DMA);
 	if (!result) {
 		err = -ENOMEM;
-		goto err_free_buf;
+		goto theend;
 	}
 
 	flow = rctx->flow;
@@ -397,12 +392,12 @@ int sun8i_ce_hash_run(struct crypto_engine *engine, void *breq)
 	if (nr_sgs <= 0 || nr_sgs > MAX_SG) {
 		dev_err(ce->dev, "Invalid sg number %d\n", nr_sgs);
 		err = -EINVAL;
-		goto err_free_result;
+		goto theend;
 	}
 
 	len = areq->nbytes;
 	for_each_sg(areq->src, sg, nr_sgs, i) {
-		cet->t_src[i].addr = desc_addr_val_le32(ce, sg_dma_address(sg));
+		cet->t_src[i].addr = cpu_to_le32(sg_dma_address(sg));
 		todo = min(len, sg_dma_len(sg));
 		cet->t_src[i].len = cpu_to_le32(todo / 4);
 		len -= todo;
@@ -410,15 +405,15 @@ int sun8i_ce_hash_run(struct crypto_engine *engine, void *breq)
 	if (len > 0) {
 		dev_err(ce->dev, "remaining len %d\n", len);
 		err = -EINVAL;
-		goto err_unmap_src;
+		goto theend;
 	}
 	addr_res = dma_map_single(ce->dev, result, digestsize, DMA_FROM_DEVICE);
-	cet->t_dst[0].addr = desc_addr_val_le32(ce, addr_res);
+	cet->t_dst[0].addr = cpu_to_le32(addr_res);
 	cet->t_dst[0].len = cpu_to_le32(digestsize / 4);
 	if (dma_mapping_error(ce->dev, addr_res)) {
 		dev_err(ce->dev, "DMA map dest\n");
 		err = -EINVAL;
-		goto err_unmap_src;
+		goto theend;
 	}
 
 	byte_count = areq->nbytes;
@@ -440,16 +435,16 @@ int sun8i_ce_hash_run(struct crypto_engine *engine, void *breq)
 	}
 	if (!j) {
 		err = -EINVAL;
-		goto err_unmap_result;
+		goto theend;
 	}
 
 	addr_pad = dma_map_single(ce->dev, buf, j * 4, DMA_TO_DEVICE);
-	cet->t_src[i].addr = desc_addr_val_le32(ce, addr_pad);
+	cet->t_src[i].addr = cpu_to_le32(addr_pad);
 	cet->t_src[i].len = cpu_to_le32(j);
 	if (dma_mapping_error(ce->dev, addr_pad)) {
 		dev_err(ce->dev, "DMA error on padding SG\n");
 		err = -EINVAL;
-		goto err_unmap_result;
+		goto theend;
 	}
 
 	if (ce->variant->hash_t_dlen_in_bits)
@@ -457,28 +452,21 @@ int sun8i_ce_hash_run(struct crypto_engine *engine, void *breq)
 	else
 		cet->t_dlen = cpu_to_le32(areq->nbytes / 4 + j);
 
-	err = sun8i_ce_run_task(ce, flow, crypto_ahash_alg_name(tfm));
+	chan->timeout = areq->nbytes;
+
+	err = sun8i_ce_run_task(ce, flow, crypto_tfm_alg_name(areq->base.tfm));
 
 	dma_unmap_single(ce->dev, addr_pad, j * 4, DMA_TO_DEVICE);
-
-err_unmap_result:
-	dma_unmap_single(ce->dev, addr_res, digestsize, DMA_FROM_DEVICE);
-	if (!err)
-		memcpy(areq->result, result, algt->alg.hash.base.halg.digestsize);
-
-err_unmap_src:
 	dma_unmap_sg(ce->dev, areq->src, ns, DMA_TO_DEVICE);
+	dma_unmap_single(ce->dev, addr_res, digestsize, DMA_FROM_DEVICE);
 
-err_free_result:
-	kfree(result);
 
-err_free_buf:
+	memcpy(areq->result, result, algt->alg.hash.halg.digestsize);
+theend:
 	kfree(buf);
-
-err_out:
+	kfree(result);
 	local_bh_disable();
 	crypto_finalize_hash_request(engine, breq, err);
 	local_bh_enable();
-
 	return 0;
 }

@@ -24,7 +24,6 @@
 #include <net/xfrm.h>
 #include <net/secure_seq.h>
 #include <net/netns/generic.h>
-#include <net/rstreason.h>
 
 #include "ackvec.h"
 #include "ccid.h"
@@ -131,7 +130,7 @@ int dccp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 						    inet->inet_daddr,
 						    inet->inet_sport,
 						    inet->inet_dport);
-	atomic_set(&inet->inet_id, get_random_u16());
+	inet->inet_id = get_random_u16();
 
 	err = dccp_connect(sk);
 	rt = NULL;
@@ -178,7 +177,7 @@ static inline void dccp_do_pmtu_discovery(struct sock *sk,
 	 * for the case, if this connection will not able to recover.
 	 */
 	if (mtu < dst_mtu(dst) && ip_dont_fragment(sk, dst))
-		WRITE_ONCE(sk->sk_err_soft, EMSGSIZE);
+		sk->sk_err_soft = EMSGSIZE;
 
 	mtu = dst_mtu(dst);
 
@@ -248,6 +247,7 @@ static int dccp_v4_err(struct sk_buff *skb, u32 info)
 	const u8 offset = iph->ihl << 2;
 	const struct dccp_hdr *dh;
 	struct dccp_sock *dp;
+	struct inet_sock *inet;
 	const int type = icmp_hdr(skb)->type;
 	const int code = icmp_hdr(skb)->code;
 	struct sock *sk;
@@ -255,12 +255,12 @@ static int dccp_v4_err(struct sk_buff *skb, u32 info)
 	int err;
 	struct net *net = dev_net(skb->dev);
 
-	if (!pskb_may_pull(skb, offset + sizeof(*dh)))
-		return -EINVAL;
-	dh = (struct dccp_hdr *)(skb->data + offset);
-	if (!pskb_may_pull(skb, offset + __dccp_basic_hdr_len(dh)))
-		return -EINVAL;
-	iph = (struct iphdr *)skb->data;
+	/* Only need dccph_dport & dccph_sport which are the first
+	 * 4 bytes in dccp header.
+	 * Our caller (icmp_socket_deliver()) already pulled 8 bytes for us.
+	 */
+	BUILD_BUG_ON(offsetofend(struct dccp_hdr, dccph_sport) > 8);
+	BUILD_BUG_ON(offsetofend(struct dccp_hdr, dccph_dport) > 8);
 	dh = (struct dccp_hdr *)(skb->data + offset);
 
 	sk = __inet_lookup_established(net, &dccp_hashinfo,
@@ -339,9 +339,8 @@ static int dccp_v4_err(struct sk_buff *skb, u32 info)
 			sk_error_report(sk);
 
 			dccp_done(sk);
-		} else {
-			WRITE_ONCE(sk->sk_err_soft, err);
-		}
+		} else
+			sk->sk_err_soft = err;
 		goto out;
 	}
 
@@ -361,12 +360,12 @@ static int dccp_v4_err(struct sk_buff *skb, u32 info)
 	 *							--ANK (980905)
 	 */
 
-	if (!sock_owned_by_user(sk) && inet_test_bit(RECVERR, sk)) {
+	inet = inet_sk(sk);
+	if (!sock_owned_by_user(sk) && inet->recverr) {
 		sk->sk_err = err;
 		sk_error_report(sk);
-	} else { /* Only an error on timeout */
-		WRITE_ONCE(sk->sk_err_soft, err);
-	}
+	} else /* Only an error on timeout */
+		sk->sk_err_soft = err;
 out:
 	bh_unlock_sock(sk);
 	sock_put(sk);
@@ -431,7 +430,7 @@ struct sock *dccp_v4_request_recv_sock(const struct sock *sk,
 	RCU_INIT_POINTER(newinet->inet_opt, rcu_dereference(ireq->ireq_opt));
 	newinet->mc_index  = inet_iif(skb);
 	newinet->mc_ttl	   = ip_hdr(skb)->ttl;
-	atomic_set(&newinet->inet_id, get_random_u16());
+	newinet->inet_id   = get_random_u16();
 
 	if (dst == NULL && (dst = inet_csk_route_child_sock(sk, newsk, req)) == NULL)
 		goto put_and_exit;
@@ -473,8 +472,7 @@ static struct dst_entry* dccp_v4_route_skb(struct net *net, struct sock *sk,
 		.flowi4_oif = inet_iif(skb),
 		.daddr = iph->saddr,
 		.saddr = iph->daddr,
-		.flowi4_tos = ip_sock_rt_tos(sk),
-		.flowi4_scope = ip_sock_rt_scope(sk),
+		.flowi4_tos = RT_CONN_FLAGS(sk),
 		.flowi4_proto = sk->sk_protocol,
 		.fl4_sport = dccp_hdr(skb)->dccph_dport,
 		.fl4_dport = dccp_hdr(skb)->dccph_sport,
@@ -512,7 +510,7 @@ static int dccp_v4_send_response(const struct sock *sk, struct request_sock *req
 		err = ip_build_and_send_pkt(skb, sk, ireq->ir_loc_addr,
 					    ireq->ir_rmt_addr,
 					    rcu_dereference(ireq->ireq_opt),
-					    READ_ONCE(inet_sk(sk)->tos));
+					    inet_sk(sk)->tos);
 		rcu_read_unlock();
 		err = net_xmit_eval(err);
 	}
@@ -522,8 +520,7 @@ out:
 	return err;
 }
 
-static void dccp_v4_ctl_send_reset(const struct sock *sk, struct sk_buff *rxskb,
-				   enum sk_rst_reason reason)
+static void dccp_v4_ctl_send_reset(const struct sock *sk, struct sk_buff *rxskb)
 {
 	int err;
 	const struct iphdr *rxiph;
@@ -631,15 +628,15 @@ int dccp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	if (dccp_parse_options(sk, dreq, skb))
 		goto drop_and_free;
 
+	if (security_inet_conn_request(sk, skb, req))
+		goto drop_and_free;
+
 	ireq = inet_rsk(req);
 	sk_rcv_saddr_set(req_to_sk(req), ip_hdr(skb)->daddr);
 	sk_daddr_set(req_to_sk(req), ip_hdr(skb)->saddr);
 	ireq->ir_mark = inet_request_mark(sk, skb);
 	ireq->ireq_family = AF_INET;
 	ireq->ir_iif = READ_ONCE(sk->sk_bound_dev_if);
-
-	if (security_inet_conn_request(sk, skb, req))
-		goto drop_and_free;
 
 	/*
 	 * Step 3: Process LISTEN state
@@ -657,11 +654,8 @@ int dccp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 	if (dccp_v4_send_response(sk, req))
 		goto drop_and_free;
 
-	if (unlikely(!inet_csk_reqsk_queue_hash_add(sk, req, DCCP_TIMEOUT_INIT)))
-		reqsk_free(req);
-	else
-		reqsk_put(req);
-
+	inet_csk_reqsk_queue_hash_add(sk, req, DCCP_TIMEOUT_INIT);
+	reqsk_put(req);
 	return 0;
 
 drop_and_free:
@@ -711,7 +705,7 @@ int dccp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	return 0;
 
 reset:
-	dccp_v4_ctl_send_reset(sk, skb, SK_RST_REASON_NOT_SPECIFIED);
+	dccp_v4_ctl_send_reset(sk, skb);
 	kfree_skb(skb);
 	return 0;
 }
@@ -874,7 +868,7 @@ lookup:
 		if (nsk == sk) {
 			reqsk_put(req);
 		} else if (dccp_child_process(sk, nsk, skb)) {
-			dccp_v4_ctl_send_reset(sk, skb, SK_RST_REASON_NOT_SPECIFIED);
+			dccp_v4_ctl_send_reset(sk, skb);
 			goto discard_and_relse;
 		} else {
 			sock_put(sk);
@@ -914,7 +908,7 @@ no_dccp_socket:
 	if (dh->dccph_type != DCCP_PKT_RESET) {
 		DCCP_SKB_CB(skb)->dccpd_reset_code =
 					DCCP_RESET_CODE_NO_CONNECTION;
-		dccp_v4_ctl_send_reset(sk, skb, SK_RST_REASON_NOT_SPECIFIED);
+		dccp_v4_ctl_send_reset(sk, skb);
 	}
 
 discard_it:
@@ -1014,6 +1008,7 @@ static const struct proto_ops inet_dccp_ops = {
 	.sendmsg	   = inet_sendmsg,
 	.recvmsg	   = sock_common_recvmsg,
 	.mmap		   = sock_no_mmap,
+	.sendpage	   = sock_no_sendpage,
 };
 
 static struct inet_protosw dccp_v4_protosw = {
@@ -1044,7 +1039,7 @@ static void __net_exit dccp_v4_exit_net(struct net *net)
 
 static void __net_exit dccp_v4_exit_batch(struct list_head *net_exit_list)
 {
-	inet_twsk_purge(&dccp_hashinfo);
+	inet_twsk_purge(&dccp_hashinfo, AF_INET);
 }
 
 static struct pernet_operations dccp_v4_ops = {

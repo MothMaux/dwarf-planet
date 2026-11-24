@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2024 Analog Devices Inc. */
-
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
@@ -201,7 +198,6 @@
 			interrupt-parent = <&axi_intc>;
 			interrupts = <1 2>;
 			local-mac-address = [00 0a 35 00 00 03];
-			max-speed = <1000>;
 			phy-handle = <&phy0>;
 			phy-mode = "sgmii";
 			reg = <0x40e00000 0x40000>;

@@ -31,8 +31,8 @@ int mhi_rddm_prepare(struct mhi_controller *mhi_cntrl,
 	int ret;
 
 	for (i = 0; i < img_info->entries - 1; i++, mhi_buf++, bhi_vec++) {
-		bhi_vec->dma_addr = cpu_to_le64(mhi_buf->dma_addr);
-		bhi_vec->size = cpu_to_le64(mhi_buf->len);
+		bhi_vec->dma_addr = mhi_buf->dma_addr;
+		bhi_vec->size = mhi_buf->len;
 	}
 
 	dev_dbg(dev, "BHIe programming for RDDM\n");
@@ -118,7 +118,9 @@ static int __mhi_download_rddm_in_panic(struct mhi_controller *mhi_cntrl)
 			/* Hardware reset so force device to enter RDDM */
 			dev_dbg(dev,
 				"Did not enter RDDM, do a host req reset\n");
-			mhi_soc_reset(mhi_cntrl);
+			mhi_write_reg(mhi_cntrl, mhi_cntrl->regs,
+				      MHI_SOC_RESET_REQ_OFFSET,
+				      MHI_SOC_RESET_REQ);
 			udelay(delayus);
 		}
 
@@ -365,18 +367,20 @@ error_alloc_mhi_buf:
 }
 
 static void mhi_firmware_copy(struct mhi_controller *mhi_cntrl,
-			      const u8 *buf, size_t remainder,
+			      const struct firmware *firmware,
 			      struct image_info *img_info)
 {
+	size_t remainder = firmware->size;
 	size_t to_cpy;
+	const u8 *buf = firmware->data;
 	struct mhi_buf *mhi_buf = img_info->mhi_buf;
 	struct bhi_vec_entry *bhi_vec = img_info->bhi_vec;
 
 	while (remainder) {
 		to_cpy = min(remainder, mhi_buf->len);
 		memcpy(mhi_buf->buf, buf, to_cpy);
-		bhi_vec->dma_addr = cpu_to_le64(mhi_buf->dma_addr);
-		bhi_vec->size = cpu_to_le64(to_cpy);
+		bhi_vec->dma_addr = mhi_buf->dma_addr;
+		bhi_vec->size = to_cpy;
 
 		buf += to_cpy;
 		remainder -= to_cpy;
@@ -389,13 +393,11 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 {
 	const struct firmware *firmware = NULL;
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
-	enum mhi_pm_state new_state;
 	const char *fw_name;
-	const u8 *fw_data;
 	void *buf;
 	dma_addr_t dma_addr;
-	size_t size, fw_sz;
-	int ret;
+	size_t size;
+	int i, ret;
 
 	if (MHI_PM_IN_ERROR_STATE(mhi_cntrl->pm_state)) {
 		dev_err(dev, "Device MHI is not in valid state\n");
@@ -408,26 +410,21 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 	if (ret)
 		dev_err(dev, "Could not capture serial number via BHI\n");
 
+	for (i = 0; i < ARRAY_SIZE(mhi_cntrl->oem_pk_hash); i++) {
+		ret = mhi_read_reg(mhi_cntrl, mhi_cntrl->bhi, BHI_OEMPKHASH(i),
+				   &mhi_cntrl->oem_pk_hash[i]);
+		if (ret) {
+			dev_err(dev, "Could not capture OEM PK HASH via BHI\n");
+			break;
+		}
+	}
+
 	/* wait for ready on pass through or any other execution environment */
 	if (!MHI_FW_LOAD_CAPABLE(mhi_cntrl->ee))
 		goto fw_load_ready_state;
 
 	fw_name = (mhi_cntrl->ee == MHI_EE_EDL) ?
 		mhi_cntrl->edl_image : mhi_cntrl->fw_image;
-
-	/* check if the driver has already provided the firmware data */
-	if (!fw_name && mhi_cntrl->fbc_download &&
-	    mhi_cntrl->fw_data && mhi_cntrl->fw_sz) {
-		if (!mhi_cntrl->sbl_size) {
-			dev_err(dev, "fw_data provided but no sbl_size\n");
-			goto error_fw_load;
-		}
-
-		size = mhi_cntrl->sbl_size;
-		fw_data = mhi_cntrl->fw_data;
-		fw_sz = mhi_cntrl->fw_sz;
-		goto skip_req_fw;
-	}
 
 	if (!fw_name || (mhi_cntrl->fbc_download && (!mhi_cntrl->sbl_size ||
 						     !mhi_cntrl->seg_len))) {
@@ -448,10 +445,6 @@ void mhi_fw_load_handler(struct mhi_controller *mhi_cntrl)
 	if (size > firmware->size)
 		size = firmware->size;
 
-	fw_data = firmware->data;
-	fw_sz = firmware->size;
-
-skip_req_fw:
 	buf = dma_alloc_coherent(mhi_cntrl->cntrl_dev, size, &dma_addr,
 				 GFP_KERNEL);
 	if (!buf) {
@@ -460,7 +453,7 @@ skip_req_fw:
 	}
 
 	/* Download image using BHI */
-	memcpy(buf, fw_data, size);
+	memcpy(buf, firmware->data, size);
 	ret = mhi_fw_load_bhi(mhi_cntrl, dma_addr, size);
 	dma_free_coherent(mhi_cntrl->cntrl_dev, size, buf, dma_addr);
 
@@ -472,7 +465,7 @@ skip_req_fw:
 	}
 
 	/* Wait for ready since EDL image was loaded */
-	if (fw_name && fw_name == mhi_cntrl->edl_image) {
+	if (fw_name == mhi_cntrl->edl_image) {
 		release_firmware(firmware);
 		goto fw_load_ready_state;
 	}
@@ -486,14 +479,15 @@ skip_req_fw:
 	 * device transitioning into MHI READY state
 	 */
 	if (mhi_cntrl->fbc_download) {
-		ret = mhi_alloc_bhie_table(mhi_cntrl, &mhi_cntrl->fbc_image, fw_sz);
+		ret = mhi_alloc_bhie_table(mhi_cntrl, &mhi_cntrl->fbc_image,
+					   firmware->size);
 		if (ret) {
 			release_firmware(firmware);
 			goto error_fw_load;
 		}
 
 		/* Load the firmware into BHIE vec table */
-		mhi_firmware_copy(mhi_cntrl, fw_data, fw_sz, mhi_cntrl->fbc_image);
+		mhi_firmware_copy(mhi_cntrl, firmware, mhi_cntrl->fbc_image);
 	}
 
 	release_firmware(firmware);
@@ -516,18 +510,14 @@ error_ready_state:
 	}
 
 error_fw_load:
-	write_lock_irq(&mhi_cntrl->pm_lock);
-	new_state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_FW_DL_ERR);
-	write_unlock_irq(&mhi_cntrl->pm_lock);
-	if (new_state == MHI_PM_FW_DL_ERR)
-		wake_up_all(&mhi_cntrl->state_event);
+	mhi_cntrl->pm_state = MHI_PM_FW_DL_ERR;
+	wake_up_all(&mhi_cntrl->state_event);
 }
 
 int mhi_download_amss_image(struct mhi_controller *mhi_cntrl)
 {
 	struct image_info *image_info = mhi_cntrl->fbc_image;
 	struct device *dev = &mhi_cntrl->mhi_dev->dev;
-	enum mhi_pm_state new_state;
 	int ret;
 
 	if (!image_info)
@@ -538,11 +528,8 @@ int mhi_download_amss_image(struct mhi_controller *mhi_cntrl)
 			       &image_info->mhi_buf[image_info->entries - 1]);
 	if (ret) {
 		dev_err(dev, "MHI did not load AMSS, ret:%d\n", ret);
-		write_lock_irq(&mhi_cntrl->pm_lock);
-		new_state = mhi_tryset_pm_state(mhi_cntrl, MHI_PM_FW_DL_ERR);
-		write_unlock_irq(&mhi_cntrl->pm_lock);
-		if (new_state == MHI_PM_FW_DL_ERR)
-			wake_up_all(&mhi_cntrl->state_event);
+		mhi_cntrl->pm_state = MHI_PM_FW_DL_ERR;
+		wake_up_all(&mhi_cntrl->state_event);
 	}
 
 	return ret;

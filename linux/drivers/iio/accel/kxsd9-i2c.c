@@ -10,7 +10,8 @@
 
 #include "kxsd9.h"
 
-static int kxsd9_i2c_probe(struct i2c_client *i2c)
+static int kxsd9_i2c_probe(struct i2c_client *i2c,
+			   const struct i2c_device_id *id)
 {
 	static const struct regmap_config config = {
 		.reg_bits = 8,
@@ -43,8 +44,8 @@ static const struct of_device_id kxsd9_of_match[] = {
 MODULE_DEVICE_TABLE(of, kxsd9_of_match);
 
 static const struct i2c_device_id kxsd9_i2c_id[] = {
-	{ "kxsd9" },
-	{ }
+	{"kxsd9", 0},
+	{ },
 };
 MODULE_DEVICE_TABLE(i2c, kxsd9_i2c_id);
 

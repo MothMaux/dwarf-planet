@@ -248,17 +248,19 @@ static void intel_speed_mode_2500(struct net_device *ndev, void *intel_data)
 		dev_info(priv->device, "Link Speed Mode: 2.5Gbps\n");
 		priv->plat->max_speed = 2500;
 		priv->plat->phy_interface = PHY_INTERFACE_MODE_2500BASEX;
-		priv->plat->mdio_bus_data->default_an_inband = false;
+		priv->plat->mdio_bus_data->xpcs_an_inband = false;
 	} else {
 		priv->plat->max_speed = 1000;
+		priv->plat->mdio_bus_data->xpcs_an_inband = true;
 	}
 }
 
 /* Program PTP Clock Frequency for different variant of
  * Intel mGBE that has slightly different GPO mapping
  */
-static void intel_mgbe_ptp_clk_freq_config(struct stmmac_priv *priv)
+static void intel_mgbe_ptp_clk_freq_config(void *npriv)
 {
+	struct stmmac_priv *priv = (struct stmmac_priv *)npriv;
 	struct intel_priv_data *intel_priv;
 	u32 gpio_value;
 
@@ -325,10 +327,10 @@ static int intel_crosststamp(ktime_t *device,
 	/* Both internal crosstimestamping and external triggered event
 	 * timestamping cannot be run concurrently.
 	 */
-	if (priv->plat->flags & STMMAC_FLAG_EXT_SNAPSHOT_EN)
+	if (priv->plat->ext_snapshot_en)
 		return -EBUSY;
 
-	priv->plat->flags |= STMMAC_FLAG_INT_SNAPSHOT_EN;
+	priv->plat->int_snapshot_en = 1;
 
 	mutex_lock(&priv->aux_ts_lock);
 	/* Enable Internal snapshot trigger */
@@ -349,7 +351,7 @@ static int intel_crosststamp(ktime_t *device,
 		break;
 	default:
 		mutex_unlock(&priv->aux_ts_lock);
-		priv->plat->flags &= ~STMMAC_FLAG_INT_SNAPSHOT_EN;
+		priv->plat->int_snapshot_en = 0;
 		return -EINVAL;
 	}
 	writel(acr_value, ptpaddr + PTP_ACR);
@@ -375,15 +377,9 @@ static int intel_crosststamp(ktime_t *device,
 	if (!wait_event_interruptible_timeout(priv->tstamp_busy_wait,
 					      stmmac_cross_ts_isr(priv),
 					      HZ / 100)) {
-		priv->plat->flags &= ~STMMAC_FLAG_INT_SNAPSHOT_EN;
+		priv->plat->int_snapshot_en = 0;
 		return -ETIMEDOUT;
 	}
-
-	*system = (struct system_counterval_t) {
-		.cycles = 0,
-		.cs_id = CSID_X86_ART,
-		.use_nsecs = false,
-	};
 
 	num_snapshot = (readl(ioaddr + GMAC_TIMESTAMP_STATUS) &
 			GMAC_TIMESTAMP_ATSNS_MASK) >>
@@ -396,12 +392,11 @@ static int intel_crosststamp(ktime_t *device,
 		*device = ns_to_ktime(ptp_time);
 		read_unlock_irqrestore(&priv->ptp_lock, flags);
 		get_arttime(priv->mii, intel_priv->mdio_adhoc_addr, &art_time);
-		system->cycles = art_time;
+		*system = convert_art_to_tsc(art_time);
 	}
 
 	system->cycles *= intel_priv->crossts_adj;
-
-	priv->plat->flags &= ~STMMAC_FLAG_INT_SNAPSHOT_EN;
+	priv->plat->int_snapshot_en = 0;
 
 	return 0;
 }
@@ -450,16 +445,6 @@ static void common_default_data(struct plat_stmmacenet_data *plat)
 	plat->rx_queues_cfg[0].pkt_route = 0x0;
 }
 
-static struct phylink_pcs *intel_mgbe_select_pcs(struct stmmac_priv *priv,
-						 phy_interface_t interface)
-{
-	/* plat->mdio_bus_data->has_xpcs has been set true, so there
-	 * should always be an XPCS. The original code would always
-	 * return this if present.
-	 */
-	return &priv->hw->xpcs->pcs;
-}
-
 static int intel_mgbe_common_data(struct pci_dev *pdev,
 				  struct plat_stmmacenet_data *plat)
 {
@@ -474,7 +459,8 @@ static int intel_mgbe_common_data(struct pci_dev *pdev,
 	plat->has_gmac = 0;
 	plat->has_gmac4 = 1;
 	plat->force_sf_dma_mode = 0;
-	plat->flags |= (STMMAC_FLAG_TSO_EN | STMMAC_FLAG_SPH_DISABLE);
+	plat->tso_en = 1;
+	plat->sph_disable = 1;
 
 	/* Multiplying factor to the clk_eee_i clock time
 	 * period to make it closer to 100 ns. This value
@@ -576,7 +562,7 @@ static int intel_mgbe_common_data(struct pci_dev *pdev,
 	/* Set the maxmtu to a default of JUMBO_LEN */
 	plat->maxmtu = JUMBO_LEN;
 
-	plat->flags |= STMMAC_FLAG_VLAN_FAIL_Q_EN;
+	plat->vlan_fail_q_en = true;
 
 	/* Use the last Rx queue */
 	plat->vlan_fail_q = plat->rx_queues_to_use - 1;
@@ -602,9 +588,19 @@ static int intel_mgbe_common_data(struct pci_dev *pdev,
 	/* Intel mgbe SGMII interface uses pcs-xcps */
 	if (plat->phy_interface == PHY_INTERFACE_MODE_SGMII ||
 	    plat->phy_interface == PHY_INTERFACE_MODE_1000BASEX) {
-		plat->mdio_bus_data->pcs_mask = BIT(INTEL_MGBE_XPCS_ADDR);
-		plat->mdio_bus_data->default_an_inband = true;
-		plat->select_pcs = intel_mgbe_select_pcs;
+		plat->mdio_bus_data->has_xpcs = true;
+		plat->mdio_bus_data->xpcs_an_inband = true;
+	}
+
+	/* For fixed-link setup, we clear xpcs_an_inband */
+	if (fwnode) {
+		struct fwnode_handle *fixed_node;
+
+		fixed_node = fwnode_get_named_child_node(fwnode, "fixed-link");
+		if (fixed_node)
+			plat->mdio_bus_data->xpcs_an_inband = false;
+
+		fwnode_handle_put(fixed_node);
 	}
 
 	/* Ensure mdio bus scan skips intel serdes and pcs-xpcs */
@@ -612,9 +608,10 @@ static int intel_mgbe_common_data(struct pci_dev *pdev,
 	plat->mdio_bus_data->phy_mask |= 1 << INTEL_MGBE_XPCS_ADDR;
 
 	plat->int_snapshot_num = AUX_SNAPSHOT1;
+	plat->ext_snapshot_num = AUX_SNAPSHOT0;
 
 	plat->crosststamp = intel_crosststamp;
-	plat->flags &= ~STMMAC_FLAG_INT_SNAPSHOT_EN;
+	plat->int_snapshot_en = 0;
 
 	/* Setup MSI vector offset specific to Intel mGbE controller */
 	plat->msi_mac_vec = 29;
@@ -632,8 +629,7 @@ static int ehl_common_data(struct pci_dev *pdev,
 {
 	plat->rx_queues_to_use = 8;
 	plat->tx_queues_to_use = 8;
-	plat->flags |= STMMAC_FLAG_USE_PHY_WOL;
-	plat->flags |= STMMAC_FLAG_HWTSTAMP_CORRECT_LATENCY;
+	plat->use_phy_wol = 1;
 
 	plat->safety_feat_cfg->tsoee = 1;
 	plat->safety_feat_cfg->mrxpee = 1;
@@ -688,7 +684,7 @@ static int ehl_pse0_common_data(struct pci_dev *pdev,
 
 	intel_priv->is_pse = true;
 	plat->bus_id = 2;
-	plat->host_dma_width = 32;
+	plat->addr64 = 32;
 
 	plat->clk_ptp_rate = 200000000;
 
@@ -729,7 +725,7 @@ static int ehl_pse1_common_data(struct pci_dev *pdev,
 
 	intel_priv->is_pse = true;
 	plat->bus_id = 3;
-	plat->host_dma_width = 32;
+	plat->addr64 = 32;
 
 	plat->clk_ptp_rate = 200000000;
 
@@ -959,7 +955,7 @@ static int stmmac_config_single_msi(struct pci_dev *pdev,
 
 	res->irq = pci_irq_vector(pdev, 0);
 	res->wol_irq = res->irq;
-	plat->flags &= ~STMMAC_FLAG_MULTI_MSI_EN;
+	plat->multi_msi_en = 0;
 	dev_info(&pdev->dev, "%s: Single IRQ enablement successful\n",
 		 __func__);
 
@@ -1011,7 +1007,7 @@ static int stmmac_config_multi_msi(struct pci_dev *pdev,
 	if (plat->msi_sfty_ue_vec < STMMAC_MSI_VEC_MAX)
 		res->sfty_ue_irq = pci_irq_vector(pdev, plat->msi_sfty_ue_vec);
 
-	plat->flags |= STMMAC_FLAG_MULTI_MSI_EN;
+	plat->multi_msi_en = 1;
 	dev_info(&pdev->dev, "%s: multi MSI enablement successful\n", __func__);
 
 	return 0;

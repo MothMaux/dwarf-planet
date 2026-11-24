@@ -215,8 +215,6 @@ static int __init omap_cf_probe(struct platform_device *pdev)
 		return -EINVAL;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res)
-		return -EINVAL;
 
 	cf = kzalloc(sizeof *cf, GFP_KERNEL);
 	if (!cf)
@@ -292,29 +290,24 @@ fail0:
 	return status;
 }
 
-static void __exit omap_cf_remove(struct platform_device *pdev)
+static int __exit omap_cf_remove(struct platform_device *pdev)
 {
 	struct omap_cf_socket *cf = platform_get_drvdata(pdev);
 
 	cf->active = 0;
 	pcmcia_unregister_socket(&cf->socket);
-	timer_shutdown_sync(&cf->timer);
+	del_timer_sync(&cf->timer);
 	release_mem_region(cf->phys_cf, SZ_8K);
 	free_irq(cf->irq, cf);
 	kfree(cf);
+	return 0;
 }
 
-/*
- * omap_cf_remove() lives in .exit.text. For drivers registered via
- * platform_driver_probe() this is ok because they cannot get unbound at
- * runtime. So mark the driver struct with __refdata to prevent modpost
- * triggering a section mismatch warning.
- */
-static struct platform_driver omap_cf_driver __refdata = {
+static struct platform_driver omap_cf_driver = {
 	.driver = {
 		.name	= driver_name,
 	},
-	.remove_new	= __exit_p(omap_cf_remove),
+	.remove		= __exit_p(omap_cf_remove),
 };
 
 static int __init omap_cf_init(void)

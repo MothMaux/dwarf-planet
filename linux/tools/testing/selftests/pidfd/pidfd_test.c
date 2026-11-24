@@ -115,8 +115,7 @@ static int test_pidfd_send_signal_exited_fail(void)
 
 	pidfd = open(buf, O_DIRECTORY | O_CLOEXEC);
 
-	ret = wait_for_pid(pid);
-	ksft_print_msg("waitpid WEXITSTATUS=%d\n", ret);
+	(void)wait_for_pid(pid);
 
 	if (pidfd < 0)
 		ksft_exit_fail_msg(
@@ -381,13 +380,13 @@ static int test_pidfd_send_signal_syscall_support(void)
 
 static void *test_pidfd_poll_exec_thread(void *priv)
 {
-	ksft_print_msg("Child Thread: starting. pid %d tid %ld ; and sleeping\n",
+	ksft_print_msg("Child Thread: starting. pid %d tid %d ; and sleeping\n",
 			getpid(), syscall(SYS_gettid));
 	ksft_print_msg("Child Thread: doing exec of sleep\n");
 
 	execl("/bin/sleep", "sleep", str(CHILD_THREAD_MIN_WAIT), (char *)NULL);
 
-	ksft_print_msg("Child Thread: DONE. pid %d tid %ld\n",
+	ksft_print_msg("Child Thread: DONE. pid %d tid %d\n",
 			getpid(), syscall(SYS_gettid));
 	return NULL;
 }
@@ -427,7 +426,7 @@ static int child_poll_exec_test(void *args)
 {
 	pthread_t t1;
 
-	ksft_print_msg("Child (pidfd): starting. pid %d tid %ld\n", getpid(),
+	ksft_print_msg("Child (pidfd): starting. pid %d tid %d\n", getpid(),
 			syscall(SYS_gettid));
 	pthread_create(&t1, NULL, test_pidfd_poll_exec_thread, NULL);
 	/*
@@ -480,10 +479,10 @@ static void test_pidfd_poll_exec(int use_waitpid)
 
 static void *test_pidfd_poll_leader_exit_thread(void *priv)
 {
-	ksft_print_msg("Child Thread: starting. pid %d tid %ld ; and sleeping\n",
+	ksft_print_msg("Child Thread: starting. pid %d tid %d ; and sleeping\n",
 			getpid(), syscall(SYS_gettid));
 	sleep(CHILD_THREAD_MIN_WAIT);
-	ksft_print_msg("Child Thread: DONE. pid %d tid %ld\n", getpid(), syscall(SYS_gettid));
+	ksft_print_msg("Child Thread: DONE. pid %d tid %d\n", getpid(), syscall(SYS_gettid));
 	return NULL;
 }
 
@@ -492,7 +491,7 @@ static int child_poll_leader_exit_test(void *args)
 {
 	pthread_t t1, t2;
 
-	ksft_print_msg("Child: starting. pid %d tid %ld\n", getpid(), syscall(SYS_gettid));
+	ksft_print_msg("Child: starting. pid %d tid %d\n", getpid(), syscall(SYS_gettid));
 	pthread_create(&t1, NULL, test_pidfd_poll_leader_exit_thread, NULL);
 	pthread_create(&t2, NULL, test_pidfd_poll_leader_exit_thread, NULL);
 
@@ -572,5 +571,5 @@ int main(int argc, char **argv)
 	test_pidfd_send_signal_exited_fail();
 	test_pidfd_send_signal_recycled_pid_fail();
 
-	ksft_exit_pass();
+	return ksft_exit_pass();
 }

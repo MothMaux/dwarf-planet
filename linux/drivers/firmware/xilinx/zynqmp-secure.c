@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Xilinx ZynqMP SecureFw Driver.
- * Copyright (C) 2018 - 2022 Xilinx Inc.
- * Copyright (C) 2022 - 2025 Advanced Micro Devices, Inc.
+ * Copyright (c) 2018 Xilinx Inc.
  */
 
 #include <asm/cacheflush.h>
@@ -151,9 +150,10 @@ static int securefw_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void securefw_remove(struct platform_device *pdev)
+static int securefw_remove(struct platform_device *pdev)
 {
 	sysfs_remove_groups(&pdev->dev.kobj, securefw_groups);
+	return 0;
 }
 
 static struct platform_driver securefw_driver = {

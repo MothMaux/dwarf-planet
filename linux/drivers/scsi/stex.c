@@ -109,9 +109,7 @@ enum {
 	TASK_ATTRIBUTE_HEADOFQUEUE		= 0x1,
 	TASK_ATTRIBUTE_ORDERED			= 0x2,
 	TASK_ATTRIBUTE_ACA			= 0x4,
-};
 
-enum {
 	SS_STS_NORMAL				= 0x80000000,
 	SS_STS_DONE				= 0x40000000,
 	SS_STS_HANDSHAKE			= 0x20000000,
@@ -123,9 +121,7 @@ enum {
 	SS_I2H_REQUEST_RESET			= 0x2000,
 
 	SS_MU_OPERATIONAL			= 0x80000000,
-};
 
-enum {
 	STEX_CDB_LENGTH				= 16,
 	STATUS_VAR_LEN				= 128,
 
@@ -334,6 +330,7 @@ struct st_hba {
 	struct st_ccb *wait_ccb;
 	__le32 *scratch;
 
+	char work_q_name[20];
 	struct workqueue_struct *work_q;
 	struct work_struct reset_work;
 	wait_queue_head_t reset_waitq;
@@ -1475,7 +1472,7 @@ static int stex_biosparam(struct scsi_device *sdev,
 	return 0;
 }
 
-static const struct scsi_host_template driver_template = {
+static struct scsi_host_template driver_template = {
 	.module				= THIS_MODULE,
 	.name				= DRV_NAME,
 	.proc_name			= DRV_NAME,
@@ -1794,8 +1791,9 @@ static int stex_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	hba->pdev = pdev;
 	init_waitqueue_head(&hba->reset_waitq);
 
-	hba->work_q = alloc_ordered_workqueue("stex_wq_%d", WQ_MEM_RECLAIM,
-					      host->host_no);
+	snprintf(hba->work_q_name, sizeof(hba->work_q_name),
+		 "stex_wq_%d", host->host_no);
+	hba->work_q = create_singlethread_workqueue(hba->work_q_name);
 	if (!hba->work_q) {
 		printk(KERN_ERR DRV_NAME "(%s): create workqueue failed\n",
 			pci_name(pdev));
@@ -1844,7 +1842,6 @@ out_release_regions:
 out_scsi_host_put:
 	scsi_host_put(host);
 out_disable:
-	unregister_reboot_notifier(&stex_notifier);
 	pci_disable_device(pdev);
 
 	return err;

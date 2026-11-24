@@ -135,7 +135,8 @@ int axienet_ptp_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	/* we reached last frame */
 	if (tx_frame_waiting & (1 << 7)) {
-		netif_stop_subqueue(ndev, lp->num_tc);
+		if (!netif_queue_stopped(ndev))
+			netif_stop_queue(ndev);
 		pr_debug("tx_frame_waiting: %d\n", tx_frame_waiting);
 		return NETDEV_TX_BUSY;
 	}
@@ -362,8 +363,8 @@ irqreturn_t axienet_ptp_tx_irq(int irq, void *_ndev)
 	axienet_ior(lp, PTP_TX_CONTROL_OFFSET);
 
 	schedule_work(&lp->tx_tstamp_work);
-	if (__netif_subqueue_stopped(ndev, lp->num_tc))
-		netif_wake_subqueue(ndev, lp->num_tc);
+
+	netif_wake_queue(ndev);
 
 	return IRQ_HANDLED;
 }

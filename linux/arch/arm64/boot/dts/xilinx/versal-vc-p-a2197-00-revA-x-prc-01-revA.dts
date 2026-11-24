@@ -4,7 +4,7 @@
  *
  * (C) Copyright 2019, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@amd.com>
+ * Michal Simek <michal.simek@xilinx.com>
  */
 
 #include "versal-vc-p-a2197-00-revA.dts"
@@ -17,7 +17,7 @@
 	model = "Xilinx Versal A2197 Processor board revA - x-prc-01 revA QSPI";
 
 	chosen {
-		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8";
+		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8 clk_ignore_unused";
 		stdout-path = "serial0:115200";
 	};
 
@@ -44,6 +44,7 @@
 &qspi {
 	status = "okay"; /* u93 and u92 */
 	num-cs = <2>;
+	is-dual = <0x1>;
 	spi-rx-bus-width = <4>;
 	spi-tx-bus-width = <4>;
 
@@ -76,27 +77,19 @@
 	status = "okay";
 	phy-handle = <&phy1>; /* u128 */
 	phy-mode = "rgmii-id";
-	mdio: mdio {
-		#address-cells = <1>;
-		#size-cells = <0>;
-		phy1: phy@1 {
-			#phy-cells = <1>;
-			compatible = "ethernet-phy-id2000.a231";
-			reg = <1>;
-			ti,rx-internal-delay = <0xb>;
-			ti,tx-internal-delay = <0xa>;
-			ti,fifo-depth = <1>;
-			ti,dp83867-rxctrl-strap-quirk;
-		};
-		phy2: phy@2 {
-			#phy-cells = <1>;
-			compatible = "ethernet-phy-id2000.a231";
-			reg = <2>;
-			ti,rx-internal-delay = <0xb>;
-			ti,tx-internal-delay = <0xa>;
-			ti,fifo-depth = <1>;
-			ti,dp83867-rxctrl-strap-quirk;
-		};
+	phy1: phy@1 {
+		reg = <1>;
+		ti,rx-internal-delay = <0xb>;
+		ti,tx-internal-delay = <0xa>;
+		ti,fifo-depth = <1>;
+		ti,dp83867-rxctrl-strap-quirk; /* FIXME - Remove if board is fixed */
+	};
+	phy2: phy@2 {
+		reg = <2>;
+		ti,rx-internal-delay = <0xb>;
+		ti,tx-internal-delay = <0xa>;
+		ti,fifo-depth = <1>;
+		ti,dp83867-rxctrl-strap-quirk; /* FIXME - Remove if board is fixed */
 	};
 };
 

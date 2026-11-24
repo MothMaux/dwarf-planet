@@ -414,7 +414,7 @@ static ssize_t ad9528_store(struct device *dev,
 	bool state;
 	int ret;
 
-	ret = kstrtobool(buf, &state);
+	ret = strtobool(buf, &state);
 	if (ret < 0)
 		return ret;
 
@@ -871,13 +871,6 @@ static struct clk *ad9528_clk_register(struct iio_dev *indio_dev, unsigned num,
 	return clk;
 }
 
-static void ad9528_clk_del_provider(void *data)
-{
-	struct device_node *np = data;
-
-	of_clk_del_provider(np);
-}
-
 static int ad9528_clks_register(struct iio_dev *indio_dev)
 {
 	struct ad9528_state *st = iio_priv(indio_dev);
@@ -907,7 +900,7 @@ static int ad9528_clks_register(struct iio_dev *indio_dev)
 	if (ret < 0)
 		return ret;
 
-	return devm_add_action_or_reset(&st->spi->dev, ad9528_clk_del_provider, np);
+	return 0;
 }
 
 static int ad9528_setup(struct iio_dev *indio_dev)
@@ -1418,7 +1411,6 @@ static int ad9528_jesd204_clks_sync(struct jesd204_dev *jdev,
 {
 	struct device *dev = jesd204_dev_to_device(jdev);
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
-	struct ad9528_state *st = iio_priv(indio_dev);
 	int ret;
 
 	if (reason != JESD204_STATE_OP_REASON_INIT)
@@ -1426,9 +1418,6 @@ static int ad9528_jesd204_clks_sync(struct jesd204_dev *jdev,
 
 	dev_dbg(dev, "%s:%d reason %s\n", __func__, __LINE__,
 		jesd204_state_op_reason_str(reason));
-
-	if (st->pdata->jdev_skip_clk_sync)
-		return JESD204_STATE_CHANGE_DONE;
 
 	ret = ad9528_sync(indio_dev);
 	if (ret)
@@ -1456,7 +1445,7 @@ static const struct jesd204_dev_data jesd204_ad9528_init = {
 #ifdef CONFIG_OF
 static struct ad9528_platform_data *ad9528_parse_dt(struct device *dev)
 {
-	struct device_node *np = dev->of_node;
+	struct device_node *np = dev->of_node, *chan_np;
 	struct ad9528_platform_data *pdata;
 	struct ad9528_channel_spec *chan;
 	unsigned int tmp, cnt = 0;
@@ -1548,9 +1537,6 @@ static struct ad9528_platform_data *ad9528_parse_dt(struct device *dev)
 	of_property_read_u32(np, "adi,jesd204-desired-sysref-frequency-hz",
 			     &pdata->jdev_desired_sysref_freq);
 
-	pdata->jdev_skip_clk_sync =
-		of_property_read_bool(np, "adi,jesd204-skip-clock-sync");
-
 	/* PLL2 Setting */
 	of_property_read_u32(np, "adi,pll2-charge-pump-current-nA",
 			     &pdata->pll2_charge_pump_current_nA);
@@ -1607,7 +1593,7 @@ static struct ad9528_platform_data *ad9528_parse_dt(struct device *dev)
 
 	strncpy(&pdata->name[0], np->name, SPI_NAME_SIZE - 1);
 
-	for_each_child_of_node_scoped(np, chan_np)
+	for_each_child_of_node(np, chan_np)
 		cnt++;
 
 	pdata->num_channels = cnt;
@@ -1616,7 +1602,7 @@ static struct ad9528_platform_data *ad9528_parse_dt(struct device *dev)
 		return NULL;
 
 	cnt = 0;
-	for_each_child_of_node_scoped(np, chan_np) {
+	for_each_child_of_node(np, chan_np) {
 		ret = of_property_read_u32(chan_np, "reg",
 				     &pdata->channels[cnt].channel_num);
 		if (ret) {
@@ -1653,7 +1639,7 @@ static struct ad9528_platform_data *ad9528_parse_dt(struct device *dev)
 		ret = of_property_read_string(
 				chan_np, "adi,extended-name", &str);
 		if (ret >= 0)
-			strscpy(pdata->channels[cnt].extended_name, str,
+			strlcpy(pdata->channels[cnt].extended_name, str,
 					sizeof(pdata->channels[cnt].extended_name));
 
 		cnt++;
@@ -1754,7 +1740,7 @@ static int ad9528_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	return devm_jesd204_fsm_start(&spi->dev, st->jdev, JESD204_LINKS_ALL);
+	return jesd204_fsm_start(st->jdev, JESD204_LINKS_ALL);
 }
 
 static const struct spi_device_id ad9528_id[] = {

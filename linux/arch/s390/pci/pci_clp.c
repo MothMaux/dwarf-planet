@@ -164,13 +164,10 @@ static int clp_store_query_pci_fn(struct zpci_dev *zdev,
 	zdev->port = response->port;
 	zdev->uid = response->uid;
 	zdev->fmb_length = sizeof(u32) * response->fmb_len;
-	zdev->is_physfn = response->is_physfn;
 	zdev->rid_available = response->rid_avail;
-	if (zdev->rid_available)
-		zdev->rid = response->rid;
-	zdev->tid_avail = response->tid_avail;
-	if (zdev->tid_avail)
-		zdev->tid = response->tid;
+	zdev->is_physfn = response->is_physfn;
+	if (!s390_pci_no_rid && zdev->rid_available)
+		zdev->devfn = response->rid & ZPCI_RID_MASK_DEVFN;
 
 	memcpy(zdev->pfip, response->pfip, sizeof(zdev->pfip));
 	if (response->util_str_avail) {
@@ -410,7 +407,6 @@ static int clp_find_pci(struct clp_req_rsp_list_pci *rrb, u32 fid,
 
 static void __clp_add(struct clp_fh_list_entry *entry, void *data)
 {
-	struct list_head *scan_list = data;
 	struct zpci_dev *zdev;
 
 	if (!entry->vendor_id)
@@ -421,13 +417,10 @@ static void __clp_add(struct clp_fh_list_entry *entry, void *data)
 		zpci_zdev_put(zdev);
 		return;
 	}
-	zdev = zpci_create_device(entry->fid, entry->fh, entry->config_state);
-	if (IS_ERR(zdev))
-		return;
-	list_add_tail(&zdev->entry, scan_list);
+	zpci_create_device(entry->fid, entry->fh, entry->config_state);
 }
 
-int clp_scan_pci_devices(struct list_head *scan_list)
+int clp_scan_pci_devices(void)
 {
 	struct clp_req_rsp_list_pci *rrb;
 	int rc;
@@ -436,7 +429,7 @@ int clp_scan_pci_devices(struct list_head *scan_list)
 	if (!rrb)
 		return -ENOMEM;
 
-	rc = clp_list_pci(rrb, scan_list, __clp_add);
+	rc = clp_list_pci(rrb, NULL, __clp_add);
 
 	clp_free_block(rrb);
 	return rc;
@@ -664,6 +657,7 @@ static const struct file_operations clp_misc_fops = {
 	.release = clp_misc_release,
 	.unlocked_ioctl = clp_misc_ioctl,
 	.compat_ioctl = clp_misc_ioctl,
+	.llseek = no_llseek,
 };
 
 static struct miscdevice clp_misc_device = {
@@ -672,4 +666,9 @@ static struct miscdevice clp_misc_device = {
 	.fops = &clp_misc_fops,
 };
 
-builtin_misc_device(clp_misc_device);
+static int __init clp_misc_init(void)
+{
+	return misc_register(&clp_misc_device);
+}
+
+device_initcall(clp_misc_init);

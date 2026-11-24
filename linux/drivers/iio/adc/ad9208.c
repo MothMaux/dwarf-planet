@@ -533,7 +533,7 @@ static ssize_t ad9208_ext_info_write(struct iio_dev *indio_dev,
 	bool enable;
 	int ret;
 
-	ret = kstrtobool(buf, &enable);
+	ret = strtobool(buf, &enable);
 	if (ret)
 		return ret;
 
@@ -561,13 +561,13 @@ static struct iio_chan_spec_ext_info axiadc_ext_info[] = {
 	{
 		.name = "scale_available",
 		.read = ad9208_show_scale_available,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 	},
 	{
 		.name = "dc_filter_enable",
 		.read = ad9208_ext_info_read,
 		.write = ad9208_ext_info_write,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 		.private = DC_FILT,
 	},
 	{},
@@ -579,7 +579,7 @@ static struct iio_chan_spec_ext_info ad9680_ext_info[] = {
 	{
 		.name = "scale_available",
 		.read = ad9208_show_scale_available,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 	},
 	{},
 };

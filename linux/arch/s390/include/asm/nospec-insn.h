@@ -2,7 +2,6 @@
 #ifndef _ASM_S390_NOSPEC_ASM_H
 #define _ASM_S390_NOSPEC_ASM_H
 
-#include <linux/linkage.h>
 #include <asm/dwarf.h>
 
 #ifdef __ASSEMBLY__
@@ -16,25 +15,24 @@
  */
 	.macro __THUNK_PROLOG_NAME name
 #ifdef CONFIG_EXPOLINE_EXTERN
-	SYM_CODE_START(\name)
+	.pushsection .text,"ax",@progbits
+	.align 16,0x07
 #else
 	.pushsection .text.\name,"axG",@progbits,\name,comdat
+#endif
 	.globl \name
 	.hidden \name
 	.type \name,@function
 \name:
 	CFI_STARTPROC
-#endif
 	.endm
 
 	.macro __THUNK_EPILOG_NAME name
-#ifdef CONFIG_EXPOLINE_EXTERN
-	SYM_CODE_END(\name)
-	EXPORT_SYMBOL(\name)
-#else
 	CFI_ENDPROC
-	.popsection
+#ifdef CONFIG_EXPOLINE_EXTERN
+	.size \name, .-\name
 #endif
+	.popsection
 	.endm
 
 	.macro __THUNK_PROLOG_BR r1

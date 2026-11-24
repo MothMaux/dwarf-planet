@@ -6,9 +6,7 @@
  */
 
 #include "ai-engine-internal.h"
-#include "ai-engine-trace.h"
 #include <linux/slab.h>
-#include <linux/xlnx-ai-engine.h>
 
 /*
  * Macros for the AI engine resource bitmap element header
@@ -532,12 +530,10 @@ long aie_part_rscmgr_rsc_req(struct aie_partition *apart,
 	long ret;
 	int mod_num_rscs, start_bit;
 	struct aie_rsc *rscs;
-	int i;
 
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EFAULT;
 
-	trace_aie_part_rsc_req_rsp(apart, &args);
 	if (!args.rscs) {
 		dev_err(&apart->dev,
 			"invalid resource request, empty resources list.\n");
@@ -628,8 +624,7 @@ long aie_part_rscmgr_rsc_req(struct aie_partition *apart,
 		ret = -EFAULT;
 	else
 		ret = 0;
-	for (i = 0; i < args.req.num_rscs; i++)
-		trace_aie_part_rsc(apart, &rscs[i]);
+
 	kfree(rscs);
 	return ret;
 }
@@ -660,7 +655,6 @@ static long aie_part_rscmgr_rsc_clearbit(struct aie_partition *apart,
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EFAULT;
 
-	trace_aie_part_rsc(apart, &args);
 	rloc.col = (u32)(args.loc.col & 0xFF);
 	rloc.row = (u32)(args.loc.row & 0xFF);
 	ret = aie_part_adjust_loc(apart, rloc, &loc);
@@ -774,7 +768,6 @@ long aie_part_rscmgr_rsc_req_specific(struct aie_partition *apart,
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EFAULT;
 
-	trace_aie_part_rsc(apart, &args);
 	rloc.col = (u32)(args.loc.col & 0xFF);
 	rloc.row = (u32)(args.loc.row & 0xFF);
 	ret = aie_part_adjust_loc(apart, rloc, &loc);
@@ -851,7 +844,6 @@ long aie_part_rscmgr_rsc_check_avail(struct aie_partition *apart,
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EFAULT;
 
-	trace_aie_part_rsc_req(apart, &args);
 	ret = aie_part_adjust_loc(apart, args.loc, &loc);
 	if (ret < 0)
 		return ret;
@@ -885,7 +877,6 @@ long aie_part_rscmgr_rsc_check_avail(struct aie_partition *apart,
 							mod_num_rscs);
 	mutex_unlock(&apart->mlock);
 
-	trace_aie_part_rsc_req(apart, &args);
 	if (copy_to_user(user_args, &args, sizeof(args)))
 		return -EFAULT;
 
@@ -1221,7 +1212,6 @@ long aie_part_rscmgr_get_broadcast(struct aie_partition *apart,
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EFAULT;
 
-	trace_aie_part_rsc_bc_rsp(apart, &args);
 	rscs = kmalloc_array(args.num_rscs, sizeof(*rscs), GFP_KERNEL);
 	if (!rscs)
 		return -ENOMEM;
@@ -1232,9 +1222,6 @@ long aie_part_rscmgr_get_broadcast(struct aie_partition *apart,
 			kfree(rscs);
 			return -EFAULT;
 		}
-		for (i = 0; i < args.num_rscs; i++)
-			trace_aie_part_rsc(apart, &rscs[i]);
-
 	}
 
 	ret = mutex_lock_interruptible(&apart->mlock);
@@ -1299,8 +1286,6 @@ long aie_part_rscmgr_get_broadcast(struct aie_partition *apart,
 		kfree(rscs);
 		return -EFAULT;
 	}
-	for (i = 0; i < args.num_rscs; i++)
-		trace_aie_part_rsc(apart, &rscs[i]);
 
 	/*
 	 * If it is required to broadcast to whole partition, it needs to
@@ -1417,124 +1402,6 @@ int aie_part_rscmgr_set_static(struct aie_partition *apart, void *meta)
 }
 
 /**
- * aie_part_rscmgr_set_static_range() - sets statically allocated resources
- *                                      bitmap for sub partition
- *
- * @dev: AI engine partition device
- * @start_col: Start column of sub partition
- * @num_col: Number of column in sub partition
- * @meta: meta data which contains the statically allocated resources bitmaps
- *
- * @return: 0 for success, negative value for failure
- *
- * This function takes the static bitmap information of sub partition from meta
- * data and fill in the static bitmap.
- */
-int aie_part_rscmgr_set_static_range(struct device *dev, u8 start_col,
-				     u8 num_col, void *meta)
-{
-	struct aie_rsc_meta_header *header = meta;
-	struct aie_rsc_bitmap *bitmap;
-	struct aie_partition *apart;
-	u64 i, num_bitmaps, offset;
-
-	if (!dev)
-		return -EINVAL;
-
-	apart = dev_to_aiepart(dev);
-
-	if (!header) {
-		dev_err(&apart->dev,
-			"failed to get static resources, meta data is NULL.\n");
-		return -EINVAL;
-	}
-
-	if (start_col >= apart->range.size.col || num_col == 0 ||
-	    (start_col + num_col) > apart->range.size.col) {
-		dev_err(&apart->dev,
-			"invalid start column/number of column\n");
-		return -EINVAL;
-	}
-
-	/*
-	 * For now, the stat field of the header only contains the number of
-	 * bitmaps.
-	 */
-	num_bitmaps = header->stat;
-	offset = header->bitmap_off;
-	if (!num_bitmaps || offset < sizeof(*header)) {
-		dev_err(&apart->dev,
-			"failed to get static resources, invalid header.\n");
-		return -EINVAL;
-	}
-
-	bitmap = (struct aie_rsc_bitmap *)(meta + offset);
-	for (i = 0; i < num_bitmaps; i++) {
-		struct aie_rsc_stat *rstat;
-		const struct aie_mod_rsc_attr *mrattr;
-		struct aie_location loc;
-		u64 header = bitmap->header;
-		u32 lrlen, rlen, ttype, mtype, rtype, total;
-		u64 bit_offset;
-
-		ttype = AIE_RSC_BITMAP_HEAD_VAL(TILETYPE, header);
-		mtype = AIE_RSC_BITMAP_HEAD_VAL(MODTYPE, header);
-		rtype = AIE_RSC_BITMAP_HEAD_VAL(RSCTYPE, header);
-		rlen = AIE_RSC_BITMAP_HEAD_VAL(LENU64, header);
-
-		if (!rlen) {
-			dev_err(&apart->dev,
-				"invalid static bitmap[%llu], length is 0.\n",
-				i);
-			return -EINVAL;
-		}
-
-		mrattr = aie_dev_get_mod_rsc_attr(apart->adev, ttype, mtype,
-						  rtype);
-		if (!mrattr) {
-			dev_err(&apart->dev,
-				"invalid static bitmap[%llu], invalid tile(%u)/module(%u)/rsce(%u) types combination.\n",
-				i, ttype, mtype, rtype);
-			return -EINVAL;
-		}
-
-		total = mrattr->num_rscs * num_col * aie_part_get_tile_rows(apart, ttype);
-		lrlen = BITS_TO_LONGS(total);
-		if (rlen != lrlen) {
-			dev_err(&apart->dev,
-				"invalid static bitmap[%llu], tile(%u)/module(%u)/rscs(%u), expect len(%u), actual(%u).\n",
-				i, ttype, mtype, rtype, lrlen, rlen);
-			return -EINVAL;
-		}
-
-		rstat = aie_part_get_ttype_rsc_bitmaps(apart, ttype, mtype,
-						       rtype);
-		/* if bitmap length is not 0, bitmap pointer cannot be NULL. */
-		if (WARN_ON(!rstat || !rstat->sbits.bitmap))
-			return -EFAULT;
-
-		loc.col = start_col + apart->range.start.col;
-		loc.row = 0;
-		u64 des_start_bit = mrattr->num_rscs * ((loc.col - apart->range.start.col) *
-				aie_part_get_tile_rows(apart, ttype));
-
-		for (bit_offset = 0; bit_offset < total; bit_offset++) {
-			if (test_bit(bit_offset, (unsigned long *)bitmap->bitmap)) {
-				aie_resource_set(&rstat->sbits,
-						 des_start_bit +  bit_offset, 1);
-			}
-		}
-
-		bitmap = (struct aie_rsc_bitmap *)((void *)bitmap +
-						   sizeof(header) +
-						   rlen * sizeof(u64));
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(aie_part_rscmgr_set_static_range);
-
-/**
  * aie_part_rscmgr_check_static() - check the number of static resources
  *
  * @rstat: resource statistics structure which contains bitmaps of a resource
@@ -1613,7 +1480,6 @@ long aie_part_rscmgr_get_statistics(struct aie_partition *apart,
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EFAULT;
 
-	trace_aie_part_rsc_user_stat_array(apart, &args);
 	if (args.stats_type >= AIE_RSC_STAT_TYPE_MAX) {
 		dev_err(&apart->dev,
 			"get rsc statistics failed, invalid rsc stat type %u.\n",
@@ -1681,7 +1547,6 @@ long aie_part_rscmgr_get_statistics(struct aie_partition *apart,
 		if (copy_to_user((void __user *)ustat_ptr, &ustat,
 				 sizeof(ustat)))
 			return -EFAULT;
-		trace_aie_part_user_stat(apart, &ustat);
 
 		ustat_ptr++;
 	}

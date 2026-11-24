@@ -206,7 +206,7 @@ static const struct file_operations adrv9002_rx_agc_config_fops = {
 	.release	= single_release,
 };
 
-static void adrv9002_debugfs_agc_config_create(struct adrv9002_rx_chan *rx, struct dentry *d)
+void adrv9002_debugfs_agc_config_create(struct adrv9002_rx_chan *rx, struct dentry *d)
 {
 #define adrv9002_agc_get_attr(nr, member) ((nr) == ADI_CHANNEL_1 ? \
 					"rx0_agc_" #member : "rx1_agc_" #member)
@@ -619,42 +619,6 @@ DEFINE_DEBUGFS_ATTRIBUTE(adrv9002_tx_ssi_test_mode_loopback_fops,
 			 adrv9002_tx_ssi_test_mode_loopback_set,
 			 "%llu\n");
 
-static int adrv9002_tx_datapath_loopback_get(void *arg, u64 *val)
-{
-	struct adrv9002_tx_chan	*tx = arg;
-	struct adrv9002_rf_phy *phy = tx_to_phy(tx, tx->channel.idx);
-
-	guard(mutex)(&phy->lock);
-	*val = tx->datapath_loopback;
-
-	return 0;
-};
-
-static int adrv9002_tx_datapath_loopback_set(void *arg, const u64 val)
-{
-	struct adrv9002_tx_chan	*tx = arg;
-	struct adrv9002_rf_phy *phy = tx_to_phy(tx, tx->channel.idx);
-	bool enable = !!val;
-	int ret;
-
-	guard(mutex)(&phy->lock);
-	if (!tx->channel.enabled)
-		return -ENODEV;
-	if (enable == tx->datapath_loopback)
-		return 0;
-
-	ret = api_call(phy, adi_adrv9001_Tx_DataPath_Loopback_Set, tx->channel.number, enable);
-	if (ret)
-		return ret;
-
-	tx->datapath_loopback = enable;
-	return 0;
-};
-DEFINE_DEBUGFS_ATTRIBUTE(adrv9002_tx_datapath_loopback_fops,
-			 adrv9002_tx_datapath_loopback_get,
-			 adrv9002_tx_datapath_loopback_set,
-			 "%llu\n");
-
 static int adrv9002_ssi_tx_test_mode_set(void *arg, const u64 val)
 {
 	struct adrv9002_tx_chan	*tx = arg;
@@ -738,13 +702,7 @@ static ssize_t adrv9002_ssi_delays_write(struct file *file, const char __user *u
 	int ret;
 
 	guard(mutex)(&phy->lock);
-	ret = api_call(phy, adi_adrv9001_Ssi_Delay_Configure, ADI_CHANNEL_1, phy->ssi_type,
-		       &phy->ssi_delays);
-	if (ret)
-		return ret;
-
-	ret = api_call(phy, adi_adrv9001_Ssi_Delay_Configure, ADI_CHANNEL_2, phy->ssi_type,
-		       &phy->ssi_delays);
+	ret = api_call(phy, adi_adrv9001_Ssi_Delay_Configure, phy->ssi_type, &phy->ssi_delays);
 
 	return ret ? ret : count;
 }
@@ -855,31 +813,6 @@ static int adrv9002_rx_near_end_loopback_set(void *arg, const u64 val)
 
 DEFINE_DEBUGFS_ATTRIBUTE(adrv9002_rx_near_end_loopback_set_fops, NULL,
 			 adrv9002_rx_near_end_loopback_set, "%llu\n");
-
-static int adrv9002_cals_int_path_delay_get(void *arg, u64 *val)
-{
-	struct adrv9002_chan *chan = arg;
-	struct adrv9002_rf_phy *phy = chan_to_phy(chan);
-	u32 delay_ns;
-	int ret;
-
-	guard(mutex)(&phy->lock);
-	if (!chan->enabled)
-		return -ENODEV;
-
-	ret = api_call(phy, adi_adrv9001_cals_InternalPathDelay_Get, chan->port, chan->number,
-		       &delay_ns, 1);
-	if (ret)
-		return ret;
-
-	*val = delay_ns;
-
-	return 0;
-};
-DEFINE_DEBUGFS_ATTRIBUTE(adrv9002_cals_int_path_delay_fops,
-			 adrv9002_cals_int_path_delay_get,
-			 NULL,
-			 "%llu\n");
 
 static ssize_t adrv9002_api_version_get(struct file *file, char __user *userbuf,
 					size_t count, loff_t *off)
@@ -1570,32 +1503,6 @@ static void adrv9002_debugfs_dpd_config_create(struct adrv9002_tx_chan *tx, stru
 	debugfs_create_u32(attr, 0600, d, &tx->dpd->captureDelay_us);
 }
 
-static const char * const pll_str[] = { "pll_lo1", "pll_lo2", "pll_aux" };
-
-static void adrv9002_debugfs_pll_config_create(struct adrv9002_rf_phy *phy, struct dentry *d)
-{
-	int pll;
-	char attr[64];
-	struct adrv9002_pll_config *pll_config;
-	const char *pll_name;
-
-	for (pll = 0; pll < ADRV9002_NUM_PLL_CFGS; pll++) {
-		pll_config = &phy->pll_configs[pll];
-		pll_name = pll_str[pll];
-
-		sprintf(attr, "%s_calibration_mode", pll_name);
-		debugfs_create_u32(attr, 0600, d, &pll_config->pll_config.pllCalibration);
-		sprintf(attr, "%s_power", pll_name);
-		debugfs_create_u32(attr, 0600, d, &pll_config->pll_config.pllPower);
-		sprintf(attr, "%s_loop_bandwidth_khz", pll_name);
-		debugfs_create_u16(attr, 0600, d, &pll_config->pll_loop_filter.loopBandwidth_kHz);
-		sprintf(attr, "%s_phase_margin_deg", pll_name);
-		debugfs_create_u8(attr, 0600, d, &pll_config->pll_loop_filter.phaseMargin_degrees);
-		sprintf(attr, "%s_power_scale", pll_name);
-		debugfs_create_u8(attr, 0600, d, &pll_config->pll_loop_filter.powerScale);
-	}
-}
-
 void adrv9002_debugfs_create(struct adrv9002_rf_phy *phy, struct dentry *d)
 {
 	int chan;
@@ -1631,21 +1538,6 @@ void adrv9002_debugfs_create(struct adrv9002_rf_phy *phy, struct dentry *d)
 	debugfs_create_file("mcs_status", 0400, d, phy, &adrv9002_mcs_status_fops);
 
 	debugfs_create_u32("dev_clkout_div", 0600, d, &phy->dev_clkout_div);
-
-	/* port switch */
-	if (phy->port_switch.enable && !phy->port_switch.manualRxPortSwitch) {
-		debugfs_create_u64("rx_port_a_min_carrier_hz", 0600, d,
-				   &phy->port_switch.minFreqPortA_Hz);
-		debugfs_create_u64("rx_port_a_max_carrier_hz", 0600, d,
-				   &phy->port_switch.maxFreqPortA_Hz);
-		debugfs_create_u64("rx_port_b_min_carrier_hz", 0600, d,
-				   &phy->port_switch.minFreqPortB_Hz);
-		debugfs_create_u64("rx_port_b_max_carrier_hz", 0600, d,
-				   &phy->port_switch.maxFreqPortB_Hz);
-	}
-
-	debugfs_create_bool("mcs_pulse_external", 0600, d, &phy->mcs_pulse_external);
-	debugfs_create_bool("mcs_trigger_external", 0600, d, &phy->mcs_trigger_external);
 
 	for (chan = 0; chan < phy->chip->n_tx; chan++) {
 		struct adrv9002_tx_chan *tx = &phy->tx_channels[chan];
@@ -1706,16 +1598,9 @@ void adrv9002_debugfs_create(struct adrv9002_rf_phy *phy, struct dentry *d)
 		debugfs_create_u16(attr, 0600, d, &tx->channel.mcs_delay.sampleDelay);
 		sprintf(attr, "tx%d_mcs_delays", chan);
 		debugfs_create_file(attr, 0600, d, &tx->channel, &adrv9002_mcs_delays_fops);
-		/* tx datapath loopback */
-		sprintf(attr, "tx%d_datapath_loopback_en", chan);
-		debugfs_create_file_unsafe(attr, 0600, d, tx, &adrv9002_tx_datapath_loopback_fops);
-		/* cals internal path delay */
-		sprintf(attr, "tx%d_cals_internal_path_delay_ns", chan);
-		debugfs_create_file_unsafe(attr, 0400, d, &tx->channel,
-					   &adrv9002_cals_int_path_delay_fops);
 	}
 
-	for (chan = 0; chan < phy->chip->n_rx; chan++) {
+	for (chan = 0; chan < ARRAY_SIZE(phy->rx_channels); chan++) {
 		struct adrv9002_rx_chan *rx = &phy->rx_channels[chan];
 
 		sprintf(attr, "rx%d_adc_type", chan);
@@ -1768,13 +1653,8 @@ void adrv9002_debugfs_create(struct adrv9002_rf_phy *phy, struct dentry *d)
 		debugfs_create_u16(attr, 0600, d, &rx->channel.mcs_delay.sampleDelay);
 		sprintf(attr, "rx%d_mcs_delays", chan);
 		debugfs_create_file(attr, 0600, d, &rx->channel, &adrv9002_mcs_delays_fops);
-		/* cals internal path delay */
-		sprintf(attr, "rx%d_cals_internal_path_delay_ns", chan);
-		debugfs_create_file_unsafe(attr, 0400, d, &rx->channel,
-					   &adrv9002_cals_int_path_delay_fops);
 	}
 
 	adrv9002_debugfs_fh_config_create(phy, d);
 	adrv9002_debugfs_gpio_config_create(phy, d);
-	adrv9002_debugfs_pll_config_create(phy, d);
 }

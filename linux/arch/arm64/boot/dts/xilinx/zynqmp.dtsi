@@ -4,7 +4,7 @@
  *
  * (C) Copyright 2014 - 2021, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@amd.com>
+ * Michal Simek <michal.simek@xilinx.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -14,30 +14,19 @@
 
 #include <dt-bindings/dma/xlnx-zynqmp-dpdma.h>
 #include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/interrupt-controller/arm-gic.h>
-#include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/power/xlnx-zynqmp-power.h>
 #include <dt-bindings/reset/xlnx-zynqmp-resets.h>
-#include <dt-bindings/thermal/thermal.h>
 
 / {
 	compatible = "xlnx,zynqmp";
 	#address-cells = <2>;
 	#size-cells = <2>;
 
-	options {
-		u-boot {
-			compatible = "u-boot,config";
-			bootscr-address = /bits/ 64 <0x20000000>;
-		};
-	};
-
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
 
 		cpu0: cpu@0 {
-			#cooling-cells = <2>;
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
@@ -48,7 +37,6 @@
 		};
 
 		cpu1: cpu@1 {
-			#cooling-cells = <2>;
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
@@ -59,7 +47,6 @@
 		};
 
 		cpu2: cpu@2 {
-			#cooling-cells = <2>;
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
@@ -70,7 +57,6 @@
 		};
 
 		cpu3: cpu@3 {
-			#cooling-cells = <2>;
 			compatible = "arm,cortex-a53";
 			device_type = "cpu";
 			enable-method = "psci";
@@ -83,7 +69,6 @@
 		L2: l2-cache {
 			compatible = "cache";
 			cache-level = <2>;
-			cache-unified;
 		};
 
 		idle-states {
@@ -125,35 +110,18 @@
 		};
 	};
 
-	reserved-memory {
-		#address-cells = <2>;
-		#size-cells = <2>;
-		ranges;
-
-		rproc_0_fw_image: memory@3ed00000 {
-			no-map;
-			reg = <0x0 0x3ed00000 0x0 0x40000>;
-		};
-
-		rproc_1_fw_image: memory@3ef00000 {
-			no-map;
-			reg = <0x0 0x3ef00000 0x0 0x40000>;
-		};
-	};
-
 	zynqmp_ipi: zynqmp-ipi {
-		bootph-all;
+		u-boot,dm-pre-reloc;
 		compatible = "xlnx,zynqmp-ipi-mailbox";
 		interrupt-parent = <&gic>;
-		interrupts = <GIC_SPI 35 IRQ_TYPE_LEVEL_HIGH>;
+		interrupts = <0 35 4>;
 		xlnx,ipi-id = <0>;
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
 
 		ipi_mailbox_pmu1: mailbox@ff9905c0 {
-			bootph-all;
-			compatible = "xlnx,zynqmp-ipi-dest-mailbox";
+			u-boot,dm-pre-reloc;
 			reg = <0x0 0xff9905c0 0x0 0x20>,
 			      <0x0 0xff9905e0 0x0 0x20>,
 			      <0x0 0xff990e80 0x0 0x20>,
@@ -170,16 +138,16 @@
 	dcc: dcc {
 		compatible = "arm,dcc";
 		status = "disabled";
-		bootph-all;
+		u-boot,dm-pre-reloc;
 	};
 
 	pmu {
-		compatible = "arm,cortex-a53-pmu";
+		compatible = "arm,armv8-pmuv3";
 		interrupt-parent = <&gic>;
-		interrupts = <GIC_SPI 143 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 145 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 146 IRQ_TYPE_LEVEL_HIGH>;
+		interrupts = <0 143 4>,
+			     <0 144 4>,
+			     <0 145 4>,
+			     <0 146 4>;
 		interrupt-affinity = <&cpu0>,
 				     <&cpu1>,
 				     <&cpu2>,
@@ -196,82 +164,73 @@
 			compatible = "xlnx,zynqmp-firmware";
 			#power-domain-cells = <1>;
 			method = "smc";
-			bootph-all;
+			u-boot,dm-pre-reloc;
 
-			zynqmp_power: power-management {
-				bootph-all;
+			zynqmp_power: zynqmp-power {
+				u-boot,dm-pre-reloc;
 				compatible = "xlnx,zynqmp-power";
 				interrupt-parent = <&gic>;
-				interrupts = <GIC_SPI 35 IRQ_TYPE_LEVEL_HIGH>;
+				interrupts = <0 35 4>;
 				mboxes = <&ipi_mailbox_pmu1 0>, <&ipi_mailbox_pmu1 1>;
 				mbox-names = "tx", "rx";
 			};
 
-			soc-nvmem {
+			nvmem-firmware {
 				compatible = "xlnx,zynqmp-nvmem-fw";
-				nvmem-layout {
-					compatible = "fixed-layout";
-					#address-cells = <1>;
-					#size-cells = <1>;
+				#address-cells = <1>;
+				#size-cells = <1>;
 
-					soc_revision: soc-revision@0 {
-						reg = <0x0 0x4>;
-					};
-					/* efuse access */
-					efuse_dna: efuse-dna@c {
-						reg = <0xc 0xc>;
-					};
-					efuse_usr0: efuse-usr0@20 {
-						reg = <0x20 0x4>;
-					};
-					efuse_usr1: efuse-usr1@24 {
-						reg = <0x24 0x4>;
-					};
-					efuse_usr2: efuse-usr2@28 {
-						reg = <0x28 0x4>;
-					};
-					efuse_usr3: efuse-usr3@2c {
-						reg = <0x2c 0x4>;
-					};
-					efuse_usr4: efuse-usr4@30 {
-						reg = <0x30 0x4>;
-					};
-					efuse_usr5: efuse-usr5@34 {
-						reg = <0x34 0x4>;
-					};
-					efuse_usr6: efuse-usr6@38 {
-						reg = <0x38 0x4>;
-					};
-					efuse_usr7: efuse-usr7@3c {
-						reg = <0x3c 0x4>;
-					};
-					efuse_miscusr: efuse-miscusr@40 {
-						reg = <0x40 0x4>;
-					};
-					efuse_chash: efuse-chash@50 {
-						reg = <0x50 0x4>;
-					};
-					efuse_pufmisc: efuse-pufmisc@54 {
-						reg = <0x54 0x4>;
-					};
-					efuse_sec: efuse-sec@58 {
-						reg = <0x58 0x4>;
-					};
-					efuse_spkid: efuse-spkid@5c {
-						reg = <0x5c 0x4>;
-					};
-					efuse_aeskey: efuse-aeskey@60 {
-						reg = <0x60 0x20>;
-					};
-					efuse_ppk0hash: efuse-ppk0hash@a0 {
-						reg = <0xa0 0x30>;
-					};
-					efuse_ppk1hash: efuse-ppk1hash@d0 {
-						reg = <0xd0 0x30>;
-					};
-					efuse_pufuser: efuse-pufuser@100 {
-						reg = <0x100 0x7F>;
-					};
+				soc_revision: soc-revision@0 {
+					reg = <0x0 0x4>;
+				};
+				/* efuse access */
+				efuse_dna: efuse-dna@c {
+					reg = <0xc 0xc>;
+				};
+				efuse_usr0: efuse-usr0@20 {
+					reg = <0x20 0x4>;
+				};
+				efuse_usr1: efuse-usr1@24 {
+					reg = <0x24 0x4>;
+				};
+				efuse_usr2: efuse-usr2@28 {
+					reg = <0x28 0x4>;
+				};
+				efuse_usr3: efuse-usr3@2c {
+					reg = <0x2c 0x4>;
+				};
+				efuse_usr4: efuse-usr4@30 {
+					reg = <0x30 0x4>;
+				};
+				efuse_usr5: efuse-usr5@34 {
+					reg = <0x34 0x4>;
+				};
+				efuse_usr6: efuse-usr6@38 {
+					reg = <0x38 0x4>;
+				};
+				efuse_usr7: efuse-usr7@3c {
+					reg = <0x3c 0x4>;
+				};
+				efuse_miscusr: efuse-miscusr@40 {
+					reg = <0x40 0x4>;
+				};
+				efuse_chash: efuse-chash@50 {
+					reg = <0x50 0x4>;
+				};
+				efuse_pufmisc: efuse-pufmisc@54 {
+					reg = <0x54 0x4>;
+				};
+				efuse_sec: efuse-sec@58 {
+					reg = <0x58 0x4>;
+				};
+				efuse_spkid: efuse-spkid@5c {
+					reg = <0x5c 0x4>;
+				};
+				efuse_ppk0hash: efuse-ppk0hash@a0 {
+					reg = <0xa0 0x30>;
+				};
+				efuse_ppk1hash: efuse-ppk1hash@d0 {
+					reg = <0xd0 0x30>;
 				};
 			};
 
@@ -300,13 +259,17 @@
 	timer {
 		compatible = "arm,armv8-timer";
 		interrupt-parent = <&gic>;
-		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
-			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
-			     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
-			     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>;
+		interrupts = <1 13 0xf08>,
+			     <1 14 0xf08>,
+			     <1 11 0xf08>,
+			     <1 10 0xf08>;
 	};
 
-	fpga_full: fpga-region {
+	edac {
+		compatible = "arm,cortex-a53-edac";
+	};
+
+	fpga_full: fpga-full {
 		compatible = "fpga-region";
 		fpga-mgr = <&zynqmp_pcap>;
 		#address-cells = <2>;
@@ -314,105 +277,9 @@
 		ranges;
 	};
 
-	ams: ams {
-		compatible = "iio-hwmon";
-		status = "disabled";
-		io-channels = <&xilinx_ams 0>, <&xilinx_ams 1>, <&xilinx_ams 2>,
-			<&xilinx_ams 3>, <&xilinx_ams 4>, <&xilinx_ams 5>,
-			<&xilinx_ams 6>, <&xilinx_ams 7>, <&xilinx_ams 8>,
-			<&xilinx_ams 9>, <&xilinx_ams 10>, <&xilinx_ams 11>,
-			<&xilinx_ams 12>, <&xilinx_ams 13>, <&xilinx_ams 14>,
-			<&xilinx_ams 15>, <&xilinx_ams 16>, <&xilinx_ams 17>,
-			<&xilinx_ams 18>, <&xilinx_ams 19>, <&xilinx_ams 20>,
-			<&xilinx_ams 21>, <&xilinx_ams 22>, <&xilinx_ams 23>,
-			<&xilinx_ams 24>, <&xilinx_ams 25>, <&xilinx_ams 26>,
-			<&xilinx_ams 27>, <&xilinx_ams 28>, <&xilinx_ams 29>;
-	};
-
-
-	tsens_apu: thermal-sensor-apu {
-		compatible = "generic-adc-thermal";
-		#thermal-sensor-cells = <0>;
-		io-channels = <&xilinx_ams 7>;
-		io-channel-names = "sensor-channel";
-	};
-
-	tsens_rpu: thermal-sensor-rpu {
-		compatible = "generic-adc-thermal";
-		#thermal-sensor-cells = <0>;
-		io-channels = <&xilinx_ams 8>;
-		io-channel-names = "sensor-channel";
-	};
-
-	tsens_pl: thermal-sensor-pl {
-		compatible = "generic-adc-thermal";
-		#thermal-sensor-cells = <0>;
-		io-channels = <&xilinx_ams 20>;
-		io-channel-names = "sensor-channel";
-	};
-
-	thermal-zones {
-		apu-thermal {
-			polling-delay-passive = <1000>;
-			polling-delay = <5000>;
-			thermal-sensors = <&tsens_apu>;
-
-			trips {
-				apu_passive: passive {
-					temperature = <93000>;
-					hysteresis = <3500>;
-					type = "passive";
-				};
-
-				apu_critical: critical {
-					temperature = <96500>;
-					hysteresis = <3500>;
-					type = "critical";
-				};
-			};
-
-			cooling-maps {
-				map {
-					trip = <&apu_passive>;
-					cooling-device =
-						<&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-						<&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-						<&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
-						<&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
-				};
-			};
-		};
-
-		rpu-thermal {
-			polling-delay = <10000>;
-			thermal-sensors = <&tsens_rpu>;
-
-			trips {
-				critical {
-					temperature = <96500>;
-					hysteresis = <3500>;
-					type = "critical";
-				};
-			};
-		};
-
-		pl-thermal {
-			polling-delay = <10000>;
-			thermal-sensors = <&tsens_pl>;
-
-			trips {
-				critical {
-					temperature = <96500>;
-					hysteresis = <3500>;
-					type = "critical";
-				};
-			};
-		};
-	};
-
 	amba: axi {
 		compatible = "simple-bus";
-		bootph-all;
+		u-boot,dm-pre-reloc;
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
@@ -422,7 +289,7 @@
 			status = "disabled";
 			clock-names = "can_clk", "pclk";
 			reg = <0x0 0xff060000 0x0 0x1000>;
-			interrupts = <GIC_SPI 23 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 23 4>;
 			interrupt-parent = <&gic>;
 			tx-fifo-depth = <0x40>;
 			rx-fifo-depth = <0x40>;
@@ -435,7 +302,7 @@
 			status = "disabled";
 			clock-names = "can_clk", "pclk";
 			reg = <0x0 0xff070000 0x0 0x1000>;
-			interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 24 4>;
 			interrupt-parent = <&gic>;
 			tx-fifo-depth = <0x40>;
 			rx-fifo-depth = <0x40>;
@@ -455,44 +322,12 @@
 				compatible = "arm,cci-400-pmu,r1";
 				reg = <0x9000 0x5000>;
 				interrupt-parent = <&gic>;
-				interrupts = <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>;
+				interrupts = <0 123 4>,
+					     <0 123 4>,
+					     <0 123 4>,
+					     <0 123 4>,
+					     <0 123 4>;
 			};
-		};
-
-		cpu0_debug: debug@fec10000 {
-			compatible = "arm,coresight-cpu-debug", "arm,primecell";
-			reg = <0x0 0xfec10000 0x0 0x1000>;
-			clock-names = "apb_pclk";
-			cpu = <&cpu0>;
-			status = "disabled";
-		};
-
-		cpu1_debug: debug@fed10000 {
-			compatible = "arm,coresight-cpu-debug", "arm,primecell";
-			reg = <0x0 0xfed10000 0x0 0x1000>;
-			clock-names = "apb_pclk";
-			cpu = <&cpu1>;
-			status = "disabled";
-		};
-
-		cpu2_debug: debug@fee10000 {
-			compatible = "arm,coresight-cpu-debug", "arm,primecell";
-			reg = <0x0 0xfee10000 0x0 0x1000>;
-			clock-names = "apb_pclk";
-			cpu = <&cpu2>;
-			status = "disabled";
-		};
-
-		cpu3_debug: debug@fef10000 {
-			compatible = "arm,coresight-cpu-debug", "arm,primecell";
-			reg = <0x0 0xfef10000 0x0 0x1000>;
-			clock-names = "apb_pclk";
-			cpu = <&cpu3>;
-			status = "disabled";
 		};
 
 		/* GDMA */
@@ -501,11 +336,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd500000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 124 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 124 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14e8>; */
+			iommus = <&smmu 0x14e8>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -514,11 +349,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd510000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 125 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14e9>; */
+			iommus = <&smmu 0x14e9>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -527,11 +362,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd520000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 126 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 126 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14ea>; */
+			iommus = <&smmu 0x14ea>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -540,11 +375,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd530000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 127 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14eb>; */
+			iommus = <&smmu 0x14eb>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -553,11 +388,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd540000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 128 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14ec>; */
+			iommus = <&smmu 0x14ec>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -566,11 +401,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd550000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 129 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 129 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14ed>; */
+			iommus = <&smmu 0x14ed>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -579,11 +414,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd560000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 130 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 130 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14ee>; */
+			iommus = <&smmu 0x14ee>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -592,11 +427,11 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xfd570000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 131 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <128>;
-			/* iommus = <&smmu 0x14ef>; */
+			iommus = <&smmu 0x14ef>;
 			power-domains = <&zynqmp_firmware PD_GDMA>;
 		};
 
@@ -609,7 +444,7 @@
 			      <0x0 0xf9060000 0x0 0x20000>;
 			interrupt-controller;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_PPI 9 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>;
+			interrupts = <1 9 0xf04>;
 		};
 
 		gpu: gpu@fd4b0000 {
@@ -617,12 +452,7 @@
 			compatible = "xlnx,zynqmp-mali", "arm,mali-400";
 			reg = <0x0 0xfd4b0000 0x0 0x10000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 132 4>, <0 132 4>, <0 132 4>, <0 132 4>, <0 132 4>, <0 132 4>;
 			interrupt-names = "gp", "gpmmu", "pp0", "ppmmu0", "pp1", "ppmmu1";
 			clock-names = "bus", "core";
 			power-domains = <&zynqmp_firmware PD_GPU>;
@@ -637,7 +467,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffa80000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 77 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 77 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -650,7 +480,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffa90000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 78 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 78 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -663,7 +493,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffaa0000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 79 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 79 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -676,7 +506,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffab0000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 80 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 80 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -689,7 +519,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffac0000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 81 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 81 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -702,7 +532,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffad0000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 82 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 82 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -715,7 +545,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffae0000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 83 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 83 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -728,7 +558,7 @@
 			compatible = "xlnx,zynqmp-dma-1.0";
 			reg = <0x0 0xffaf0000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 84 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 84 4>;
 			clock-names = "clk_main", "clk_apb";
 			#dma-cells = <1>;
 			xlnx,bus-width = <64>;
@@ -740,7 +570,7 @@
 			compatible = "xlnx,zynqmp-ddrc-2.40a";
 			reg = <0x0 0xfd070000 0x0 0x30000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 112 4>;
 		};
 
 		nand0: nand-controller@ff100000 {
@@ -749,10 +579,10 @@
 			reg = <0x0 0xff100000 0x0 0x1000>;
 			clock-names = "controller", "bus";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 14 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 14 4>;
 			#address-cells = <1>;
 			#size-cells = <0>;
-			/* iommus = <&smmu 0x872>; */
+			iommus = <&smmu 0x872>;
 			power-domains = <&zynqmp_firmware PD_NAND>;
 		};
 
@@ -760,11 +590,12 @@
 			compatible = "xlnx,zynqmp-gem", "cdns,gem";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 57 4>, <0 57 4>;
 			reg = <0x0 0xff0b0000 0x0 0x1000>;
 			clock-names = "pclk", "hclk", "tx_clk", "rx_clk", "tsu_clk";
-			/* iommus = <&smmu 0x874>; */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			iommus = <&smmu 0x874>;
 			power-domains = <&zynqmp_firmware PD_ETH_0>;
 			resets = <&zynqmp_reset ZYNQMP_RESET_GEM0>;
 			reset-names = "gem0_rst";
@@ -774,11 +605,12 @@
 			compatible = "xlnx,zynqmp-gem", "cdns,gem";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 59 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 59 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 59 4>, <0 59 4>;
 			reg = <0x0 0xff0c0000 0x0 0x1000>;
 			clock-names = "pclk", "hclk", "tx_clk", "rx_clk", "tsu_clk";
-			/* iommus = <&smmu 0x875>; */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			iommus = <&smmu 0x875>;
 			power-domains = <&zynqmp_firmware PD_ETH_1>;
 			resets = <&zynqmp_reset ZYNQMP_RESET_GEM1>;
 			reset-names = "gem1_rst";
@@ -788,11 +620,12 @@
 			compatible = "xlnx,zynqmp-gem", "cdns,gem";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 61 4>, <0 61 4>;
 			reg = <0x0 0xff0d0000 0x0 0x1000>;
 			clock-names = "pclk", "hclk", "tx_clk", "rx_clk", "tsu_clk";
-			/* iommus = <&smmu 0x876>; */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			iommus = <&smmu 0x876>;
 			power-domains = <&zynqmp_firmware PD_ETH_2>;
 			resets = <&zynqmp_reset ZYNQMP_RESET_GEM2>;
 			reset-names = "gem2_rst";
@@ -802,11 +635,12 @@
 			compatible = "xlnx,zynqmp-gem", "cdns,gem";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 63 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 63 4>, <0 63 4>;
 			reg = <0x0 0xff0e0000 0x0 0x1000>;
 			clock-names = "pclk", "hclk", "tx_clk", "rx_clk", "tsu_clk";
-			/* iommus = <&smmu 0x877>; */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			iommus = <&smmu 0x877>;
 			power-domains = <&zynqmp_firmware PD_ETH_3>;
 			resets = <&zynqmp_reset ZYNQMP_RESET_GEM3>;
 			reset-names = "gem3_rst";
@@ -818,7 +652,7 @@
 			#gpio-cells = <0x2>;
 			gpio-controller;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 16 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 16 4>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
 			reg = <0x0 0xff0a0000 0x0 0x1000>;
@@ -829,7 +663,7 @@
 			compatible = "cdns,i2c-r1p14";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 17 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 17 4>;
 			clock-frequency = <400000>;
 			reg = <0x0 0xff020000 0x0 0x1000>;
 			#address-cells = <1>;
@@ -841,7 +675,7 @@
 			compatible = "cdns,i2c-r1p14";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 18 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 18 4>;
 			clock-frequency = <400000>;
 			reg = <0x0 0xff030000 0x0 0x1000>;
 			#address-cells = <1>;
@@ -853,13 +687,13 @@
 			compatible = "xlnx,zynqmp-ocmc-1.0";
 			reg = <0x0 0xff960000 0x0 0x1000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 10 4>;
 		};
 
 		perf_monitor_ocm: perf-monitor@ffa00000 {
 			compatible = "xlnx,axi-perf-monitor";
 			reg = <0x0 0xffa00000 0x0 0x10000>;
-			interrupts = <GIC_SPI 25 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 25 4>;
 			interrupt-parent = <&gic>;
 			xlnx,enable-profile = <0>;
 			xlnx,enable-trace = <0>;
@@ -877,7 +711,7 @@
 		perf_monitor_ddr: perf-monitor@fd0b0000 {
 			compatible = "xlnx,axi-perf-monitor";
 			reg = <0x0 0xfd0b0000 0x0 0x10000>;
-			interrupts = <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 123 4>;
 			interrupt-parent = <&gic>;
 			xlnx,enable-profile = <0>;
 			xlnx,enable-trace = <0>;
@@ -895,7 +729,7 @@
 		perf_monitor_cci: perf-monitor@fd490000 {
 			compatible = "xlnx,axi-perf-monitor";
 			reg = <0x0 0xfd490000 0x0 0x10000>;
-			interrupts = <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 123 4>;
 			interrupt-parent = <&gic>;
 			xlnx,enable-profile = <0>;
 			xlnx,enable-trace = <0>;
@@ -913,7 +747,7 @@
 		perf_monitor_lpd: perf-monitor@ffa10000 {
 			compatible = "xlnx,axi-perf-monitor";
 			reg = <0x0 0xffa10000 0x0 0x10000>;
-			interrupts = <GIC_SPI 25 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 25 4>;
 			interrupt-parent = <&gic>;
 			xlnx,enable-profile = <0>;
 			xlnx,enable-trace = <0>;
@@ -937,11 +771,11 @@
 			msi-controller;
 			device_type = "pci";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH>,	/* MSI_1 [63...32] */
-				     <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH>;	/* MSI_0 [31...0] */
+			interrupts = <0 118 4>,
+				     <0 117 4>,
+				     <0 116 4>,
+				     <0 115 4>,	/* MSI_1 [63...32] */
+				     <0 114 4>;	/* MSI_0 [31...0] */
 			interrupt-names = "misc", "dummy", "intx",
 					  "msi1", "msi0";
 			msi-parent = <&pcie>;
@@ -957,7 +791,7 @@
 					<0x0 0x0 0x0 0x2 &pcie_intc 0x2>,
 					<0x0 0x0 0x0 0x3 &pcie_intc 0x3>,
 					<0x0 0x0 0x0 0x4 &pcie_intc 0x4>;
-			/* iommus = <&smmu 0x4d0>; */
+			iommus = <&smmu 0x4d0>;
 			power-domains = <&zynqmp_firmware PD_PCIE>;
 			pcie_intc: legacy-interrupt-controller {
 				interrupt-controller;
@@ -967,18 +801,18 @@
 		};
 
 		qspi: spi@ff0f0000 {
-			bootph-all;
+			u-boot,dm-pre-reloc;
 			compatible = "xlnx,zynqmp-qspi-1.0";
 			status = "disabled";
 			clock-names = "ref_clk", "pclk";
-			interrupts = <GIC_SPI 15 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 15 4>;
 			interrupt-parent = <&gic>;
 			num-cs = <1>;
 			reg = <0x0 0xff0f0000 0x0 0x1000>,
 			      <0x0 0xc0000000 0x0 0x8000000>;
 			#address-cells = <1>;
 			#size-cells = <0>;
-			/* iommus = <&smmu 0x873>; */
+			iommus = <&smmu 0x873>;
 			power-domains = <&zynqmp_firmware PD_QSPI>;
 		};
 
@@ -996,8 +830,7 @@
 			status = "disabled";
 			reg = <0x0 0xffa60000 0x0 0x100>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 26 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 27 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 26 4>, <0 27 4>;
 			interrupt-names = "alarm", "sec";
 			calibration = <0x7FFF>;
 		};
@@ -1007,21 +840,23 @@
 			status = "disabled";
 			reg = <0x0 0xfd0c0000 0x0 0x2000>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 133 4>;
 			power-domains = <&zynqmp_firmware PD_SATA>;
 			resets = <&zynqmp_reset ZYNQMP_RESET_SATA>;
-			/* iommus = <&smmu 0x4c0>, <&smmu 0x4c1>, <&smmu 0x4c2>, <&smmu 0x4c3>; */
+			/* iommus = <&smmu 0x4c0>, <&smmu 0x4c1>, */
+			/*	 <&smmu 0x4c2>, <&smmu 0x4c3>; */
+			/* dma-coherent; */
 		};
 
 		sdhci0: mmc@ff160000 {
-			bootph-all;
+			u-boot,dm-pre-reloc;
 			compatible = "xlnx,zynqmp-8.9a", "arasan,sdhci-8.9a";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 48 4>;
 			reg = <0x0 0xff160000 0x0 0x1000>;
 			clock-names = "clk_xin", "clk_ahb";
-			/* iommus = <&smmu 0x870>; */
+			iommus = <&smmu 0x870>;
 			#clock-cells = <1>;
 			clock-output-names = "clk_out_sd0", "clk_in_sd0";
 			power-domains = <&zynqmp_firmware PD_SD_0>;
@@ -1029,14 +864,14 @@
 		};
 
 		sdhci1: mmc@ff170000 {
-			bootph-all;
+			u-boot,dm-pre-reloc;
 			compatible = "xlnx,zynqmp-8.9a", "arasan,sdhci-8.9a";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 49 4>;
 			reg = <0x0 0xff170000 0x0 0x1000>;
 			clock-names = "clk_xin", "clk_ahb";
-			/* iommus = <&smmu 0x871>; */
+			iommus = <&smmu 0x871>;
 			#clock-cells = <1>;
 			clock-output-names = "clk_out_sd1", "clk_in_sd1";
 			power-domains = <&zynqmp_firmware PD_SD_1>;
@@ -1050,30 +885,18 @@
 			status = "disabled";
 			#global-interrupts = <1>;
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 155 4>,
+				<0 155 4>, <0 155 4>, <0 155 4>, <0 155 4>,
+				<0 155 4>, <0 155 4>, <0 155 4>, <0 155 4>,
+				<0 155 4>, <0 155 4>, <0 155 4>, <0 155 4>,
+				<0 155 4>, <0 155 4>, <0 155 4>, <0 155 4>;
 		};
 
 		spi0: spi@ff040000 {
 			compatible = "cdns,spi-r1p6";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 19 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 19 4>;
 			reg = <0x0 0xff040000 0x0 0x1000>;
 			clock-names = "ref_clk", "pclk";
 			#address-cells = <1>;
@@ -1085,7 +908,7 @@
 			compatible = "cdns,spi-r1p6";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 20 4>;
 			reg = <0x0 0xff050000 0x0 0x1000>;
 			clock-names = "ref_clk", "pclk";
 			#address-cells = <1>;
@@ -1097,9 +920,7 @@
 			compatible = "cdns,ttc";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 36 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 37 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 38 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 36 4>, <0 37 4>, <0 38 4>;
 			reg = <0x0 0xff110000 0x0 0x1000>;
 			timer-width = <32>;
 			power-domains = <&zynqmp_firmware PD_TTC_0>;
@@ -1109,9 +930,7 @@
 			compatible = "cdns,ttc";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 40 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 41 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 39 4>, <0 40 4>, <0 41 4>;
 			reg = <0x0 0xff120000 0x0 0x1000>;
 			timer-width = <32>;
 			power-domains = <&zynqmp_firmware PD_TTC_1>;
@@ -1121,9 +940,7 @@
 			compatible = "cdns,ttc";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 43 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 44 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 42 4>, <0 43 4>, <0 44 4>;
 			reg = <0x0 0xff130000 0x0 0x1000>;
 			timer-width = <32>;
 			power-domains = <&zynqmp_firmware PD_TTC_2>;
@@ -1133,36 +950,32 @@
 			compatible = "cdns,ttc";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 46 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 47 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 45 4>, <0 46 4>, <0 47 4>;
 			reg = <0x0 0xff140000 0x0 0x1000>;
 			timer-width = <32>;
 			power-domains = <&zynqmp_firmware PD_TTC_3>;
 		};
 
 		uart0: serial@ff000000 {
-			bootph-all;
+			u-boot,dm-pre-reloc;
 			compatible = "xlnx,zynqmp-uart", "cdns,uart-r1p12";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 21 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 21 4>;
 			reg = <0x0 0xff000000 0x0 0x1000>;
 			clock-names = "uart_clk", "pclk";
 			power-domains = <&zynqmp_firmware PD_UART_0>;
-			resets = <&zynqmp_reset ZYNQMP_RESET_UART0>;
 		};
 
 		uart1: serial@ff010000 {
-			bootph-all;
+			u-boot,dm-pre-reloc;
 			compatible = "xlnx,zynqmp-uart", "cdns,uart-r1p12";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 22 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 22 4>;
 			reg = <0x0 0xff010000 0x0 0x1000>;
 			clock-names = "uart_clk", "pclk";
 			power-domains = <&zynqmp_firmware PD_UART_1>;
-			resets = <&zynqmp_reset ZYNQMP_RESET_UART1>;
 		};
 
 		usb0: usb@ff9d0000 {
@@ -1185,14 +998,12 @@
 				status = "disabled";
 				reg = <0x0 0xfe200000 0x0 0x40000>;
 				interrupt-parent = <&gic>;
-				interrupt-names = "host", "peripheral", "otg", "wakeup";
-				interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 65 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 75 IRQ_TYPE_LEVEL_HIGH>;
-				clock-names = "ref";
-				/* iommus = <&smmu 0x860>; */
+				interrupt-names = "dwc_usb3", "otg", "hiber";
+				interrupts = <0 65 4>, <0 69 4>, <0 75 4>;
+				iommus = <&smmu 0x860>;
 				snps,quirk-frame-length-adjustment = <0x20>;
+				clock-names = "ref";
+				snps,enable_guctl1_ipd_quirk;
 				snps,resume-hs-terminations;
 				/* dma-coherent; */
 			};
@@ -1217,14 +1028,12 @@
 				status = "disabled";
 				reg = <0x0 0xfe300000 0x0 0x40000>;
 				interrupt-parent = <&gic>;
-				interrupt-names = "host", "peripheral", "otg", "wakeup";
-				interrupts = <GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 74 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 76 IRQ_TYPE_LEVEL_HIGH>;
-				clock-names = "ref";
-				/* iommus = <&smmu 0x861>; */
+				interrupt-names = "dwc_usb3", "otg", "hiber";
+				interrupts = <0 70 4>, <0 74 4>, <0 76 4>;
+				iommus = <&smmu 0x861>;
 				snps,quirk-frame-length-adjustment = <0x20>;
+				clock-names = "ref";
+				snps,enable_guctl1_ipd_quirk;
 				snps,resume-hs-terminations;
 				/* dma-coherent; */
 			};
@@ -1234,7 +1043,7 @@
 			compatible = "cdns,wdt-r1p2";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 113 IRQ_TYPE_EDGE_RISING>;
+			interrupts = <0 113 1>;
 			reg = <0x0 0xfd4d0000 0x0 0x1000>;
 			timeout-sec = <60>;
 			reset-on-timeout;
@@ -1244,15 +1053,16 @@
 			compatible = "cdns,wdt-r1p2";
 			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 52 IRQ_TYPE_EDGE_RISING>;
+			interrupts = <0 52 1>;
 			reg = <0x0 0xff150000 0x0 0x1000>;
 			timeout-sec = <10>;
 		};
 
 		xilinx_ams: ams@ffa50000 {
 			compatible = "xlnx,zynqmp-ams";
+			status = "disabled";
 			interrupt-parent = <&gic>;
-			interrupts = <GIC_SPI 56 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 56 4>;
 			reg = <0x0 0xffa50000 0x0 0x800>;
 			#address-cells = <1>;
 			#size-cells = <1>;
@@ -1276,61 +1086,70 @@
 			compatible = "xlnx,zynqmp-dpdma";
 			status = "disabled";
 			reg = <0x0 0xfd4c0000 0x0 0x1000>;
-			interrupts = <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <0 122 4>;
 			interrupt-parent = <&gic>;
 			clock-names = "axi_clk";
 			power-domains = <&zynqmp_firmware PD_DP>;
-			/* iommus = <&smmu 0xce4>; */
+			dma-channels = <6>;
+			iommus = <&smmu 0xce4>;
 			#dma-cells = <1>;
 		};
 
+		zynqmp_dpaud_setting: dp-aud@fd4ac000 {
+			compatible = "xlnx,zynqmp-dpaud-setting", "syscon";
+			reg = <0x0 0xfd4ac000 0x0 0x1000>;
+		};
+
 		zynqmp_dpsub: display@fd4a0000 {
-			bootph-all;
+			u-boot,dm-pre-reloc;
 			compatible = "xlnx,zynqmp-dpsub-1.7";
 			status = "disabled";
 			reg = <0x0 0xfd4a0000 0x0 0x1000>,
 			      <0x0 0xfd4aa000 0x0 0x1000>,
-			      <0x0 0xfd4ab000 0x0 0x1000>,
-			      <0x0 0xfd4ac000 0x0 0x1000>;
-			reg-names = "dp", "blend", "av_buf", "aud";
-			interrupts = <GIC_SPI 119 IRQ_TYPE_LEVEL_HIGH>;
+			      <0x0 0xfd4ab000 0x0 0x1000>;
+			reg-names = "dp", "blend", "av_buf";
+			xlnx,dpaud-reg = <&zynqmp_dpaud_setting>;
+			interrupts = <0 119 4>;
 			interrupt-parent = <&gic>;
-			/* iommus = <&smmu 0xce3>; */
+			iommus = <&smmu 0xce3>;
+
 			clock-names = "dp_apb_clk", "dp_aud_clk",
 				      "dp_vtc_pixel_clk_in";
+
 			power-domains = <&zynqmp_firmware PD_DP>;
 			resets = <&zynqmp_reset ZYNQMP_RESET_DP>;
-			dma-names = "vid0", "vid1", "vid2", "gfx0",
-				    "aud0", "aud1";
+			dma-names = "vid0", "vid1", "vid2", "gfx0";
 			dmas = <&zynqmp_dpdma ZYNQMP_DPDMA_VIDEO0>,
 			       <&zynqmp_dpdma ZYNQMP_DPDMA_VIDEO1>,
 			       <&zynqmp_dpdma ZYNQMP_DPDMA_VIDEO2>,
-			       <&zynqmp_dpdma ZYNQMP_DPDMA_GRAPHICS>,
-			       <&zynqmp_dpdma ZYNQMP_DPDMA_AUDIO0>,
-			       <&zynqmp_dpdma ZYNQMP_DPDMA_AUDIO1>;
+			       <&zynqmp_dpdma ZYNQMP_DPDMA_GRAPHICS>;
 
-			ports {
-				#address-cells = <1>;
-				#size-cells = <0>;
+			/* dummy node to indicate there's no child i2c device */
+			i2c-bus {
+			};
 
-				live_video: port@0 {
-					reg = <0>;
-				};
-				live_gfx: port@1 {
-					reg = <1>;
-				};
-				live_audio: port@2 {
-					reg = <2>;
-				};
-				out_video: port@3 {
-					reg = <3>;
-				};
-				out_audio: port@4 {
-					reg = <4>;
-				};
-				out_dp: port@5 {
-					reg = <5>;
-				};
+			zynqmp_dp_snd_codec0: zynqmp-dp-snd-codec0 {
+				compatible = "xlnx,dp-snd-codec";
+				clock-names = "aud_clk";
+			};
+
+			zynqmp_dp_snd_pcm0: zynqmp-dp-snd-pcm0 {
+				compatible = "xlnx,dp-snd-pcm0";
+				dmas = <&zynqmp_dpdma 4>;
+				dma-names = "tx";
+			};
+
+			zynqmp_dp_snd_pcm1: zynqmp-dp-snd-pcm1 {
+				compatible = "xlnx,dp-snd-pcm1";
+				dmas = <&zynqmp_dpdma 5>;
+				dma-names = "tx";
+			};
+
+			zynqmp_dp_snd_card0: zynqmp-dp-snd-card {
+				compatible = "xlnx,dp-snd-card";
+				xlnx,dp-snd-pcm = <&zynqmp_dp_snd_pcm0>,
+						  <&zynqmp_dp_snd_pcm1>;
+				xlnx,dp-snd-codec = <&zynqmp_dp_snd_codec0>;
 			};
 		};
 	};

@@ -612,7 +612,7 @@ static int adxcvr_probe(struct platform_device *pdev)
 	if (ret)
 		dev_err(&pdev->dev, "Can't create the sysfs group\n");
 
-	ret = devm_jesd204_fsm_start(&pdev->dev, st->jdev, JESD204_LINKS_ALL);
+	ret = jesd204_fsm_start(st->jdev, JESD204_LINKS_ALL);
 	if (ret)
 		return ret;
 
@@ -624,7 +624,7 @@ static int adxcvr_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void adxcvr_remove(struct platform_device *pdev)
+static int adxcvr_remove(struct platform_device *pdev)
 {
 	struct adxcvr_state *st = platform_get_drvdata(pdev);
 
@@ -633,6 +633,8 @@ static void adxcvr_remove(struct platform_device *pdev)
 
 	clk_disable_unprepare(st->link_clk);
 	clk_disable_unprepare(st->ref_clk);
+
+	return 0;
 }
 
 static const struct of_device_id adxcvr_of_match[] = {

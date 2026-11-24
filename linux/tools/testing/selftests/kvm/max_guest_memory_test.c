@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -9,7 +11,6 @@
 #include <linux/bitmap.h>
 #include <linux/bitops.h>
 #include <linux/atomic.h>
-#include <linux/sizes.h>
 
 #include "kvm_util.h"
 #include "test_util.h"
@@ -20,11 +21,10 @@ static void guest_code(uint64_t start_gpa, uint64_t end_gpa, uint64_t stride)
 {
 	uint64_t gpa;
 
-	for (;;) {
-		for (gpa = start_gpa; gpa < end_gpa; gpa += stride)
-			*((volatile uint64_t *)gpa) = gpa;
-		GUEST_SYNC(0);
-	}
+	for (gpa = start_gpa; gpa < end_gpa; gpa += stride)
+		*((volatile uint64_t *)gpa) = gpa;
+
+	GUEST_DONE();
 }
 
 struct vcpu_info {
@@ -54,7 +54,7 @@ static void rendezvous_with_boss(void)
 static void run_vcpu(struct kvm_vcpu *vcpu)
 {
 	vcpu_run(vcpu);
-	TEST_ASSERT_EQ(get_ucall(vcpu, NULL), UCALL_SYNC);
+	ASSERT_EQ(get_ucall(vcpu, NULL), UCALL_DONE);
 }
 
 static void *vcpu_worker(void *data)
@@ -63,13 +63,17 @@ static void *vcpu_worker(void *data)
 	struct kvm_vcpu *vcpu = info->vcpu;
 	struct kvm_vm *vm = vcpu->vm;
 	struct kvm_sregs sregs;
+	struct kvm_regs regs;
 
 	vcpu_args_set(vcpu, 3, info->start_gpa, info->end_gpa, vm->page_size);
 
+	/* Snapshot regs before the first run. */
+	vcpu_regs_get(vcpu, &regs);
 	rendezvous_with_boss();
 
 	run_vcpu(vcpu);
 	rendezvous_with_boss();
+	vcpu_regs_set(vcpu, &regs);
 	vcpu_sregs_get(vcpu, &sregs);
 #ifdef __x86_64__
 	/* Toggle CR0.WP to trigger a MMU context reset. */
@@ -158,7 +162,8 @@ int main(int argc, char *argv[])
 	 * just below the 4gb boundary.  This test could create memory at
 	 * 1gb-3gb,but it's simpler to skip straight to 4gb.
 	 */
-	const uint64_t start_gpa = SZ_4G;
+	const uint64_t size_1gb = (1 << 30);
+	const uint64_t start_gpa = (4ull * size_1gb);
 	const int first_slot = 1;
 
 	struct timespec time_start, time_run1, time_reset, time_run2;
@@ -175,26 +180,29 @@ int main(int argc, char *argv[])
 	 * are quite common for x86, requires changing only max_mem (KVM allows
 	 * 32k memslots, 32k * 2gb == ~64tb of guest memory).
 	 */
-	slot_size = SZ_2G;
+	slot_size = 2 * size_1gb;
 
 	max_slots = kvm_check_cap(KVM_CAP_NR_MEMSLOTS);
 	TEST_ASSERT(max_slots > first_slot, "KVM is broken");
 
 	/* All KVM MMUs should be able to survive a 128gb guest. */
-	max_mem = 128ull * SZ_1G;
+	max_mem = 128 * size_1gb;
 
 	calc_default_nr_vcpus();
 
 	while ((opt = getopt(argc, argv, "c:h:m:s:H")) != -1) {
 		switch (opt) {
 		case 'c':
-			nr_vcpus = atoi_positive("Number of vCPUs", optarg);
+			nr_vcpus = atoi(optarg);
+			TEST_ASSERT(nr_vcpus > 0, "number of vcpus must be >0");
 			break;
 		case 'm':
-			max_mem = 1ull * atoi_positive("Memory size", optarg) * SZ_1G;
+			max_mem = atoi(optarg) * size_1gb;
+			TEST_ASSERT(max_mem > 0, "memory size must be >0");
 			break;
 		case 's':
-			slot_size = 1ull * atoi_positive("Slot size", optarg) * SZ_1G;
+			slot_size = atoi(optarg) * size_1gb;
+			TEST_ASSERT(slot_size > 0, "slot size must be >0");
 			break;
 		case 'H':
 			hugepages = true;
@@ -237,7 +245,7 @@ int main(int argc, char *argv[])
 
 #ifdef __x86_64__
 		/* Identity map memory in the guest using 1gb pages. */
-		for (i = 0; i < slot_size; i += SZ_1G)
+		for (i = 0; i < slot_size; i += size_1gb)
 			__virt_pg_map(vm, gpa + i, gpa + i, PG_LEVEL_1G);
 #else
 		for (i = 0; i < slot_size; i += vm->page_size)
@@ -252,7 +260,7 @@ int main(int argc, char *argv[])
 	vcpus = NULL;
 
 	pr_info("Running with %lugb of guest memory and %u vCPUs\n",
-		(gpa - start_gpa) / SZ_1G, nr_vcpus);
+		(gpa - start_gpa) / size_1gb, nr_vcpus);
 
 	rendezvous_with_vcpus(&time_start, "spawning");
 	rendezvous_with_vcpus(&time_run1, "run 1");

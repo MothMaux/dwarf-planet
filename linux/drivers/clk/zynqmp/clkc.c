@@ -11,8 +11,7 @@
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/module.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -790,7 +789,7 @@ static int zynqmp_clock_probe(struct platform_device *pdev)
 static const struct of_device_id zynqmp_clock_of_match[] = {
 	{.compatible = "xlnx,zynqmp-clk"},
 	{.compatible = "xlnx,versal-clk"},
-	{.compatible = "xlnx,versal2-clk"},
+	{.compatible = "xlnx,versal-net-clk"},
 	{},
 };
 MODULE_DEVICE_TABLE(of, zynqmp_clock_of_match);

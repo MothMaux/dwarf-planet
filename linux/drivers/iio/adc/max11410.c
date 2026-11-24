@@ -4,6 +4,7 @@
  *
  * Copyright 2022 Analog Devices Inc.
  */
+#include <asm-generic/unaligned.h>
 #include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -14,8 +15,6 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
-
-#include <linux/unaligned.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/sysfs.h>
@@ -371,7 +370,7 @@ static int max11410_configure_channel(struct max11410_state *st,
 		 FIELD_PREP(MAX11410_CTRL_UNIPOLAR_BIT, cfg.bipolar ? 0 : 1);
 	ret = regmap_update_bits(st->regmap, MAX11410_REG_CTRL,
 				 MAX11410_CTRL_REFSEL_MASK |
-				 MAX11410_CTRL_VREFP_BUF_BIT |
+				 MAX11410_CTRL_VREFN_BUF_BIT |
 				 MAX11410_CTRL_VREFN_BUF_BIT |
 				 MAX11410_CTRL_UNIPOLAR_BIT, regval);
 	if (ret)
@@ -414,17 +413,13 @@ static int max11410_sample(struct max11410_state *st, int *sample_raw,
 		if (!ret)
 			return -ETIMEDOUT;
 	} else {
-		int ret2;
-
 		/* Wait for status register Conversion Ready flag */
-		ret = read_poll_timeout(max11410_read_reg, ret2,
-					ret2 || (val & MAX11410_STATUS_CONV_READY_BIT),
+		ret = read_poll_timeout(max11410_read_reg, ret,
+					ret || (val & MAX11410_STATUS_CONV_READY_BIT),
 					5000, MAX11410_CONVERSION_TIMEOUT_MS * 1000,
 					true, st, MAX11410_REG_STATUS, &val);
 		if (ret)
 			return ret;
-		if (ret2)
-			return ret2;
 	}
 
 	/* Read ADC Data */
@@ -682,7 +677,7 @@ static irqreturn_t max11410_interrupt(int irq, void *dev_id)
 	struct max11410_state *st = iio_priv(indio_dev);
 
 	if (iio_buffer_enabled(indio_dev))
-		iio_trigger_poll_nested(st->trig);
+		iio_trigger_poll_chained(st->trig);
 	else
 		complete(&st->completion);
 
@@ -696,6 +691,7 @@ static int max11410_parse_channels(struct max11410_state *st,
 	struct device *dev = &st->spi_dev->dev;
 	struct max11410_channel_config *cfg;
 	struct iio_chan_spec *channels;
+	struct fwnode_handle *child;
 	u32 reference, sig_path;
 	const char *node_name;
 	u32 inputs[2], scale;
@@ -719,7 +715,7 @@ static int max11410_parse_channels(struct max11410_state *st,
 	if (!st->channels)
 		return -ENOMEM;
 
-	device_for_each_child_node_scoped(dev, child) {
+	device_for_each_child_node(dev, child) {
 		node_name = fwnode_get_name(child);
 		if (fwnode_property_present(child, "diff-channels")) {
 			ret = fwnode_property_read_u32_array(child,
@@ -734,37 +730,47 @@ static int max11410_parse_channels(struct max11410_state *st,
 			inputs[1] = 0;
 			chanspec.differential = 0;
 		}
-		if (ret)
+		if (ret) {
+			fwnode_handle_put(child);
 			return ret;
+		}
 
 		if (inputs[0] > MAX11410_CHANNEL_INDEX_MAX ||
-		    inputs[1] > MAX11410_CHANNEL_INDEX_MAX)
+		    inputs[1] > MAX11410_CHANNEL_INDEX_MAX) {
+			fwnode_handle_put(child);
 			return dev_err_probe(&indio_dev->dev, -EINVAL,
 					     "Invalid channel index for %s, should be less than %d\n",
 					     node_name,
 					     MAX11410_CHANNEL_INDEX_MAX + 1);
+		}
 
 		cfg = &st->channels[chan_idx];
 
 		reference = MAX11410_REFSEL_AVDD_AGND;
 		fwnode_property_read_u32(child, "adi,reference", &reference);
-		if (reference > MAX11410_REFSEL_MAX)
+		if (reference > MAX11410_REFSEL_MAX) {
+			fwnode_handle_put(child);
 			return dev_err_probe(&indio_dev->dev, -EINVAL,
 					     "Invalid adi,reference value for %s, should be less than %d.\n",
 					     node_name, MAX11410_REFSEL_MAX + 1);
+		}
 
 		if (!max11410_get_vrefp(st, reference) ||
-		    (!max11410_get_vrefn(st, reference) && reference <= 2))
+		    (!max11410_get_vrefn(st, reference) && reference <= 2)) {
+			fwnode_handle_put(child);
 			return dev_err_probe(&indio_dev->dev, -EINVAL,
 					     "Invalid VREF configuration for %s, either specify corresponding VREF regulators or change adi,reference property.\n",
 					     node_name);
+		}
 
 		sig_path = MAX11410_PGA_SIG_PATH_BUFFERED;
 		fwnode_property_read_u32(child, "adi,input-mode", &sig_path);
-		if (sig_path > MAX11410_SIG_PATH_MAX)
+		if (sig_path > MAX11410_SIG_PATH_MAX) {
+			fwnode_handle_put(child);
 			return dev_err_probe(&indio_dev->dev, -EINVAL,
 					     "Invalid adi,input-mode value for %s, should be less than %d.\n",
 					     node_name, MAX11410_SIG_PATH_MAX + 1);
+		}
 
 		fwnode_property_read_u32(child, "settling-time-us",
 					 &cfg->settling_time_us);
@@ -782,8 +788,10 @@ static int max11410_parse_channels(struct max11410_state *st,
 			cfg->scale_avail = devm_kcalloc(dev, MAX11410_SCALE_AVAIL_SIZE * 2,
 							sizeof(*cfg->scale_avail),
 							GFP_KERNEL);
-			if (!cfg->scale_avail)
+			if (!cfg->scale_avail) {
+				fwnode_handle_put(child);
 				return -ENOMEM;
+			}
 
 			scale = max11410_get_scale(st, *cfg);
 			for (i = 0; i < MAX11410_SCALE_AVAIL_SIZE; i++) {
@@ -842,21 +850,17 @@ static int max11410_init_vref(struct device *dev,
 
 static int max11410_calibrate(struct max11410_state *st, u32 cal_type)
 {
-	int ret, ret2, val;
+	int ret, val;
 
 	ret = max11410_write_reg(st, MAX11410_REG_CAL_START, cal_type);
 	if (ret)
 		return ret;
 
 	/* Wait for status register Calibration Ready flag */
-	ret = read_poll_timeout(max11410_read_reg, ret2,
-				ret2 || (val & MAX11410_STATUS_CAL_READY_BIT),
-				50000, MAX11410_CALIB_TIMEOUT_MS * 1000, true,
-				st, MAX11410_REG_STATUS, &val);
-	if (ret)
-		return ret;
-
-	return ret2;
+	return read_poll_timeout(max11410_read_reg, ret,
+				 ret || (val & MAX11410_STATUS_CAL_READY_BIT),
+				 50000, MAX11410_CALIB_TIMEOUT_MS * 1000, true,
+				 st, MAX11410_REG_STATUS, &val);
 }
 
 static int max11410_self_calibrate(struct max11410_state *st)

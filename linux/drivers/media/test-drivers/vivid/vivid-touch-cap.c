@@ -17,13 +17,16 @@ static int touch_cap_queue_setup(struct vb2_queue *vq, unsigned int *nbuffers,
 	unsigned int size = f->sizeimage;
 
 	if (*nplanes) {
-		if (*nplanes != 1)
+		if (sizes[0] < size)
 			return -EINVAL;
-		return sizes[0] < size ? -EINVAL : 0;
+	} else {
+		sizes[0] = size;
 	}
 
+	if (vq->num_buffers + *nbuffers < 2)
+		*nbuffers = 2 - vq->num_buffers;
+
 	*nplanes = 1;
-	sizes[0] = size;
 	return 0;
 }
 
@@ -218,7 +221,7 @@ static void vivid_fill_buff_noise(__s16 *tch_buf, int size)
 
 static inline int get_random_pressure(void)
 {
-	return get_random_u32_below(VIVID_PRESSURE_LIMIT);
+	return prandom_u32_max(VIVID_PRESSURE_LIMIT);
 }
 
 static void vivid_tch_buf_set(struct v4l2_pix_format *f,

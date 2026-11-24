@@ -12,7 +12,6 @@
 #include <linux/idr.h>
 #include <linux/device.h>
 #include <linux/errno.h>
-#include <linux/mutex.h>
 
 #include <linux/string.h>
 #include <linux/mathworks/mathworks_ip.h>
@@ -45,7 +44,6 @@ enum mw_mm_iio_reg_access {
 struct mw_mm_iio_chandev {
 	struct mathworks_ipcore_dev 			*mwdev;
 	struct device							dev;
-	struct mutex lock;
 	enum iio_buffer_direction				iio_direction;
 	enum mw_mm_iio_reg_access					reg_access;
 };
@@ -73,9 +71,9 @@ static int mw_mm_iio_channel_set_reg_access(struct iio_dev *indio_dev,
 {
 	struct mw_mm_iio_chandev *mwchan = iio_priv(indio_dev);
 
-	mutex_lock(&mwchan->lock);
+	mutex_lock(&indio_dev->mlock);
 	mwchan->reg_access = reg_access;
-	mutex_unlock(&mwchan->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return 0;
 }
@@ -102,7 +100,7 @@ static int mw_mm_iio_channel_reg_access(struct iio_dev *indio_dev,
 	struct mw_mm_iio_chandev *mwchan = iio_priv(indio_dev);
 	int ret = 0;
 
-	mutex_lock(&mwchan->lock);
+	mutex_lock(&indio_dev->mlock);
 	if (mwchan->reg_access == MW_MM_IO_MODE_DISABLED){
 		ret = -EACCES;
 	} else {
@@ -113,7 +111,7 @@ static int mw_mm_iio_channel_reg_access(struct iio_dev *indio_dev,
 		}
 	}
 
-	mutex_unlock(&mwchan->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return ret;
 }
@@ -215,7 +213,6 @@ static struct iio_dev *devm_mw_mm_iio_alloc(
 	mwchan = iio_priv(indio_dev);
 	mwchan->mwdev = mwdev;
 	mwchan->iio_direction = info->iio_direction;
-	mutex_init(&mwchan->lock);
 
 	device_initialize(&mwchan->dev);
 

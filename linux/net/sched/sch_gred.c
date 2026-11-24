@@ -377,7 +377,6 @@ static int gred_offload_dump_stats(struct Qdisc *sch)
 	/* Even if driver returns failure adjust the stats - in case offload
 	 * ended but driver still wants to adjust the values.
 	 */
-	sch_tree_lock(sch);
 	for (i = 0; i < MAX_DPs; i++) {
 		if (!table->tab[i])
 			continue;
@@ -394,7 +393,6 @@ static int gred_offload_dump_stats(struct Qdisc *sch)
 		sch->qstats.overlimits += hw_stats->stats.qstats[i].overlimits;
 	}
 	_bstats_update(&sch->bstats, bytes, packets);
-	sch_tree_unlock(sch);
 
 	kfree(hw_stats);
 	return ret;
@@ -913,8 +911,7 @@ static void gred_destroy(struct Qdisc *sch)
 	for (i = 0; i < table->DPs; i++)
 		gred_destroy_vq(table->tab[i]);
 
-	if (table->opt)
-		gred_offload(sch, TC_GRED_DESTROY);
+	gred_offload(sch, TC_GRED_DESTROY);
 	kfree(table->opt);
 }
 
@@ -931,7 +928,6 @@ static struct Qdisc_ops gred_qdisc_ops __read_mostly = {
 	.dump		=	gred_dump,
 	.owner		=	THIS_MODULE,
 };
-MODULE_ALIAS_NET_SCH("gred");
 
 static int __init gred_module_init(void)
 {
@@ -947,4 +943,3 @@ module_init(gred_module_init)
 module_exit(gred_module_exit)
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Generic Random Early Detection qdisc");

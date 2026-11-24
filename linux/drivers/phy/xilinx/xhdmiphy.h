@@ -669,7 +669,6 @@
 #define XHDMIPHY_MMCM4_DRP_FILTER_REG2		0x4f
 #define XHDMIPHY_MMCM4_PWR_REG			0x27
 #define XHDMIPHY_MMCM4_WRITE_VAL		0xffff
-#define XHDMIPHY_PLL_WRITE_VAL			0x4401
 
 /* registers and masks of mmcme5 DRP */
 #define XHDMIPHY_MMCM5_DRP_CLKFBOUT_1_REG	0x0c
@@ -848,11 +847,6 @@ enum prbs_pat {
 	XHDMIPHY_PRBSSEL_SQUARE_16UI = 0xA,	/* square wave with 16 UI */
 };
 
-enum clk_primitive {
-	XHDMIPHY_MMCM = 0,
-	XHDMIPHY_PLL = 1,
-};
-
 enum xhdmiphy_mode {
 	tmds_mode = 0,
 	frl_mode = 1,
@@ -996,7 +990,7 @@ struct hdmi21_cfg {
 
 struct clk_config {
 	int (*sel_mux)(u8 direction, u8 clksrc);
-	int (*set_linerate)(u8 direction, u8 mode, u64 lrate, u8 lanes);
+	int (*set_linerate)(u8 direction, u8 mode, u64 lrate);
 };
 
 struct xhdmiphy_conf {
@@ -1024,8 +1018,6 @@ struct xhdmiphy_conf {
 	u8 gt_as_tx_tmdsclk;	/* use 4th GT channel as tx TMDS clock */
 	u8 rx_maxrate;
 	u8 tx_maxrate;
-	u8 rx_clk_primitive;
-	u8 tx_clk_primitive;
 };
 
 struct xhdmiphy_dev {

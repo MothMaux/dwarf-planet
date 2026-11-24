@@ -37,15 +37,14 @@ struct xlnx_ptp_timer {
 	int                    irq;
 	int                    pps_enable;
 	int                    countpulse;
-	u32                    rtc_value;
 };
 
 static void xlnx_tod_read(struct xlnx_ptp_timer *timer, struct timespec64 *ts)
 {
 	u32 sec, nsec;
 
-	nsec = readl(timer->baseaddr + XTIMER1588_CURRENT_RTC_NS);
-	sec = readl(timer->baseaddr + XTIMER1588_CURRENT_RTC_SEC_L);
+	nsec = in_be32(timer->baseaddr + XTIMER1588_CURRENT_RTC_NS);
+	sec = in_be32(timer->baseaddr + XTIMER1588_CURRENT_RTC_SEC_L);
 
 	ts->tv_sec = sec;
 	ts->tv_nsec = nsec;
@@ -56,29 +55,49 @@ static void xlnx_rtc_offset_write(struct xlnx_ptp_timer *timer,
 {
 	pr_debug("%s: sec: %lld nsec: %ld\n", __func__, ts->tv_sec, ts->tv_nsec);
 
-	writel(0, (timer->baseaddr + XTIMER1588_RTC_OFFSET_SEC_H));
-	writel(ts->tv_sec, (timer->baseaddr + XTIMER1588_RTC_OFFSET_SEC_L));
-	writel(ts->tv_nsec, (timer->baseaddr + XTIMER1588_RTC_OFFSET_NS));
+	out_be32((timer->baseaddr + XTIMER1588_RTC_OFFSET_SEC_H), 0);
+	out_be32((timer->baseaddr + XTIMER1588_RTC_OFFSET_SEC_L),
+		 (ts->tv_sec));
+	out_be32((timer->baseaddr + XTIMER1588_RTC_OFFSET_NS), ts->tv_nsec);
 }
 
 static void xlnx_rtc_offset_read(struct xlnx_ptp_timer *timer,
 				 struct timespec64 *ts)
 {
-	ts->tv_sec = readl(timer->baseaddr + XTIMER1588_RTC_OFFSET_SEC_L);
-	ts->tv_nsec = readl(timer->baseaddr + XTIMER1588_RTC_OFFSET_NS);
+	ts->tv_sec = in_be32(timer->baseaddr + XTIMER1588_RTC_OFFSET_SEC_L);
+	ts->tv_nsec = in_be32(timer->baseaddr + XTIMER1588_RTC_OFFSET_NS);
 }
 
 /* PTP clock operations
  */
-static int xlnx_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
+static int xlnx_ptp_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
 {
 	struct xlnx_ptp_timer *timer = container_of(ptp, struct xlnx_ptp_timer,
 						    ptp_clock_info);
 
-	u32 incval;
+	int neg_adj = 0;
+	u64 freq;
+	u32 diff, incval;
 
-	incval = adjust_by_scaled_ppm(timer->rtc_value, scaled_ppm);
-	writel(incval, (timer->baseaddr + XTIMER1588_RTC_INCREMENT));
+	/* This number should be replaced by a call to get the frequency
+	 * from the device-tree. Currently assumes 125MHz
+	 */
+	incval = 0x800000;
+	/* for 156.25 MHZ Ref clk the value is  incval = 0x800000; */
+
+	if (ppb < 0) {
+		neg_adj = 1;
+		ppb = -ppb;
+	}
+
+	freq = incval;
+	freq *= ppb;
+	diff = div_u64(freq, 1000000000ULL);
+
+	pr_debug("%s: adj: %d ppb: %d\n", __func__, diff, ppb);
+
+	incval = neg_adj ? (incval - diff) : (incval + diff);
+	out_be32((timer->baseaddr + XTIMER1588_RTC_INCREMENT), incval);
 	return 0;
 }
 
@@ -182,7 +201,7 @@ static struct ptp_clock_info xlnx_ptp_clock_info = {
 	.max_adj  = 999999999,
 	.n_ext_ts	= 0,
 	.pps      = 1,
-	.adjfine  = xlnx_ptp_adjfine,
+	.adjfreq  = xlnx_ptp_adjfreq,
 	.adjtime  = xlnx_ptp_adjtime,
 	.gettime64  = xlnx_ptp_gettime,
 	.settime64 = xlnx_ptp_settime,
@@ -213,10 +232,25 @@ static irqreturn_t xlnx_ptp_timer_isr(int irq, void *priv)
 		if (timer->ptp_clock && timer->pps_enable)
 			ptp_clock_event(timer->ptp_clock, &event);
 	}
-	writel((1 << XTIMER1588_INT_SHIFT),
-	       (timer->baseaddr + XTIMER1588_INTERRUPT));
+	out_be32((timer->baseaddr + XTIMER1588_INTERRUPT),
+		 (1 << XTIMER1588_INT_SHIFT));
 
 	return IRQ_HANDLED;
+}
+
+int axienet_ptp_timer_remove(void *priv)
+{
+	struct xlnx_ptp_timer *timer = (struct xlnx_ptp_timer *)priv;
+
+	free_irq(timer->irq, (void *)timer);
+
+	axienet_phc_index = -1;
+	if (timer->ptp_clock) {
+		ptp_clock_unregister(timer->ptp_clock);
+		timer->ptp_clock = NULL;
+	}
+	kfree(timer);
+	return 0;
 }
 
 int axienet_get_phc_index(void *priv)
@@ -229,20 +263,15 @@ int axienet_get_phc_index(void *priv)
 		return -1;
 }
 
-static void tsn_ptp_unregister(void *ptp)
-{
-	ptp_clock_unregister((struct ptp_clock *)ptp);
-}
-
 void *axienet_ptp_timer_probe(void __iomem *base, struct platform_device *pdev)
 {
 	struct xlnx_ptp_timer *timer;
 	struct timespec64 ts;
 	int err = 0;
 
-	timer = devm_kzalloc(&pdev->dev, sizeof(*timer), GFP_KERNEL);
+	timer = kzalloc(sizeof(*timer), GFP_KERNEL);
 	if (!timer)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	timer->baseaddr = base;
 
@@ -254,7 +283,8 @@ void *axienet_ptp_timer_probe(void __iomem *base, struct platform_device *pdev)
 			pr_err("ptp timer interrupt name 'rtc_irq' is deprecated\n");
 		} else {
 			pr_err("ptp timer interrupt not found\n");
-			return ERR_PTR(-EINVAL);
+			kfree(timer);
+			return NULL;
 		}
 	}
 	spin_lock_init(&timer->reg_lock);
@@ -263,16 +293,10 @@ void *axienet_ptp_timer_probe(void __iomem *base, struct platform_device *pdev)
 
 	timer->ptp_clock = ptp_clock_register(&timer->ptp_clock_info,
 					      &pdev->dev);
+
 	if (IS_ERR(timer->ptp_clock)) {
 		err = PTR_ERR(timer->ptp_clock);
 		pr_debug("Failed to register ptp clock\n");
-		goto out;
-	}
-	err = devm_add_action_or_reset(&pdev->dev,
-				       tsn_ptp_unregister,
-				       timer->ptp_clock);
-	if (err) {
-		pr_debug("Failed to add PTP clock unregister action\n");
 		goto out;
 	}
 
@@ -281,31 +305,21 @@ void *axienet_ptp_timer_probe(void __iomem *base, struct platform_device *pdev)
 	ts = ktime_to_timespec64(ktime_get_real());
 
 	xlnx_ptp_settime(&timer->ptp_clock_info, &ts);
-	/* In the TSN IP Core, RTC clock is connected to gtx_clk which is
-	 * 125 MHz. This is specified in the TSN PG and is not configurable.
-	 *
-	 * Calculating the RTC Increment Value once and storing it in
-	 * timer->rtc_value to prevent recalculating it each time the PTP
-	 * frequency is adjusted in xlnx_ptp_adjfine()
-	 */
-	timer->rtc_value = (div_u64(NSEC_PER_SEC, XTIMER1588_GTX_CLK_FREQ) <<
-			    XTIMER1588_RTC_NS_SHIFT);
-	writel(timer->rtc_value, (timer->baseaddr + XTIMER1588_RTC_INCREMENT));
 
 	/* Enable interrupts */
-	err = devm_request_irq(&pdev->dev, timer->irq,
-			       xlnx_ptp_timer_isr,
-			       0,
-			       "ptp_rtc",
-			       (void *)timer);
-	if (err) {
-		pr_err("Failed to request IRQ: %d\n", err);
-		ptp_clock_unregister(timer->ptp_clock);
-		goto out;
-	}
+	err = request_irq(timer->irq,
+			  xlnx_ptp_timer_isr,
+			  0,
+			  "ptp_rtc",
+			  (void *)timer);
+	if (err)
+		goto err_irq;
 
 	return timer;
+
+err_irq:
+	ptp_clock_unregister(timer->ptp_clock);
 out:
 	timer->ptp_clock = NULL;
-	return ERR_PTR(err);
+	return NULL;
 }

@@ -665,7 +665,7 @@ static int  mv_u3d_ep_disable(struct usb_ep *_ep)
 static struct usb_request *
 mv_u3d_alloc_request(struct usb_ep *_ep, gfp_t gfp_flags)
 {
-	struct mv_u3d_req *req;
+	struct mv_u3d_req *req = NULL;
 
 	req = kzalloc(sizeof *req, gfp_flags);
 	if (!req)
@@ -1243,6 +1243,7 @@ static int mv_u3d_start(struct usb_gadget *g,
 	}
 
 	/* hook up the driver ... */
+	driver->driver.bus = NULL;
 	u3d->driver = driver;
 
 	u3d->ep0_dir = USB_DIR_OUT;
@@ -1307,7 +1308,7 @@ static int mv_u3d_eps_init(struct mv_u3d *u3d)
 	/* initialize ep0, ep0 in/out use eps[1] */
 	ep = &u3d->eps[1];
 	ep->u3d = u3d;
-	strscpy(ep->name, "ep0");
+	strncpy(ep->name, "ep0", sizeof(ep->name));
 	ep->ep.name = ep->name;
 	ep->ep.ops = &mv_u3d_ep_ops;
 	ep->wedge = 0;
@@ -1337,7 +1338,7 @@ static int mv_u3d_eps_init(struct mv_u3d *u3d)
 			ep->ep.caps.dir_out = true;
 		}
 		ep->u3d = u3d;
-		strscpy(ep->name, name);
+		strncpy(ep->name, name, sizeof(ep->name));
 		ep->ep.name = ep->name;
 
 		ep->ep.caps.type_iso = true;
@@ -1746,7 +1747,7 @@ static irqreturn_t mv_u3d_irq(int irq, void *dev)
 	return IRQ_HANDLED;
 }
 
-static void mv_u3d_remove(struct platform_device *dev)
+static int mv_u3d_remove(struct platform_device *dev)
 {
 	struct mv_u3d *u3d = platform_get_drvdata(dev);
 
@@ -1775,11 +1776,13 @@ static void mv_u3d_remove(struct platform_device *dev)
 	clk_put(u3d->clk);
 
 	kfree(u3d);
+
+	return 0;
 }
 
 static int mv_u3d_probe(struct platform_device *dev)
 {
-	struct mv_u3d *u3d;
+	struct mv_u3d *u3d = NULL;
 	struct mv_usb_platform_data *pdata = dev_get_platdata(&dev->dev);
 	int retval = 0;
 	struct resource *r;
@@ -2047,7 +2050,7 @@ static void mv_u3d_shutdown(struct platform_device *dev)
 
 static struct platform_driver mv_u3d_driver = {
 	.probe		= mv_u3d_probe,
-	.remove_new	= mv_u3d_remove,
+	.remove		= mv_u3d_remove,
 	.shutdown	= mv_u3d_shutdown,
 	.driver		= {
 		.name	= "mv-u3d",

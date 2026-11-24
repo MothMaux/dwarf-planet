@@ -10,22 +10,20 @@
 
 #include <linux/component.h>
 #include <linux/dma-mapping.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 
 #include <drm/drm_aperture.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_module.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
-#include <drm/drm_managed.h>
 
 #include "ltdc.h"
 
@@ -76,7 +74,7 @@ static int drv_load(struct drm_device *ddev)
 
 	DRM_DEBUG("%s\n", __func__);
 
-	ldev = drmm_kzalloc(ddev, sizeof(*ldev), GFP_KERNEL);
+	ldev = devm_kzalloc(ddev->dev, sizeof(*ldev), GFP_KERNEL);
 	if (!ldev)
 		return -ENOMEM;
 
@@ -115,7 +113,6 @@ static void drv_unload(struct drm_device *ddev)
 	DRM_DEBUG("%s\n", __func__);
 
 	drm_kms_helper_poll_fini(ddev);
-	drm_atomic_helper_shutdown(ddev);
 	ltdc_unload(ddev);
 }
 
@@ -188,7 +185,7 @@ static int stm_drm_platform_probe(struct platform_device *pdev)
 
 	DRM_DEBUG("%s\n", __func__);
 
-	ret = drm_aperture_remove_framebuffers(&drv_driver);
+	ret = drm_aperture_remove_framebuffers(false, &drv_driver);
 	if (ret)
 		return ret;
 
@@ -204,21 +201,19 @@ static int stm_drm_platform_probe(struct platform_device *pdev)
 
 	ret = drm_dev_register(ddev, 0);
 	if (ret)
-		goto err_unload;
+		goto err_put;
 
-	drm_fbdev_dma_setup(ddev, 16);
+	drm_fbdev_generic_setup(ddev, 16);
 
 	return 0;
 
-err_unload:
-	drv_unload(ddev);
 err_put:
 	drm_dev_put(ddev);
 
 	return ret;
 }
 
-static void stm_drm_platform_remove(struct platform_device *pdev)
+static int stm_drm_platform_remove(struct platform_device *pdev)
 {
 	struct drm_device *ddev = platform_get_drvdata(pdev);
 
@@ -227,11 +222,8 @@ static void stm_drm_platform_remove(struct platform_device *pdev)
 	drm_dev_unregister(ddev);
 	drv_unload(ddev);
 	drm_dev_put(ddev);
-}
 
-static void stm_drm_platform_shutdown(struct platform_device *pdev)
-{
-	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
+	return 0;
 }
 
 static const struct of_device_id drv_dt_ids[] = {
@@ -242,8 +234,7 @@ MODULE_DEVICE_TABLE(of, drv_dt_ids);
 
 static struct platform_driver stm_drm_platform_driver = {
 	.probe = stm_drm_platform_probe,
-	.remove_new = stm_drm_platform_remove,
-	.shutdown = stm_drm_platform_shutdown,
+	.remove = stm_drm_platform_remove,
 	.driver = {
 		.name = "stm32-display",
 		.of_match_table = drv_dt_ids,

@@ -9,13 +9,14 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/of_device.h>
+#include <linux/of_gpio.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
 #include <linux/resource.h>
 #include <linux/types.h>
 #include <linux/phy/phy.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 
 #include "pcie-designware.h"
@@ -162,13 +163,6 @@ static int meson_pcie_reset(struct meson_pcie *mp)
 	return 0;
 }
 
-static inline void meson_pcie_disable_clock(void *data)
-{
-	struct clk *clk = data;
-
-	clk_disable_unprepare(clk);
-}
-
 static inline struct clk *meson_pcie_probe_clock(struct device *dev,
 						 const char *id, u64 rate)
 {
@@ -193,7 +187,9 @@ static inline struct clk *meson_pcie_probe_clock(struct device *dev,
 		return ERR_PTR(ret);
 	}
 
-	devm_add_action_or_reset(dev, meson_pcie_disable_clock, clk);
+	devm_add_action_or_reset(dev,
+				 (void (*) (void *))clk_disable_unprepare,
+				 clk);
 
 	return clk;
 }
@@ -388,7 +384,7 @@ static int meson_pcie_host_init(struct dw_pcie_rp *pp)
 }
 
 static const struct dw_pcie_host_ops meson_pcie_host_ops = {
-	.init = meson_pcie_host_init,
+	.host_init = meson_pcie_host_init,
 };
 
 static const struct dw_pcie_ops dw_pcie_ops = {

@@ -12,7 +12,6 @@
 #include <linux/uaccess.h>
 #include <linux/xlnx-ai-engine.h>
 
-#include "ai-engine-trace.h"
 /**
  * aie_part_get_clk_state_bit() - return bit position of the clock state of a
  *				  tile
@@ -77,7 +76,6 @@ bool aie_part_check_clk_enable_loc(struct aie_partition *apart,
 int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
 			   struct aie_location *locs)
 {
-	trace_aie_part_request_tiles(apart, num_tiles);
 	if (num_tiles == 0) {
 		aie_resource_set(&apart->tiles_inuse, 0,
 				 apart->tiles_inuse.total);
@@ -88,7 +86,6 @@ int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
 			return -EINVAL;
 
 		for (n = 0; n < num_tiles; n++) {
-			trace_aie_part_request_tile(apart, locs[n]);
 			int bit = aie_part_get_clk_state_bit(apart, &locs[n]);
 
 			if (bit >= 0)
@@ -111,7 +108,6 @@ int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
 int aie_part_release_tiles(struct aie_partition *apart, int num_tiles,
 			   struct aie_location *locs)
 {
-	trace_aie_part_release_tiles(apart, num_tiles);
 	if (num_tiles == 0) {
 		aie_resource_clear(&apart->tiles_inuse, 0,
 				   apart->tiles_inuse.total);
@@ -122,7 +118,6 @@ int aie_part_release_tiles(struct aie_partition *apart, int num_tiles,
 			return -EINVAL;
 
 		for (n = 0; n < num_tiles; n++) {
-			trace_aie_part_release_tile(apart, locs[n]);
 			int bit = aie_part_get_clk_state_bit(apart, &locs[n]);
 
 			if (bit >= 0)
@@ -256,111 +251,29 @@ int aie_part_release_tiles_from_user(struct aie_partition *apart,
 }
 
 /**
- * aie2ps_part_set_column_clock_from_user() - enable/disable column clock register
- *                                        from an AI engine partition from
- *                                        user
- * @apart: AI engine partition
- * @args: user AI engine request tiles argument
- * @return: 0 for success, negative value for failure.
- *
- * This function will request tiles from user request.h
- */
-int aie2ps_part_set_column_clock_from_user(struct aie_partition *apart,
-					   struct aie_column_args *args)
-{
-	u32 part_end_col = apart->range.start.col + apart->range.size.col - 1;
-	struct aie_location locs;
-	struct aie_range range = {};
-	int ret;
-	u32 c;
-
-	trace_aie_part_set_column_clock_from_user(apart, args);
-
-	if ((args->start_col + args->num_cols - 1) > part_end_col) {
-		dev_err(&apart->dev, "invalid start column/size column\n");
-		return -EINVAL;
-	}
-
-	ret = mutex_lock_interruptible(&apart->mlock);
-
-	if (ret)
-		return ret;
-
-	range.start.col = args->start_col;
-	range.size.col = args->num_cols;
-
-	if (args->enable) {
-		ret = aie_part_pm_ops(apart, NULL, AIE_PART_INIT_OPT_ENB_COLCLK_BUFF, range, 1);
-		if (ret < 0) {
-			dev_err(&apart->dev, "failed to enable clocks for partition\n");
-			goto exit;
-		}
-
-		for (c = (args->start_col + apart->range.start.col);
-		     c < (args->start_col + args->num_cols);
-		     c++) {
-			int bit;
-
-			locs.col = c;
-			locs.row = 1;
-			bit = aie_part_get_clk_state_bit(apart, &locs);
-			if (bit >= 0) {
-				aie_resource_set(&apart->tiles_inuse, bit,
-						 apart->range.size.row - 1);
-				aie_resource_set(&apart->cores_clk_state, bit,
-						 apart->range.size.row - 1);
-			}
-		}
-	} else {
-		ret = aie_part_pm_ops(apart, NULL, AIE_PART_INIT_OPT_DIS_COLCLK_BUFF, range, 1);
-		if (ret < 0) {
-			dev_err(&apart->dev, "failed to disable clocks for partition\n");
-			goto exit;
-		}
-
-		for (c = (args->start_col + apart->range.start.col);
-		     c < (args->start_col + args->num_cols);
-		     c++) {
-			int bit;
-
-			locs.col = c;
-			locs.row = 1;
-			bit = aie_part_get_clk_state_bit(apart, &locs);
-			if (bit >= 0) {
-				aie_resource_clear(&apart->tiles_inuse, bit,
-						   apart->range.size.row - 1);
-				aie_resource_clear(&apart->cores_clk_state, bit,
-						   apart->range.size.row - 1);
-			}
-		}
-	}
-
-exit:
-	mutex_unlock(&apart->mlock);
-	return ret;
-}
-
-/**
  * aie_part_set_column_clock_from_user() - enable/disable column clock register
  *                                        from an AI engine partition from
  *                                        user
  * @apart: AI engine partition
- * @args: user AI engine request tiles argument
+ * @user_args: user AI engine request tiles argument
  * @return: 0 for success, negative value for failure.
  *
  * This function will request tiles from user request.h
  */
-int aie_part_set_column_clock_from_user(struct aie_partition *apart, struct aie_column_args *args)
+int aie_part_set_column_clock_from_user(struct aie_partition *apart,
+					void __user *user_args)
 {
 	u32 part_end_col = apart->range.start.col + apart->range.size.col - 1;
-	u32 node_id = apart->aperture->node_id;
+	u32 node_id = apart->adev->pm_node_id;
+	struct aie_column_args args;
 	struct aie_location locs;
 	int ret;
 	u32 c;
 
-	trace_aie_part_set_column_clock_from_user(apart, args);
+	if (copy_from_user(&args, user_args, sizeof(args)))
+		return -EFAULT;
 
-	if ((args->start_col + args->num_cols - 1) > part_end_col) {
+	if ((args.start_col + args.num_cols - 1) > part_end_col) {
 		dev_err(&apart->dev, "invalid start column/size column\n");
 		return -EINVAL;
 	}
@@ -370,54 +283,50 @@ int aie_part_set_column_clock_from_user(struct aie_partition *apart, struct aie_
 	if (ret)
 		return ret;
 
-	if (args->enable) {
-		ret = zynqmp_pm_aie_operation(node_id, args->start_col,
-					      args->num_cols,
+	if (args.enable) {
+		ret = zynqmp_pm_aie_operation(node_id, args.start_col,
+					      args.num_cols,
 					      XILINX_AIE_OPS_ENB_COL_CLK_BUFF);
 		if (ret < 0) {
 			dev_err(&apart->dev, "failed to enable clocks for partition\n");
 			goto exit;
 		}
 
-		for (c = (args->start_col + apart->range.start.col);
-		     c < (args->start_col + args->num_cols);
-		     c++) {
-			int bit;
+		for (c = (args.start_col + apart->range.start.col);
+				c < (args.start_col + args.num_cols); c++) {
+			int bit = aie_part_get_clk_state_bit(apart, &locs);
 
 			locs.col = c;
 			locs.row = 1;
-			bit = aie_part_get_clk_state_bit(apart, &locs);
-			if (bit >= 0) {
-				aie_resource_set(&apart->tiles_inuse, bit,
-						 apart->range.size.row - 1);
-				aie_resource_set(&apart->cores_clk_state, bit,
-						 apart->range.size.row - 1);
-			}
+
+			if (bit >= 0)
+				aie_resource_set(&apart->tiles_inuse, bit, 1);
 		}
+
+		aie_resource_set(&apart->cores_clk_state, 0,
+				 apart->cores_clk_state.total);
 	} else {
-		ret = zynqmp_pm_aie_operation(node_id, args->start_col,
-					      args->num_cols,
+		ret = zynqmp_pm_aie_operation(node_id, args.start_col,
+					      args.num_cols,
 					      XILINX_AIE_OPS_DIS_COL_CLK_BUFF);
 		if (ret < 0) {
 			dev_err(&apart->dev, "failed to disable clocks for partition\n");
 			goto exit;
 		}
 
-		for (c = (args->start_col + apart->range.start.col);
-		     c < (args->start_col + args->num_cols);
-		     c++) {
-			int bit;
+		for (c = (args.start_col + apart->range.start.col);
+				c < (args.start_col + args.num_cols); c++) {
+			int bit = aie_part_get_clk_state_bit(apart, &locs);
 
 			locs.col = c;
 			locs.row = 1;
-			bit = aie_part_get_clk_state_bit(apart, &locs);
-			if (bit >= 0) {
-				aie_resource_clear(&apart->tiles_inuse, bit,
-						   apart->range.size.row - 1);
-				aie_resource_clear(&apart->cores_clk_state, bit,
-						   apart->range.size.row - 1);
-			}
+
+			if (bit >= 0)
+				aie_resource_clear(&apart->tiles_inuse, bit, 1);
 		}
+
+		aie_resource_clear(&apart->cores_clk_state, 0,
+				   apart->cores_clk_state.total);
 	}
 
 exit:

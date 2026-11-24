@@ -17,7 +17,7 @@
 #define AFI_BUSWIDTH_MASK	0x01
 
 /**
- * struct zynq_afi_fpga - AFI register description
+ * struct afi_fpga - AFI register description
  * @membase:	pointer to register struct
  * @afi_width:	AFI bus width to be written
  */
@@ -78,4 +78,4 @@ module_platform_driver(zynq_afi_fpga_driver);
 
 MODULE_DESCRIPTION("ZYNQ FPGA AFI module");
 MODULE_AUTHOR("Nava kishore Manne <nava.manne@xilinx.com>");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

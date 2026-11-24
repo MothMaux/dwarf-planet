@@ -15,7 +15,7 @@
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
-#include <linux/spi/legacy-spi-engine.h>
+#include <linux/spi/spi-engine.h>
 #include <linux/units.h>
 
 #include <linux/iio/buffer.h>
@@ -98,7 +98,7 @@ static int _ad4134_set_odr(struct ad4134_state *st, unsigned int odr)
 	state.duty_cycle = DIV_ROUND_CLOSEST_ULL(6ULL * NSEC_PER_SEC, st->sys_clk_rate);
 	state.period = DIV_ROUND_CLOSEST(NSEC_PER_SEC, odr);
 
-	ret = pwm_apply_might_sleep(st->odr_pwm, &state);
+	ret = pwm_apply_state(st->odr_pwm, &state);
 	if (ret)
 		return ret;
 
@@ -230,11 +230,11 @@ static int ad4134_buffer_postenable(struct iio_dev *indio_dev)
 	struct ad4134_state *st = iio_priv(indio_dev);
 	int ret;
 
-	ret = legacy_spi_engine_offload_load_msg(st->spi_engine, &st->buf_read_msg);
+	ret = spi_engine_offload_load_msg(st->spi_engine, &st->buf_read_msg);
 	if (ret)
 		return ret;
 
-	legacy_spi_engine_offload_enable(st->spi_engine, true);
+	spi_engine_offload_enable(st->spi_engine, true);
 
 	return 0;
 }
@@ -243,7 +243,7 @@ static int ad4134_buffer_predisable(struct iio_dev *indio_dev)
 {
 	struct ad4134_state *st = iio_priv(indio_dev);
 
-	legacy_spi_engine_offload_enable(st->spi_engine, false);
+	spi_engine_offload_enable(st->spi_engine, false);
 
 	return 0;
 }
@@ -444,7 +444,8 @@ static int ad4134_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	ret = devm_iio_dmaengine_buffer_setup(dev, indio_dev, "rx");
+	ret = devm_iio_dmaengine_buffer_setup(dev, indio_dev, "rx",
+					      IIO_BUFFER_DIRECTION_IN);
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "Failed to allocate IIO DMA buffer\n");

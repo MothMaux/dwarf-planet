@@ -235,6 +235,7 @@ static int snd_pcm_ioctl_hw_params_compat(struct snd_pcm_substream *substream,
 					  int refine, 
 					  struct snd_pcm_hw_params32 __user *data32)
 {
+	struct snd_pcm_hw_params *data;
 	struct snd_pcm_runtime *runtime;
 	int err;
 
@@ -242,34 +243,35 @@ static int snd_pcm_ioctl_hw_params_compat(struct snd_pcm_substream *substream,
 	if (!runtime)
 		return -ENOTTY;
 
-	struct snd_pcm_hw_params *data __free(kfree) =
-		kmalloc(sizeof(*data), GFP_KERNEL);
+	data = kmalloc(sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
 
 	/* only fifo_size (RO from userspace) is different, so just copy all */
-	if (copy_from_user(data, data32, sizeof(*data32)))
-		return -EFAULT;
-
-	if (refine) {
-		err = snd_pcm_hw_refine(substream, data);
-		if (err < 0)
-			return err;
-		err = fixup_unreferenced_params(substream, data);
-	} else {
-		err = snd_pcm_hw_params(substream, data);
+	if (copy_from_user(data, data32, sizeof(*data32))) {
+		err = -EFAULT;
+		goto error;
 	}
+
+	if (refine)
+		err = snd_pcm_hw_refine(substream, data);
+	else
+		err = snd_pcm_hw_params(substream, data);
 	if (err < 0)
-		return err;
+		goto error;
 	if (copy_to_user(data32, data, sizeof(*data32)) ||
-	    put_user(data->fifo_size, &data32->fifo_size))
-		return -EFAULT;
+	    put_user(data->fifo_size, &data32->fifo_size)) {
+		err = -EFAULT;
+		goto error;
+	}
 
 	if (! refine) {
 		unsigned int new_boundary = recalculate_boundary(runtime);
 		if (new_boundary)
 			runtime->boundary = new_boundary;
 	}
+ error:
+	kfree(data);
 	return err;
 }
 
@@ -332,6 +334,7 @@ static int snd_pcm_ioctl_xfern_compat(struct snd_pcm_substream *substream,
 	compat_caddr_t buf;
 	compat_caddr_t __user *bufptr;
 	u32 frames;
+	void __user **bufs;
 	int err, ch, i;
 
 	if (! substream->runtime)
@@ -348,15 +351,15 @@ static int snd_pcm_ioctl_xfern_compat(struct snd_pcm_substream *substream,
 	    get_user(frames, &data32->frames))
 		return -EFAULT;
 	bufptr = compat_ptr(buf);
-
-	void __user **bufs __free(kfree) =
-		kmalloc_array(ch, sizeof(void __user *), GFP_KERNEL);
+	bufs = kmalloc_array(ch, sizeof(void __user *), GFP_KERNEL);
 	if (bufs == NULL)
 		return -ENOMEM;
 	for (i = 0; i < ch; i++) {
 		u32 ptr;
-		if (get_user(ptr, bufptr))
+		if (get_user(ptr, bufptr)) {
+			kfree(bufs);
 			return -EFAULT;
+		}
 		bufs[i] = compat_ptr(ptr);
 		bufptr++;
 	}
@@ -366,8 +369,9 @@ static int snd_pcm_ioctl_xfern_compat(struct snd_pcm_substream *substream,
 		err = snd_pcm_lib_readv(substream, bufs, frames);
 	if (err >= 0) {
 		if (put_user(err, &data32->result))
-			return -EFAULT;
+			err = -EFAULT;
 	}
+	kfree(bufs);
 	return err;
 }
 
@@ -433,22 +437,22 @@ static int snd_pcm_ioctl_sync_ptr_x32(struct snd_pcm_substream *substream,
 	boundary = recalculate_boundary(runtime);
 	if (!boundary)
 		boundary = 0x7fffffff;
-	scoped_guard(pcm_stream_lock_irq, substream) {
-		/* FIXME: we should consider the boundary for the sync from app */
-		if (!(sflags & SNDRV_PCM_SYNC_PTR_APPL))
-			control->appl_ptr = scontrol.appl_ptr;
-		else
-			scontrol.appl_ptr = control->appl_ptr % boundary;
-		if (!(sflags & SNDRV_PCM_SYNC_PTR_AVAIL_MIN))
-			control->avail_min = scontrol.avail_min;
-		else
-			scontrol.avail_min = control->avail_min;
-		sstatus.state = status->state;
-		sstatus.hw_ptr = status->hw_ptr % boundary;
-		sstatus.tstamp = status->tstamp;
-		sstatus.suspended_state = status->suspended_state;
-		sstatus.audio_tstamp = status->audio_tstamp;
-	}
+	snd_pcm_stream_lock_irq(substream);
+	/* FIXME: we should consider the boundary for the sync from app */
+	if (!(sflags & SNDRV_PCM_SYNC_PTR_APPL))
+		control->appl_ptr = scontrol.appl_ptr;
+	else
+		scontrol.appl_ptr = control->appl_ptr % boundary;
+	if (!(sflags & SNDRV_PCM_SYNC_PTR_AVAIL_MIN))
+		control->avail_min = scontrol.avail_min;
+	else
+		scontrol.avail_min = control->avail_min;
+	sstatus.state = status->state;
+	sstatus.hw_ptr = status->hw_ptr % boundary;
+	sstatus.tstamp = status->tstamp;
+	sstatus.suspended_state = status->suspended_state;
+	sstatus.audio_tstamp = status->audio_tstamp;
+	snd_pcm_stream_unlock_irq(substream);
 	if (!(sflags & SNDRV_PCM_SYNC_PTR_APPL))
 		snd_pcm_dma_buffer_sync(substream, SNDRV_DMA_SYNC_DEVICE);
 	if (put_user(sstatus.state, &src->s.status.state) ||
@@ -511,24 +515,26 @@ static int snd_pcm_ioctl_sync_ptr_buggy(struct snd_pcm_substream *substream,
 		if (err < 0)
 			return err;
 	}
-	scoped_guard(pcm_stream_lock_irq, substream) {
-		if (!(sync_ptr.flags & SNDRV_PCM_SYNC_PTR_APPL)) {
-			err = pcm_lib_apply_appl_ptr(substream, sync_cp->appl_ptr);
-			if (err < 0)
-				return err;
-		} else {
-			sync_cp->appl_ptr = control->appl_ptr;
+	snd_pcm_stream_lock_irq(substream);
+	if (!(sync_ptr.flags & SNDRV_PCM_SYNC_PTR_APPL)) {
+		err = pcm_lib_apply_appl_ptr(substream, sync_cp->appl_ptr);
+		if (err < 0) {
+			snd_pcm_stream_unlock_irq(substream);
+			return err;
 		}
-		if (!(sync_ptr.flags & SNDRV_PCM_SYNC_PTR_AVAIL_MIN))
-			control->avail_min = sync_cp->avail_min;
-		else
-			sync_cp->avail_min = control->avail_min;
-		sync_ptr.s.status.state = status->state;
-		sync_ptr.s.status.hw_ptr = status->hw_ptr;
-		sync_ptr.s.status.tstamp = status->tstamp;
-		sync_ptr.s.status.suspended_state = status->suspended_state;
-		sync_ptr.s.status.audio_tstamp = status->audio_tstamp;
+	} else {
+		sync_cp->appl_ptr = control->appl_ptr;
 	}
+	if (!(sync_ptr.flags & SNDRV_PCM_SYNC_PTR_AVAIL_MIN))
+		control->avail_min = sync_cp->avail_min;
+	else
+		sync_cp->avail_min = control->avail_min;
+	sync_ptr.s.status.state = status->state;
+	sync_ptr.s.status.hw_ptr = status->hw_ptr;
+	sync_ptr.s.status.tstamp = status->tstamp;
+	sync_ptr.s.status.suspended_state = status->suspended_state;
+	sync_ptr.s.status.audio_tstamp = status->audio_tstamp;
+	snd_pcm_stream_unlock_irq(substream);
 	if (!(sync_ptr.flags & SNDRV_PCM_SYNC_PTR_APPL))
 		snd_pcm_dma_buffer_sync(substream, SNDRV_DMA_SYNC_DEVICE);
 	if (copy_to_user(_sync_ptr, &sync_ptr, sizeof(sync_ptr)))

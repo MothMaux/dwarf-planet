@@ -13,7 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/spi/spi.h>
 #include <linux/module.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/imu/adis.h>
@@ -223,13 +223,13 @@ int __adis_update_bits_base(struct adis *adis, unsigned int reg, const u32 mask,
 	int ret;
 	u32 __val;
 
-	ret = adis->ops->read(adis, reg, &__val, size);
+	ret = __adis_read_reg(adis, reg, &__val, size);
 	if (ret)
 		return ret;
 
 	__val = (__val & ~mask) | (val & mask);
 
-	return adis->ops->write(adis, reg, __val, size);
+	return __adis_write_reg(adis, reg, __val, size);
 }
 EXPORT_SYMBOL_NS_GPL(__adis_update_bits_base, IIO_ADISLIB);
 
@@ -304,20 +304,11 @@ EXPORT_SYMBOL_NS(__adis_enable_irq, IIO_ADISLIB);
  */
 int __adis_check_status(struct adis *adis)
 {
-	unsigned int status;
-	int diag_stat_bits;
-	u16 status_16;
+	u16 status;
 	int ret;
 	int i;
 
-	if (adis->data->diag_stat_size) {
-		ret = adis->ops->read(adis, adis->data->diag_stat_reg, &status,
-				      adis->data->diag_stat_size);
-	} else {
-		ret = __adis_read_reg_16(adis, adis->data->diag_stat_reg,
-					 &status_16);
-		status = status_16;
-	}
+	ret = __adis_read_reg_16(adis, adis->data->diag_stat_reg, &status);
 	if (ret)
 		return ret;
 
@@ -326,10 +317,7 @@ int __adis_check_status(struct adis *adis)
 	if (status == 0)
 		return 0;
 
-	diag_stat_bits = BITS_PER_BYTE * (adis->data->diag_stat_size ?
-					  adis->data->diag_stat_size : 2);
-
-	for (i = 0; i < diag_stat_bits; ++i) {
+	for (i = 0; i < 16; ++i) {
 		if (status & BIT(i)) {
 			dev_err(&adis->spi->dev, "%s.\n",
 				adis->data->status_error_msgs[i]);
@@ -478,17 +466,17 @@ int adis_single_conversion(struct iio_dev *indio_dev,
 	unsigned int uval;
 	int ret;
 
-	guard(mutex)(&adis->state_lock);
+	mutex_lock(&adis->state_lock);
 
-	ret = adis->ops->read(adis, chan->address, &uval,
+	ret = __adis_read_reg(adis, chan->address, &uval,
 			      chan->scan_type.storagebits / 8);
 	if (ret)
-		return ret;
+		goto err_unlock;
 
 	if (uval & error_mask) {
 		ret = __adis_check_status(adis);
 		if (ret)
-			return ret;
+			goto err_unlock;
 	}
 
 	if (chan->scan_type.sign == 's')
@@ -496,15 +484,12 @@ int adis_single_conversion(struct iio_dev *indio_dev,
 	else
 		*val = uval & ((1 << chan->scan_type.realbits) - 1);
 
-	return IIO_VAL_INT;
+	ret = IIO_VAL_INT;
+err_unlock:
+	mutex_unlock(&adis->state_lock);
+	return ret;
 }
 EXPORT_SYMBOL_NS_GPL(adis_single_conversion, IIO_ADISLIB);
-
-static const struct adis_ops adis_default_ops = {
-	.read = __adis_read_reg,
-	.write = __adis_write_reg,
-	.reset = __adis_reset,
-};
 
 /**
  * adis_init() - Initialize adis device structure
@@ -535,11 +520,6 @@ int adis_init(struct adis *adis, struct iio_dev *indio_dev,
 
 	adis->spi = spi;
 	adis->data = data;
-	if (!adis->ops)
-		adis->ops = &adis_default_ops;
-	else if (!adis->ops->write || !adis->ops->read || !adis->ops->reset)
-		return -EINVAL;
-
 	iio_device_set_drvdata(indio_dev, adis);
 
 	if (data->has_paging) {

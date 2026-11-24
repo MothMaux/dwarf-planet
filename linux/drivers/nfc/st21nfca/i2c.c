@@ -487,7 +487,8 @@ static const struct acpi_gpio_mapping acpi_st21nfca_gpios[] = {
 	{},
 };
 
-static int st21nfca_hci_i2c_probe(struct i2c_client *client)
+static int st21nfca_hci_i2c_probe(struct i2c_client *client,
+				  const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct st21nfca_i2c_phy *phy;
@@ -573,7 +574,7 @@ static void st21nfca_hci_i2c_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id st21nfca_hci_i2c_id_table[] = {
-	{ ST21NFCA_HCI_DRIVER_NAME },
+	{ST21NFCA_HCI_DRIVER_NAME, 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, st21nfca_hci_i2c_id_table);

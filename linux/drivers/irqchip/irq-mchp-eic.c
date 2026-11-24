@@ -166,7 +166,7 @@ static int mchp_eic_domain_alloc(struct irq_domain *domain, unsigned int virq,
 
 	ret = irq_domain_translate_twocell(domain, fwspec, &hwirq, &type);
 	if (ret || hwirq >= MCHP_EIC_NIRQ)
-		return ret ?: -EINVAL;
+		return ret;
 
 	switch (type) {
 	case IRQ_TYPE_EDGE_RISING:
@@ -276,4 +276,5 @@ IRQCHIP_MATCH("microchip,sama7g5-eic", mchp_eic_init)
 IRQCHIP_PLATFORM_DRIVER_END(mchp_eic)
 
 MODULE_DESCRIPTION("Microchip External Interrupt Controller");
+MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Claudiu Beznea <claudiu.beznea@microchip.com>");

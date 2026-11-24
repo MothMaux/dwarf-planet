@@ -323,9 +323,10 @@ static int hac_soc_platform_probe(struct platform_device *pdev)
 					  sh4_hac_dai, ARRAY_SIZE(sh4_hac_dai));
 }
 
-static void hac_soc_platform_remove(struct platform_device *pdev)
+static int hac_soc_platform_remove(struct platform_device *pdev)
 {
 	snd_soc_set_ac97_ops(NULL);
+	return 0;
 }
 
 static struct platform_driver hac_pcm_driver = {

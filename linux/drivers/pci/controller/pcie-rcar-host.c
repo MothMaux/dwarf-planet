@@ -12,7 +12,6 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/cleanup.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/delay.h>
@@ -30,7 +29,6 @@
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/regulator/consumer.h>
 
 #include "pcie-rcar.h"
 
@@ -38,10 +36,25 @@ struct rcar_msi {
 	DECLARE_BITMAP(used, INT_PCI_MSI_NR);
 	struct irq_domain *domain;
 	struct mutex map_lock;
-	raw_spinlock_t mask_lock;
+	spinlock_t mask_lock;
 	int irq1;
 	int irq2;
 };
+
+#ifdef CONFIG_ARM
+/*
+ * Here we keep a static copy of the remapped PCIe controller address.
+ * This is only used on aarch32 systems, all of which have one single
+ * PCIe controller, to provide quick access to the PCIe controller in
+ * the L1 link state fixup function, called from the ARM fault handler.
+ */
+static void __iomem *pcie_base;
+/*
+ * Static copy of PCIe device pointer, so we can check whether the
+ * device is runtime suspended or not.
+ */
+static struct device *pcie_dev;
+#endif
 
 /* Structure representing the PCIe interface */
 struct rcar_pcie_host {
@@ -52,13 +65,20 @@ struct rcar_pcie_host {
 	int			(*phy_init_fn)(struct rcar_pcie_host *host);
 };
 
+static DEFINE_SPINLOCK(pmsr_lock);
+
 static int rcar_pcie_wakeup(struct device *pcie_dev, void __iomem *pcie_base)
 {
+	unsigned long flags;
 	u32 pmsr, val;
 	int ret = 0;
 
-	if (!pcie_base || pm_runtime_suspended(pcie_dev))
-		return -EINVAL;
+	spin_lock_irqsave(&pmsr_lock, flags);
+
+	if (!pcie_base || pm_runtime_suspended(pcie_dev)) {
+		ret = -EINVAL;
+		goto unlock_exit;
+	}
 
 	pmsr = readl(pcie_base + PMSR);
 
@@ -72,14 +92,12 @@ static int rcar_pcie_wakeup(struct device *pcie_dev, void __iomem *pcie_base)
 		writel(L1IATN, pcie_base + PMCTLR);
 		ret = readl_poll_timeout_atomic(pcie_base + PMSR, val,
 						val & L1FAEG, 10, 1000);
-		if (ret) {
-			dev_warn_ratelimited(pcie_dev,
-					     "Timeout waiting for L1 link state, ret=%d\n",
-					     ret);
-		}
+		WARN(ret, "Timeout waiting for L1 link state, ret=%d\n", ret);
 		writel(L1FAEG | PMEL1RX, pcie_base + PMSR);
 	}
 
+unlock_exit:
+	spin_unlock_irqrestore(&pmsr_lock, flags);
 	return ret;
 }
 
@@ -201,9 +219,9 @@ static int rcar_pcie_config_access(struct rcar_pcie_host *host,
 
 	/* Enable the configuration access */
 	if (pci_is_root_bus(bus->parent))
-		rcar_pci_write_reg(pcie, PCIECCTLR_CCIE | TYPE0, PCIECCTLR);
+		rcar_pci_write_reg(pcie, CONFIG_SEND_ENABLE | TYPE0, PCIECCTLR);
 	else
-		rcar_pci_write_reg(pcie, PCIECCTLR_CCIE | TYPE1, PCIECCTLR);
+		rcar_pci_write_reg(pcie, CONFIG_SEND_ENABLE | TYPE1, PCIECCTLR);
 
 	/* Check for errors */
 	if (rcar_pci_read_reg(pcie, PCIEERRFR) & UNSUPPORTED_REQUEST)
@@ -457,7 +475,7 @@ static int rcar_pcie_hw_init(struct rcar_pcie *pcie)
 	rcar_rmw32(pcie, REXPCAP(0), 0xff, PCI_CAP_ID_EXP);
 	rcar_rmw32(pcie, REXPCAP(PCI_EXP_FLAGS),
 		PCI_EXP_FLAGS_TYPE, PCI_EXP_TYPE_ROOT_PORT << 4);
-	rcar_rmw32(pcie, RCONF(PCI_HEADER_TYPE), PCI_HEADER_TYPE_MASK,
+	rcar_rmw32(pcie, RCONF(PCI_HEADER_TYPE), 0x7f,
 		PCI_HEADER_TYPE_BRIDGE);
 
 	/* Enable data link layer active state reporting */
@@ -626,26 +644,33 @@ static void rcar_msi_irq_mask(struct irq_data *d)
 {
 	struct rcar_msi *msi = irq_data_get_irq_chip_data(d);
 	struct rcar_pcie *pcie = &msi_to_host(msi)->pcie;
+	unsigned long flags;
 	u32 value;
 
-	scoped_guard(raw_spinlock_irqsave, &msi->mask_lock) {
-		value = rcar_pci_read_reg(pcie, PCIEMSIIER);
-		value &= ~BIT(d->hwirq);
-		rcar_pci_write_reg(pcie, value, PCIEMSIIER);
-	}
+	spin_lock_irqsave(&msi->mask_lock, flags);
+	value = rcar_pci_read_reg(pcie, PCIEMSIIER);
+	value &= ~BIT(d->hwirq);
+	rcar_pci_write_reg(pcie, value, PCIEMSIIER);
+	spin_unlock_irqrestore(&msi->mask_lock, flags);
 }
 
 static void rcar_msi_irq_unmask(struct irq_data *d)
 {
 	struct rcar_msi *msi = irq_data_get_irq_chip_data(d);
 	struct rcar_pcie *pcie = &msi_to_host(msi)->pcie;
+	unsigned long flags;
 	u32 value;
 
-	scoped_guard(raw_spinlock_irqsave, &msi->mask_lock) {
-		value = rcar_pci_read_reg(pcie, PCIEMSIIER);
-		value |= BIT(d->hwirq);
-		rcar_pci_write_reg(pcie, value, PCIEMSIIER);
-	}
+	spin_lock_irqsave(&msi->mask_lock, flags);
+	value = rcar_pci_read_reg(pcie, PCIEMSIIER);
+	value |= BIT(d->hwirq);
+	rcar_pci_write_reg(pcie, value, PCIEMSIIER);
+	spin_unlock_irqrestore(&msi->mask_lock, flags);
+}
+
+static int rcar_msi_set_affinity(struct irq_data *d, const struct cpumask *mask, bool force)
+{
+	return -EINVAL;
 }
 
 static void rcar_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
@@ -659,10 +684,11 @@ static void rcar_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 }
 
 static struct irq_chip rcar_msi_bottom_chip = {
-	.name			= "R-Car MSI",
+	.name			= "Rcar MSI",
 	.irq_ack		= rcar_msi_irq_ack,
 	.irq_mask		= rcar_msi_irq_mask,
 	.irq_unmask		= rcar_msi_irq_unmask,
+	.irq_set_affinity 	= rcar_msi_set_affinity,
 	.irq_compose_msi_msg	= rcar_compose_msi_msg,
 };
 
@@ -709,8 +735,8 @@ static const struct irq_domain_ops rcar_msi_domain_ops = {
 };
 
 static struct msi_domain_info rcar_msi_info = {
-	.flags	= MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS |
-		  MSI_FLAG_NO_AFFINITY | MSI_FLAG_MULTI_PCI_MSI,
+	.flags	= (MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS |
+		   MSI_FLAG_MULTI_PCI_MSI),
 	.chip	= &rcar_msi_top_chip,
 };
 
@@ -755,7 +781,7 @@ static int rcar_pcie_enable_msi(struct rcar_pcie_host *host)
 	int err;
 
 	mutex_init(&msi->map_lock);
-	raw_spin_lock_init(&msi->mask_lock);
+	spin_lock_init(&msi->mask_lock);
 
 	err = of_address_to_resource(dev->of_node, 0, &res);
 	if (err)
@@ -787,7 +813,7 @@ static int rcar_pcie_enable_msi(struct rcar_pcie_host *host)
 
 	/*
 	 * Setup MSI data target using RC base address address, which
-	 * is guaranteed to be in the low 32bit range on any R-Car HW.
+	 * is guaranteed to be in the low 32bit range on any RCar HW.
 	 */
 	rcar_pci_write_reg(pcie, lower_32_bits(res.start) | MSIFE, PCIEMSIALR);
 	rcar_pci_write_reg(pcie, upper_32_bits(res.start), PCIEMSIAUR);
@@ -852,6 +878,12 @@ static int rcar_pcie_get_resources(struct rcar_pcie_host *host)
 		goto err_irq2;
 	}
 	host->msi.irq2 = i;
+
+#ifdef CONFIG_ARM
+	/* Cache static copy for L1 link state fixup hook on aarch32 */
+	pcie_base = pcie->base;
+	pcie_dev = pcie->dev;
+#endif
 
 	return 0;
 
@@ -942,22 +974,14 @@ static const struct of_device_id rcar_pcie_of_match[] = {
 	{},
 };
 
-/* Design note 346 from Linear Technology says order is not important. */
-static const char * const rcar_pcie_supplies[] = {
-	"vpcie1v5",
-	"vpcie3v3",
-	"vpcie12v",
-};
-
 static int rcar_pcie_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct pci_host_bridge *bridge;
 	struct rcar_pcie_host *host;
 	struct rcar_pcie *pcie;
-	unsigned int i;
 	u32 data;
 	int err;
+	struct pci_host_bridge *bridge;
 
 	bridge = devm_pci_alloc_host_bridge(dev, sizeof(*host));
 	if (!bridge)
@@ -967,13 +991,6 @@ static int rcar_pcie_probe(struct platform_device *pdev)
 	pcie = &host->pcie;
 	pcie->dev = dev;
 	platform_set_drvdata(pdev, host);
-
-	for (i = 0; i < ARRAY_SIZE(rcar_pcie_supplies); i++) {
-		err = devm_regulator_get_enable_optional(dev, rcar_pcie_supplies[i]);
-		if (err < 0 && err != -ENODEV)
-			return dev_err_probe(dev, err, "failed to enable regulator: %s\n",
-					     rcar_pcie_supplies[i]);
-	}
 
 	pm_runtime_enable(pcie->dev);
 	err = pm_runtime_get_sync(pcie->dev);

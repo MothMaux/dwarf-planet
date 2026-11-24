@@ -14,9 +14,6 @@ Contents:
    3com/vortex
    amazon/ena
    altera/altera_tse
-   amd/pds_core
-   amd/pds_vdpa
-   amd/pds_vfio_pci
    aquantia/atlantic
    chelsio/cxgb
    cirrus/cs89x0
@@ -32,9 +29,9 @@ Contents:
    intel/e1000
    intel/e1000e
    intel/fm10k
-   intel/idpf
    intel/igb
    intel/igbvf
+   intel/ixgb
    intel/ixgbe
    intel/ixgbevf
    intel/i40e
@@ -42,9 +39,7 @@ Contents:
    intel/ice
    marvell/octeontx2
    marvell/octeon_ep
-   marvell/octeon_ep_vf
-   mellanox/mlx5/index
-   meta/fbnic
+   mellanox/mlx5
    microsoft/netvsc
    neterion/s2io
    netronome/nfp

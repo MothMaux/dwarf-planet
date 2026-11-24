@@ -64,13 +64,6 @@ static int sgx_encl_create(struct sgx_encl *encl, struct sgx_secs *secs)
 	struct file *backing;
 	long ret;
 
-	/*
-	 * ECREATE would detect this too, but checking here also ensures
-	 * that the 'encl_size' calculations below can never overflow.
-	 */
-	if (!is_power_of_2(secs->size))
-		return -EINVAL;
-
 	va_page = sgx_encl_grow(encl, true);
 	if (IS_ERR(va_page))
 		return PTR_ERR(va_page);
@@ -118,7 +111,7 @@ static int sgx_encl_create(struct sgx_encl *encl, struct sgx_secs *secs)
 	encl->base = secs->base;
 	encl->size = secs->size;
 	encl->attributes = secs->attributes;
-	encl->attributes_mask = SGX_ATTR_UNPRIV_MASK;
+	encl->attributes_mask = SGX_ATTR_DEBUG | SGX_ATTR_MODE64BIT | SGX_ATTR_KSS;
 
 	/* Set only after completion, as encl->lock has not been taken. */
 	set_bit(SGX_ENCL_CREATED, &encl->flags);
@@ -221,18 +214,18 @@ static int __sgx_encl_add_page(struct sgx_encl *encl,
 	if (!(vma->vm_flags & VM_MAYEXEC))
 		return -EACCES;
 
-	ret = get_user_pages(src, 1, 0, &src_page);
+	ret = get_user_pages(src, 1, 0, &src_page, NULL);
 	if (ret < 1)
 		return -EFAULT;
 
 	pginfo.secs = (unsigned long)sgx_get_epc_virt_addr(encl->secs.epc_page);
 	pginfo.addr = encl_page->desc & PAGE_MASK;
 	pginfo.metadata = (unsigned long)secinfo;
-	pginfo.contents = (unsigned long)kmap_local_page(src_page);
+	pginfo.contents = (unsigned long)kmap_atomic(src_page);
 
 	ret = __eadd(&pginfo, sgx_get_epc_virt_addr(epc_page));
 
-	kunmap_local((void *)pginfo.contents);
+	kunmap_atomic((void *)pginfo.contents);
 	put_page(src_page);
 
 	return ret ? -EIO : 0;
@@ -588,7 +581,7 @@ err_out:
  *
  * Flush any outstanding enqueued EADD operations and perform EINIT.  The
  * Launch Enclave Public Key Hash MSRs are rewritten as necessary to match
- * the enclave's MRSIGNER, which is calculated from the provided sigstruct.
+ * the enclave's MRSIGNER, which is caculated from the provided sigstruct.
  *
  * Return:
  * - 0:		Success.

@@ -236,15 +236,6 @@ static __maybe_unused int32_t __maybe_unused adi_adrv9001_Rx_GainControl_Configu
                     ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED,
                     ADI_ADRV9001_GPIO_PIN_CRUMB_15_14);
 
-	if (agcCfg->agcFreezeType == ADI_ADRV9001_RX_AGC_SW_FREEZE)
-	{
-		/* SW AGC freeze is interrupt controlled by DGPIO pin.Only pins 0 to 3 are interruptible */
-		ADI_RANGE_CHECK(device,
-			            agcCfg->gpioFreezePin,
-			            ADI_ADRV9001_GPIO_UNASSIGNED,
-			            ADI_ADRV9001_GPIO_DIGITAL_03);
-	}
-
     ADI_API_RETURN(device);
 }
 
@@ -277,6 +268,10 @@ int32_t adi_adrv9001_Rx_GainControl_Configure(adi_adrv9001_Device_t *device,
     /* GPIO variables */
     uint8_t gpioCrumb1_0 = 0;
     uint8_t gpioCrumb3_2 = 0;
+    uint8_t gpioSource1_0 = 0;
+    uint8_t gpioSource3_2 = 0;
+    uint16_t gpioOutEn = 0;
+    static const uint16_t GPIO_SOURCE_SEL_ADDR = 0x56;
     static const uint8_t ADI_ADRV9001_GPIO_SOURCE_RX1_5_4 = 0x12; /* peak or peak&power */
     static const uint8_t ADI_ADRV9001_GPIO_SOURCE_RX1_7_6 = 0x13; /* peak or peak&power */
     static const uint8_t ADI_ADRV9001_GPIO_SOURCE_RX2_5_4 = 0x16; /* peak or peak&power */
@@ -428,79 +423,44 @@ int32_t adi_adrv9001_Rx_GainControl_Configure(adi_adrv9001_Device_t *device,
     {
         gpioCrumb1_0 = (uint8_t)agcCfg->peak.feedback_apd_low_hb_low;
         gpioCrumb3_2 = (uint8_t)agcCfg->peak.feedback_apd_high_hb_high;
-
-	    if (ADI_CHANNEL_1 == channel)
-	    {
-		    if (gpioCrumb1_0 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-		    {
-			    device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX1_5_4;
-			    ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb1_0);
-			    device->devStateInfo.crumbSrcOffset = 0;
-		    }
-		    if (gpioCrumb3_2 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-		    {
-			    device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX1_7_6;
-			    ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb3_2);
-			    device->devStateInfo.crumbSrcOffset = 0;
-		    }
+        if (ADI_CHANNEL_1 == channel)
+        {
+            gpioSource1_0 = ADI_ADRV9001_GPIO_SOURCE_RX1_5_4;
+            gpioSource3_2 = ADI_ADRV9001_GPIO_SOURCE_RX1_7_6;
         }
         else
         {
-	        if (gpioCrumb1_0 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-	        {
-		        device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX2_5_4;
-		        ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb1_0);
-		        device->devStateInfo.crumbSrcOffset = 0;
-	        }
-	        if (gpioCrumb3_2 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-	        {
-		        device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX2_7_6;
-		        ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb3_2);
-		        device->devStateInfo.crumbSrcOffset = 0;
-	        }
+            gpioSource1_0 = ADI_ADRV9001_GPIO_SOURCE_RX2_5_4;
+            gpioSource3_2 = ADI_ADRV9001_GPIO_SOURCE_RX2_7_6;
         }
     }
     else
     {
         gpioCrumb1_0 = (uint8_t)agcCfg->power.feedback_inner_high_inner_low;
         gpioCrumb3_2 = (uint8_t)agcCfg->power.feedback_apd_high_apd_low;
-
         if (ADI_CHANNEL_1 == channel)
         {
-	        if (gpioCrumb1_0 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-	        {
-		        device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX1_5_4;
-		        ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb1_0);
-		        device->devStateInfo.crumbSrcOffset = 0;
-	        }
-	        if (gpioCrumb3_2 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-	        {
-		        device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX1_7_6;
-		        ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb3_2);
-		        device->devStateInfo.crumbSrcOffset = 0;
-	        }
+            gpioSource1_0 = ADI_ADRV9001_GPIO_SOURCE_RX1_5_4;
+            gpioSource3_2 = ADI_ADRV9001_GPIO_SOURCE_RX1_7_6;
         }
         else
         {
-	        if (gpioCrumb1_0 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-	        {
-		        device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX2_5_4;
-		        ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb1_0);
-		        device->devStateInfo.crumbSrcOffset = 0;
-	        }
-	        if (gpioCrumb3_2 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED)
-	        {
-		        device->devStateInfo.crumbSrcOffset = ADI_ADRV9001_GPIO_SOURCE_RX2_7_6;
-		        ADI_EXPECT(adi_adrv9001_gpio_ManualOutput_Configure, device, gpioCrumb3_2);
-		        device->devStateInfo.crumbSrcOffset = 0;
-	        }
+            gpioSource1_0 = ADI_ADRV9001_GPIO_SOURCE_RX2_5_4;
+            gpioSource3_2 = ADI_ADRV9001_GPIO_SOURCE_RX2_7_6;
         }
     }
 
-	if ((gpioCrumb1_0 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED) || (gpioCrumb3_2 != ADI_ADRV9001_GPIO_PIN_CRUMB_UNASSIGNED))
-	{
-		ADI_EXPECT(adrv9001_NvsRegmapRx_ControlOutMuxSel_Set, device, rxAddr, controlMuxAddress);
-	}
+    /* Configure pins as outputs */
+    ADI_EXPECT(adrv9001_NvsRegmapCore_NvsGpioDirectionControlOe_Get, device, &gpioOutEn);
+    gpioOutEn |= (1 << (gpioCrumb1_0 * 2 - 1)) | (1 << (gpioCrumb1_0 * 2 - 2));
+    gpioOutEn |= (1 << (gpioCrumb3_2 * 2 - 1)) | (1 << (gpioCrumb3_2 * 2 - 2));
+    ADI_EXPECT(adrv9001_NvsRegmapCore_NvsGpioDirectionControlOe_Set, device, gpioOutEn);
+
+    /* Configure source */
+    ADRV9001_SPIWRITEBYTE(device, "GPIO_SOURCE_SEL", (GPIO_SOURCE_SEL_ADDR + gpioCrumb1_0 - 1), gpioSource1_0);
+    ADRV9001_SPIWRITEBYTE(device, "GPIO_SOURCE_SEL", (GPIO_SOURCE_SEL_ADDR + gpioCrumb3_2 - 1), gpioSource3_2);
+
+    ADI_EXPECT(adrv9001_NvsRegmapRx_ControlOutMuxSel_Set, device, rxAddr, controlMuxAddress);
 
 	/* Enable/Disable RXQEC Freeze*/
 	if (ADI_CHANNEL_1 == channel)
@@ -511,44 +471,23 @@ int32_t adi_adrv9001_Rx_GainControl_Configure(adi_adrv9001_Device_t *device,
 	{
 		ADI_EXPECT(adrv9001_NvsRegmapCore2_Rx2Fic2CaptPedSoftOverrideEnable_Set, device, agcCfg->rxQecFreezeEnable);
 	}
-
+    
 	if (agcCfg->gpioFreezePin != ADI_ADRV9001_GPIO_UNASSIGNED)
 	{
-		if (agcCfg->agcFreezeType == ADI_ADRV9001_RX_AGC_HW_FREEZE)
-		{
-			/* Enable freeze mode */
-			ADI_EXPECT(adrv9001_NvsRegmapRxb_AgcEnableGainFreeze_Set, device, rxbAddr, 0x1);
+		/* Enable freeze mode */
+		ADI_EXPECT(adrv9001_NvsRegmapRxb_AgcEnableGainFreeze_Set, device, rxbAddr, 0x1);
 
-			/* Set up GPIO pins */
-			ADI_EXPECT(adi_adrv9001_gpio_ManualInput_Configure, device, agcCfg->gpioFreezePin);
-			if (ADI_CHANNEL_1 == channel)
-			{
-				ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx1AgcSlowloopFreezeGpioSelect_Set, device, (agcCfg->gpioFreezePin - 1));
-				ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx1AgcSlowloopFreezeGpioMask_Set, device, 0);
-			}
-			else
-			{
-				ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx2AgcSlowloopFreezeGpioSelect_Set, device, (agcCfg->gpioFreezePin - 1));
-				ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx2AgcSlowloopFreezeGpioMask_Set, device, 0);
-			}
+		/* Set up GPIO pins */
+		ADI_EXPECT(adi_adrv9001_gpio_ManualInput_Configure, device, agcCfg->gpioFreezePin);
+		if (ADI_CHANNEL_1 == channel)
+		{
+			ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx1AgcSlowloopFreezeGpioSelect_Set, device, (agcCfg->gpioFreezePin - 1));
+			ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx1AgcSlowloopFreezeGpioMask_Set, device, 0);
 		}
-		else if (agcCfg->agcFreezeType == ADI_ADRV9001_RX_AGC_SW_FREEZE)
+		else
 		{
-			/* Set up GPIO pins */
-			adi_adrv9001_GpioCfg_t gpio = {
-				.pin = agcCfg->gpioFreezePin,
-				.polarity = ADI_ADRV9001_GPIO_POLARITY_NORMAL,
-				.master = ADI_ADRV9001_GPIO_MASTER_BBIC,
-			};
-
-			if (ADI_CHANNEL_1 == channel)
-			{
-				ADI_EXPECT(adi_adrv9001_gpio_Configure, device, ADI_ADRV9001_GPIO_SIGNAL_RX1_AGC_FREEZE, &gpio);
-			}
-			else
-			{
-				ADI_EXPECT(adi_adrv9001_gpio_Configure, device, ADI_ADRV9001_GPIO_SIGNAL_RX2_AGC_FREEZE, &gpio);
-			}
+			ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx2AgcSlowloopFreezeGpioSelect_Set, device, (agcCfg->gpioFreezePin - 1));
+			ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx2AgcSlowloopFreezeGpioMask_Set, device, 0);
 		}
 	}
 
@@ -574,7 +513,6 @@ int32_t adi_adrv9001_Rx_GainControl_Inspect(adi_adrv9001_Device_t *device,
     uint8_t instanceIdx = 0;
     uint8_t bfValue = 0;
     uint8_t i = 0;
-	adi_adrv9001_GpioCfg_t gpio = { 0 };
 
     static const uint16_t GPIO_SOURCE_SEL_ADDR = 0x56;
     enum
@@ -735,49 +673,24 @@ int32_t adi_adrv9001_Rx_GainControl_Inspect(adi_adrv9001_Device_t *device,
 		ADI_EXPECT(adrv9001_NvsRegmapCore2_Rx2Fic2CaptPedSoftOverrideEnable_Get, device, &bfValue);
 	}
 	agcCfg->rxQecFreezeEnable = (bool)bfValue;
-	
-	if (ADI_CHANNEL_1 == channel)
-	{
-		ADI_EXPECT(adi_adrv9001_gpio_Inspect, device, ADI_ADRV9001_GPIO_SIGNAL_RX1_AGC_FREEZE, &gpio);
-	}
-	else
-	{
-		ADI_EXPECT(adi_adrv9001_gpio_Inspect, device, ADI_ADRV9001_GPIO_SIGNAL_RX2_AGC_FREEZE, &gpio);
-	}
 
-	if (gpio.pin == ADI_ADRV9001_GPIO_UNASSIGNED)
+	/* GPIO Freeze Pin*/
+	ADI_EXPECT(adrv9001_NvsRegmapRxb_AgcEnableGainFreeze_Get, device, rxbAddr, &bfValue);
+	if (bfValue == 0x1)
 	{
-		agcCfg->agcFreezeType = ADI_ADRV9001_RX_AGC_HW_FREEZE;
-	}
-	else
-	{
-		agcCfg->agcFreezeType = ADI_ADRV9001_RX_AGC_SW_FREEZE;
-	}
-
-	if (agcCfg->agcFreezeType == ADI_ADRV9001_RX_AGC_HW_FREEZE)
-	{
-		/* GPIO Freeze Pin*/
-		ADI_EXPECT(adrv9001_NvsRegmapRxb_AgcEnableGainFreeze_Get, device, rxbAddr, &bfValue);
-		if (bfValue == 0x1)
+		if (ADI_CHANNEL_1 == channel)
 		{
-			if (ADI_CHANNEL_1 == channel)
-			{
-				ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx1AgcSlowloopFreezeGpioSelect_Get, device, &bfValue);
-			}
-			else
-			{
-				ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx2AgcSlowloopFreezeGpioSelect_Get, device, &bfValue);
-			}
-			agcCfg->gpioFreezePin = (adi_adrv9001_GpioPin_e)(bfValue + 1);
+			ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx1AgcSlowloopFreezeGpioSelect_Get, device, &bfValue);
 		}
 		else
 		{
-			agcCfg->gpioFreezePin = ADI_ADRV9001_GPIO_UNASSIGNED;
+			ADI_EXPECT(adrv9001_NvsRegmapCore1_Rx2AgcSlowloopFreezeGpioSelect_Get, device, &bfValue);
 		}
+		agcCfg->gpioFreezePin = (adi_adrv9001_GpioPin_e)(bfValue + 1);
 	}
 	else
 	{
-		agcCfg->gpioFreezePin = gpio.pin;
+		agcCfg->gpioFreezePin = ADI_ADRV9001_GPIO_UNASSIGNED;
 	}
 
     ADI_API_RETURN(device);

@@ -50,7 +50,7 @@ static int create_overlay(struct cfs_overlay_item *overlay, void *blob)
 	int err;
 
 	/* FIXME */
-	err = of_overlay_fdt_apply(blob, overlay->dtbo_size, &overlay->ov_id, NULL);
+	err = of_overlay_fdt_apply(blob, overlay->dtbo_size, &overlay->ov_id);
 	if (err < 0) {
 		pr_err("%s: Failed to create overlay (err=%d)\n",
 		       __func__, err);
@@ -131,7 +131,7 @@ static struct configfs_attribute *cfs_overlay_attrs[] = {
 	NULL,
 };
 
-static ssize_t cfs_overlay_item_dtbo_read(struct config_item *item,
+ssize_t cfs_overlay_item_dtbo_read(struct config_item *item,
 				   void *buf, size_t max_count)
 {
 	struct cfs_overlay_item *overlay = to_cfs_overlay_item(item);
@@ -153,7 +153,7 @@ static ssize_t cfs_overlay_item_dtbo_read(struct config_item *item,
 	return overlay->dtbo_size;
 }
 
-static ssize_t cfs_overlay_item_dtbo_write(struct config_item *item,
+ssize_t cfs_overlay_item_dtbo_write(struct config_item *item,
 				    const void *buf, size_t count)
 {
 	struct cfs_overlay_item *overlay = to_cfs_overlay_item(item);

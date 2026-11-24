@@ -8,7 +8,6 @@
  *
  * Copyright 2010 Red Hat, Inc. and/or its affiliates.
  */
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kvm_host.h>
 #include <linux/slab.h>
@@ -57,7 +56,7 @@ int kvm_irq_delivery_to_apic(struct kvm *kvm, struct kvm_lapic *src,
 
 	if (irq->dest_mode == APIC_DEST_PHYSICAL &&
 	    irq->dest_id == 0xff && kvm_lowest_prio_delivery(irq)) {
-		pr_info("apic: phys broadcast and lowest prio\n");
+		printk(KERN_INFO "kvm: apic: phys broadcast and lowest prio\n");
 		irq->delivery_mode = APIC_DM_FIXED;
 	}
 
@@ -144,7 +143,7 @@ int kvm_set_msi(struct kvm_kernel_irq_routing_entry *e,
 	return kvm_irq_delivery_to_apic(kvm, NULL, &irq, NULL);
 }
 
-#ifdef CONFIG_KVM_HYPERV
+
 static int kvm_hv_set_sint(struct kvm_kernel_irq_routing_entry *e,
 		    struct kvm *kvm, int irq_source_id, int level,
 		    bool line_status)
@@ -154,7 +153,6 @@ static int kvm_hv_set_sint(struct kvm_kernel_irq_routing_entry *e,
 
 	return kvm_hv_synic_set_irq(kvm, e->hv_sint.vcpu, e->hv_sint.sint);
 }
-#endif
 
 int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
 			      struct kvm *kvm, int irq_source_id, int level,
@@ -164,11 +162,9 @@ int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
 	int r;
 
 	switch (e->type) {
-#ifdef CONFIG_KVM_HYPERV
 	case KVM_IRQ_ROUTING_HV_SINT:
 		return kvm_hv_set_sint(e, kvm, irq_source_id, level,
 				       line_status);
-#endif
 
 	case KVM_IRQ_ROUTING_MSI:
 		if (kvm_msi_route_invalid(kvm, e))
@@ -203,7 +199,7 @@ int kvm_request_irq_source_id(struct kvm *kvm)
 	irq_source_id = find_first_zero_bit(bitmap, BITS_PER_LONG);
 
 	if (irq_source_id >= BITS_PER_LONG) {
-		pr_warn("exhausted allocatable IRQ sources!\n");
+		printk(KERN_WARNING "kvm: exhaust allocatable IRQ sources!\n");
 		irq_source_id = -EFAULT;
 		goto unlock;
 	}
@@ -225,7 +221,7 @@ void kvm_free_irq_source_id(struct kvm *kvm, int irq_source_id)
 	mutex_lock(&kvm->irq_lock);
 	if (irq_source_id < 0 ||
 	    irq_source_id >= BITS_PER_LONG) {
-		pr_err("IRQ source ID out of range!\n");
+		printk(KERN_ERR "kvm: IRQ source ID out of range!\n");
 		goto unlock;
 	}
 	clear_bit(irq_source_id, &kvm->arch.irq_sources_bitmap);
@@ -317,13 +313,11 @@ int kvm_set_routing_entry(struct kvm *kvm,
 		if (kvm_msi_route_invalid(kvm, e))
 			return -EINVAL;
 		break;
-#ifdef CONFIG_KVM_HYPERV
 	case KVM_IRQ_ROUTING_HV_SINT:
 		e->set = kvm_hv_set_sint;
 		e->hv_sint.vcpu = ue->u.hv_sint.vcpu;
 		e->hv_sint.sint = ue->u.hv_sint.sint;
 		break;
-#endif
 #ifdef CONFIG_KVM_XEN
 	case KVM_IRQ_ROUTING_XEN_EVTCHN:
 		return kvm_xen_setup_evtchn(kvm, e, ue);
@@ -395,6 +389,13 @@ int kvm_setup_default_irq_routing(struct kvm *kvm)
 				   ARRAY_SIZE(default_routing), 0);
 }
 
+static const struct kvm_irq_routing_entry empty_routing[] = {};
+
+int kvm_setup_empty_irq_routing(struct kvm *kvm)
+{
+	return kvm_set_irq_routing(kvm, empty_routing, 0, 0);
+}
+
 void kvm_arch_post_irq_routing_update(struct kvm *kvm)
 {
 	if (!irqchip_split(kvm))
@@ -425,9 +426,8 @@ void kvm_scan_ioapic_routes(struct kvm_vcpu *vcpu,
 			kvm_set_msi_irq(vcpu->kvm, entry, &irq);
 
 			if (irq.trig_mode &&
-			    (kvm_apic_match_dest(vcpu, NULL, APIC_DEST_NOSHORT,
-						 irq.dest_id, irq.dest_mode) ||
-			     kvm_apic_pending_eoi(vcpu, irq.vector)))
+			    kvm_apic_match_dest(vcpu, NULL, APIC_DEST_NOSHORT,
+						irq.dest_id, irq.dest_mode))
 				__set_bit(irq.vector, ioapic_handled_vectors);
 		}
 	}
@@ -436,7 +436,5 @@ void kvm_scan_ioapic_routes(struct kvm_vcpu *vcpu,
 
 void kvm_arch_irq_routing_update(struct kvm *kvm)
 {
-#ifdef CONFIG_KVM_HYPERV
 	kvm_hv_irq_routing_update(kvm);
-#endif
 }

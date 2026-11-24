@@ -58,20 +58,14 @@
 #define CONTROL_MULT_SELECT	(1 << 0)
 #define CONTROL_TEST_MODE	(1 << 4)
 
-static const struct of_device_id __maybe_unused ltc2945_of_match[] = {
-	{ .compatible = "adi,ltc2945" },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, ltc2945_of_match);
-
 /**
- * struct ltc2945_data - LTC2945 device data
- * @regmap: regmap device
- * @shunt_resistor: shunt resistor value in micro ohms (1000 by default)
+ * struct ltc2945_state - driver instance specific data
+ * @regmap		regmap object to access device registers
+ * @r_sense_uohm	current sense resistor value
  */
-struct ltc2945_data {
-	struct regmap *regmap;
-	u32 shunt_resistor;
+struct ltc2945_state {
+	struct regmap		*regmap;
+	u32			r_sense_uohm;
 };
 
 static inline bool is_power_reg(u8 reg)
@@ -82,9 +76,8 @@ static inline bool is_power_reg(u8 reg)
 /* Return the value from the given register in uW, mV, or mA */
 static long long ltc2945_reg_to_val(struct device *dev, u8 reg)
 {
-	struct ltc2945_data *data = dev_get_drvdata(dev);
-	struct regmap *regmap = data->regmap;
-	u32 shunt_resistor = data->shunt_resistor;
+	struct ltc2945_state *st = dev_get_drvdata(dev);
+	struct regmap *regmap = st->regmap;
 	unsigned int control;
 	u8 buf[3];
 	long long val;
@@ -96,10 +89,10 @@ static long long ltc2945_reg_to_val(struct device *dev, u8 reg)
 		return ret;
 
 	if (is_power_reg(reg)) {
-		/* 24-bit power */
+		/* power */
 		val = (buf[0] << 16) + (buf[1] << 8) + buf[2];
 	} else {
-		/* 12-bit current, voltage */
+		/* current, voltage */
 		val = (buf[0] << 4) + (buf[1] >> 4);
 	}
 
@@ -110,7 +103,8 @@ static long long ltc2945_reg_to_val(struct device *dev, u8 reg)
 	case LTC2945_MAX_POWER_THRES_H:
 	case LTC2945_MIN_POWER_THRES_H:
 		/*
-		 * Convert to uW
+		 * Convert to uW by and scale it with the configured
+		 * sense resistor, similar to current measurements.
 		 * Control register bit 0 selects if voltage at SENSE+/VDD
 		 * or voltage at ADIN is used to measure power.
 		 */
@@ -119,19 +113,11 @@ static long long ltc2945_reg_to_val(struct device *dev, u8 reg)
 			return ret;
 		if (control & CONTROL_MULT_SELECT) {
 			/* 25 mV * 25 uV = 0.625 uV resolution. */
-			val *= 625LL;
+			val = DIV_ROUND_CLOSEST_ULL(val * 625LL * 1000, st->r_sense_uohm);
 		} else {
 			/* 0.5 mV * 25 uV = 0.0125 uV resolution. */
-			val = (val * 25LL) >> 1;
+			val = DIV_ROUND_CLOSEST_ULL(val * 25LL * 1000, st->r_sense_uohm) >> 1;
 		}
-		val *= 1000;
-		/* Overflow check: Assuming max 24-bit power, val is at most 53 bits right now. */
-		val = DIV_ROUND_CLOSEST_ULL(val, shunt_resistor);
-		/*
-		 * Overflow check: After division, depending on shunt resistor,
-		 * val can still be > 32 bits so returning long long makes sense
-		 */
-
 		break;
 	case LTC2945_VIN_H:
 	case LTC2945_MAX_VIN_H:
@@ -154,11 +140,11 @@ static long long ltc2945_reg_to_val(struct device *dev, u8 reg)
 	case LTC2945_MIN_SENSE_H:
 	case LTC2945_MAX_SENSE_THRES_H:
 	case LTC2945_MIN_SENSE_THRES_H:
-		/* 25 uV resolution. Convert to mA. */
-		val *= 25 * 1000;
-		/* Overflow check: Assuming max 12-bit sense, val is at most 27 bits right now */
-		val = DIV_ROUND_CLOSEST_ULL(val, shunt_resistor);
-		/* Overflow check: After division, <= 27 bits */
+		/*
+		 * 25 uV resolution. Convert to current and scale it
+		 * with the value of the sense resistor.
+		 */
+		val = DIV_ROUND_CLOSEST_ULL(val * 25 * 1000, st->r_sense_uohm);
 		break;
 	default:
 		return -EINVAL;
@@ -166,17 +152,13 @@ static long long ltc2945_reg_to_val(struct device *dev, u8 reg)
 	return val;
 }
 
-static long long ltc2945_val_to_reg(struct device *dev, u8 reg,
-				    unsigned long long val)
+static int ltc2945_val_to_reg(struct device *dev, u8 reg,
+			      unsigned long long val)
 {
-	struct ltc2945_data *data = dev_get_drvdata(dev);
-	struct regmap *regmap = data->regmap;
-	u32 shunt_resistor = data->shunt_resistor;
+	struct ltc2945_state *st = dev_get_drvdata(dev);
+	struct regmap *regmap = st->regmap;
 	unsigned int control;
 	int ret;
-
-	/* Ensure we don't overflow */
-	val = clamp_val(val, 0, U32_MAX);
 
 	switch (reg) {
 	case LTC2945_POWER_H:
@@ -185,6 +167,8 @@ static long long ltc2945_val_to_reg(struct device *dev, u8 reg,
 	case LTC2945_MAX_POWER_THRES_H:
 	case LTC2945_MIN_POWER_THRES_H:
 		/*
+		 * Convert to register value, scale it with the configured sense
+		 * resistor value, similar to current measurements.
 		 * Control register bit 0 selects if voltage at SENSE+/VDD
 		 * or voltage at ADIN is used to measure power, which in turn
 		 * determines register calculations.
@@ -194,16 +178,10 @@ static long long ltc2945_val_to_reg(struct device *dev, u8 reg,
 			return ret;
 		if (control & CONTROL_MULT_SELECT) {
 			/* 25 mV * 25 uV = 0.625 uV resolution. */
-			val *= shunt_resistor;
-			/* Overflow check: Assuming 32-bit val and shunt resistor, val <= 64bits */
-			val = DIV_ROUND_CLOSEST_ULL(val, 625 * 1000);
-			/* Overflow check: val is now <= 44 bits */
+			val = DIV_ROUND_CLOSEST_ULL(val * 1000, 625 * st->r_sense_uohm);
 		} else {
 			/* 0.5 mV * 25 uV = 0.0125 uV resolution. */
-			val *= shunt_resistor;
-			/* Overflow check: Assuming 32-bit val and shunt resistor, val <= 64bits */
-			val = DIV_ROUND_CLOSEST_ULL(val, 25 * 1000) * 2;
-			/* Overflow check: val is now <= 51 bits */
+			val = DIV_ROUND_CLOSEST_ULL(val * 2 * 1000, 25 * st->r_sense_uohm);
 		}
 		break;
 	case LTC2945_VIN_H:
@@ -212,7 +190,7 @@ static long long ltc2945_val_to_reg(struct device *dev, u8 reg,
 	case LTC2945_MAX_VIN_THRES_H:
 	case LTC2945_MIN_VIN_THRES_H:
 		/* 25 mV resolution. */
-		val = DIV_ROUND_CLOSEST_ULL(val, 25);
+		val = div_u64(val, 25);
 		break;
 	case LTC2945_ADIN_H:
 	case LTC2945_MAX_ADIN_H:
@@ -227,11 +205,11 @@ static long long ltc2945_val_to_reg(struct device *dev, u8 reg,
 	case LTC2945_MIN_SENSE_H:
 	case LTC2945_MAX_SENSE_THRES_H:
 	case LTC2945_MIN_SENSE_THRES_H:
-		/* 25 uV resolution. Convert to  mA. */
-		val *= shunt_resistor;
-		/* Overflow check: Assuming 32-bit val and 32-bit shunt resistor, val is 64bits */
-		val = DIV_ROUND_CLOSEST_ULL(val, 25 * 1000);
-		/* Overflow check: val is now <= 50 bits */
+		/*
+		 * 25 uV resolution. Convert to current and scale it
+		 * with the value of the sense resistor, in mA.
+		 */
+		val = DIV_ROUND_CLOSEST_ULL(val * 1000, 25 * st->r_sense_uohm);
 		break;
 	default:
 		return -EINVAL;
@@ -256,23 +234,21 @@ static ssize_t ltc2945_value_store(struct device *dev,
 				   const char *buf, size_t count)
 {
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(da);
-	struct ltc2945_data *data = dev_get_drvdata(dev);
-	struct regmap *regmap = data->regmap;
+	struct ltc2945_state *st = dev_get_drvdata(dev);
+	struct regmap *regmap = st->regmap;
 	u8 reg = attr->index;
-	unsigned int val;
+	unsigned long long val;
 	u8 regbuf[3];
 	int num_regs;
-	long long regval;
+	int regval;
 	int ret;
 
-	ret = kstrtouint(buf, 10, &val);
+	ret = kstrtoull(buf, 10, &val);
 	if (ret)
 		return ret;
 
 	/* convert to register value, then clamp and write result */
 	regval = ltc2945_val_to_reg(dev, reg, val);
-	if (regval < 0)
-		return regval;
 	if (is_power_reg(reg)) {
 		regval = clamp_val(regval, 0, 0xffffff);
 		regbuf[0] = regval >> 16;
@@ -294,8 +270,8 @@ static ssize_t ltc2945_history_store(struct device *dev,
 				     const char *buf, size_t count)
 {
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(da);
-	struct ltc2945_data *data = dev_get_drvdata(dev);
-	struct regmap *regmap = data->regmap;
+	struct ltc2945_state *st = dev_get_drvdata(dev);
+	struct regmap *regmap = st->regmap;
 	u8 reg = attr->index;
 	int num_regs = is_power_reg(reg) ? 3 : 2;
 	u8 buf_min[3] = { 0xff, 0xff, 0xff };
@@ -347,8 +323,8 @@ static ssize_t ltc2945_bool_show(struct device *dev,
 				 struct device_attribute *da, char *buf)
 {
 	struct sensor_device_attribute *attr = to_sensor_dev_attr(da);
-	struct ltc2945_data *data = dev_get_drvdata(dev);
-	struct regmap *regmap = data->regmap;
+	struct ltc2945_state *st = dev_get_drvdata(dev);
+	struct regmap *regmap = st->regmap;
 	unsigned int fault;
 	int ret;
 
@@ -475,14 +451,13 @@ static const struct regmap_config ltc2945_regmap_config = {
 static int ltc2945_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
+	struct ltc2945_state *st;
 	struct device *hwmon_dev;
 	struct regmap *regmap;
-	struct ltc2945_data *data;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
-	if (!data)
+	st = devm_kzalloc(dev, sizeof(*st), GFP_KERNEL);
+	if (!st)
 		return -ENOMEM;
-	dev_set_drvdata(dev, data);
 
 	regmap = devm_regmap_init_i2c(client, &ltc2945_regmap_config);
 	if (IS_ERR(regmap)) {
@@ -490,25 +465,23 @@ static int ltc2945_probe(struct i2c_client *client)
 		return PTR_ERR(regmap);
 	}
 
-	data->regmap = regmap;
 	if (device_property_read_u32(dev, "shunt-resistor-micro-ohms",
-				     &data->shunt_resistor))
-		data->shunt_resistor = 1000;
+				     &st->r_sense_uohm))
+		st->r_sense_uohm = 1000;
 
-	if (data->shunt_resistor == 0)
-		return -EINVAL;
+	st->regmap = regmap;
 
 	/* Clear faults */
 	regmap_write(regmap, LTC2945_FAULT, 0x00);
 
 	hwmon_dev = devm_hwmon_device_register_with_groups(dev, client->name,
-							   data,
+							   st,
 							   ltc2945_groups);
 	return PTR_ERR_OR_ZERO(hwmon_dev);
 }
 
 static const struct i2c_device_id ltc2945_id[] = {
-	{"ltc2945"},
+	{"ltc2945", 0},
 	{ }
 };
 
@@ -516,10 +489,9 @@ MODULE_DEVICE_TABLE(i2c, ltc2945_id);
 
 static struct i2c_driver ltc2945_driver = {
 	.driver = {
-		.name = "ltc2945",
-		.of_match_table = of_match_ptr(ltc2945_of_match),
-	},
-	.probe = ltc2945_probe,
+		   .name = "ltc2945",
+		   },
+	.probe_new = ltc2945_probe,
 	.id_table = ltc2945_id,
 };
 

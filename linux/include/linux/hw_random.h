@@ -13,9 +13,9 @@
 #define LINUX_HWRANDOM_H_
 
 #include <linux/completion.h>
-#include <linux/kref.h>
 #include <linux/types.h>
-#include <linux/workqueue_types.h>
+#include <linux/list.h>
+#include <linux/kref.h>
 
 /**
  * struct hwrng - Hardware Random Number Generator driver
@@ -34,7 +34,7 @@
  * @priv:		Private data, for use by the RNG driver.
  * @quality:		Estimation of true entropy in RNG's bitstream
  *			(in bits of entropy per 1024 bits of input;
- *			valid values: 1 to 1024, or 0 for maximum).
+ *			valid values: 1 to 1024, or 0 for unknown).
  */
 struct hwrng {
 	const char *name;
@@ -49,7 +49,6 @@ struct hwrng {
 	/* internal. */
 	struct list_head list;
 	struct kref ref;
-	struct work_struct cleanup_work;
 	struct completion cleanup_done;
 	struct completion dying;
 };
@@ -64,6 +63,5 @@ extern void hwrng_unregister(struct hwrng *rng);
 extern void devm_hwrng_unregister(struct device *dve, struct hwrng *rng);
 
 extern long hwrng_msleep(struct hwrng *rng, unsigned int msecs);
-extern long hwrng_yield(struct hwrng *rng);
 
 #endif /* LINUX_HWRANDOM_H_ */

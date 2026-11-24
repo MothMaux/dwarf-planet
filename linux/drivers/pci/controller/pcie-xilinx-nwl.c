@@ -17,6 +17,7 @@
 #include <linux/of_address.h>
 #include <linux/of_pci.h>
 #include <linux/of_platform.h>
+#include <linux/of_irq.h>
 #include <linux/pci.h>
 #include <linux/pci-ecam.h>
 #include <linux/platform_device.h>
@@ -80,8 +81,8 @@
 #define MSGF_MISC_SR_NON_FATAL_DEV	BIT(22)
 #define MSGF_MISC_SR_FATAL_DEV		BIT(23)
 #define MSGF_MISC_SR_LINK_DOWN		BIT(24)
-#define MSGF_MISC_SR_LINK_AUTO_BWIDTH	BIT(25)
-#define MSGF_MISC_SR_LINK_BWIDTH	BIT(26)
+#define MSGF_MSIC_SR_LINK_AUTO_BWIDTH	BIT(25)
+#define MSGF_MSIC_SR_LINK_BWIDTH	BIT(26)
 
 #define MSGF_MISC_SR_MASKALL		(MSGF_MISC_SR_RXMSG_AVAIL | \
 					MSGF_MISC_SR_RXMSG_OVER | \
@@ -96,8 +97,8 @@
 					MSGF_MISC_SR_NON_FATAL_DEV | \
 					MSGF_MISC_SR_FATAL_DEV | \
 					MSGF_MISC_SR_LINK_DOWN | \
-					MSGF_MISC_SR_LINK_AUTO_BWIDTH | \
-					MSGF_MISC_SR_LINK_BWIDTH)
+					MSGF_MSIC_SR_LINK_AUTO_BWIDTH | \
+					MSGF_MSIC_SR_LINK_BWIDTH)
 
 /* Legacy interrupt status mask bits */
 #define MSGF_LEG_SR_INTA		BIT(0)
@@ -166,7 +167,7 @@ struct nwl_pcie {
 	int irq_intx;
 	int irq_misc;
 	struct nwl_msi msi;
-	struct irq_domain *intx_irq_domain;
+	struct irq_domain *legacy_irq_domain;
 	struct clk *clk;
 	raw_spinlock_t leg_mask_lock;
 };
@@ -267,42 +268,42 @@ static irqreturn_t nwl_pcie_misc_handler(int irq, void *data)
 		return IRQ_NONE;
 
 	if (misc_stat & MSGF_MISC_SR_RXMSG_OVER)
-		dev_err_ratelimited(dev, "Received Message FIFO Overflow\n");
+		dev_err(dev, "Received Message FIFO Overflow\n");
 
 	if (misc_stat & MSGF_MISC_SR_SLAVE_ERR)
-		dev_err_ratelimited(dev, "Slave error\n");
+		dev_err(dev, "Slave error\n");
 
 	if (misc_stat & MSGF_MISC_SR_MASTER_ERR)
-		dev_err_ratelimited(dev, "Master error\n");
+		dev_err(dev, "Master error\n");
 
 	if (misc_stat & MSGF_MISC_SR_I_ADDR_ERR)
-		dev_err_ratelimited(dev, "In Misc Ingress address translation error\n");
+		dev_err(dev, "In Misc Ingress address translation error\n");
 
 	if (misc_stat & MSGF_MISC_SR_E_ADDR_ERR)
-		dev_err_ratelimited(dev, "In Misc Egress address translation error\n");
+		dev_err(dev, "In Misc Egress address translation error\n");
 
 	if (misc_stat & MSGF_MISC_SR_FATAL_AER)
-		dev_err_ratelimited(dev, "Fatal Error in AER Capability\n");
+		dev_err(dev, "Fatal Error in AER Capability\n");
 
 	if (misc_stat & MSGF_MISC_SR_NON_FATAL_AER)
-		dev_err_ratelimited(dev, "Non-Fatal Error in AER Capability\n");
+		dev_err(dev, "Non-Fatal Error in AER Capability\n");
 
 	if (misc_stat & MSGF_MISC_SR_CORR_AER)
-		dev_err_ratelimited(dev, "Correctable Error in AER Capability\n");
+		dev_err(dev, "Correctable Error in AER Capability\n");
 
 	if (misc_stat & MSGF_MISC_SR_UR_DETECT)
-		dev_err_ratelimited(dev, "Unsupported request Detected\n");
+		dev_err(dev, "Unsupported request Detected\n");
 
 	if (misc_stat & MSGF_MISC_SR_NON_FATAL_DEV)
-		dev_err_ratelimited(dev, "Non-Fatal Error Detected\n");
+		dev_err(dev, "Non-Fatal Error Detected\n");
 
 	if (misc_stat & MSGF_MISC_SR_FATAL_DEV)
-		dev_err_ratelimited(dev, "Fatal Error Detected\n");
+		dev_err(dev, "Fatal Error Detected\n");
 
-	if (misc_stat & MSGF_MISC_SR_LINK_AUTO_BWIDTH)
+	if (misc_stat & MSGF_MSIC_SR_LINK_AUTO_BWIDTH)
 		dev_info(dev, "Link Autonomous Bandwidth Management Status bit set\n");
 
-	if (misc_stat & MSGF_MISC_SR_LINK_BWIDTH)
+	if (misc_stat & MSGF_MSIC_SR_LINK_BWIDTH)
 		dev_info(dev, "Link Bandwidth Management Status bit set\n");
 
 	/* Clear misc interrupt status */
@@ -324,7 +325,7 @@ static void nwl_pcie_leg_handler(struct irq_desc *desc)
 	while ((status = nwl_bridge_readl(pcie, MSGF_LEG_STATUS) &
 				MSGF_LEG_SR_MASKALL) != 0) {
 		for_each_set_bit(bit, &status, PCI_NUM_INTX)
-			generic_handle_domain_irq(pcie->intx_irq_domain, bit);
+			generic_handle_domain_irq(pcie->legacy_irq_domain, bit);
 	}
 
 	chained_irq_exit(chip, desc);
@@ -364,54 +365,54 @@ static void nwl_pcie_msi_handler_low(struct irq_desc *desc)
 	chained_irq_exit(chip, desc);
 }
 
-static void nwl_mask_intx_irq(struct irq_data *data)
+static void nwl_mask_leg_irq(struct irq_data *data)
 {
 	struct nwl_pcie *pcie = irq_data_get_irq_chip_data(data);
 	unsigned long flags;
 	u32 mask;
 	u32 val;
 
-	mask = 1 << data->hwirq;
+	mask = 1 << (data->hwirq - 1);
 	raw_spin_lock_irqsave(&pcie->leg_mask_lock, flags);
 	val = nwl_bridge_readl(pcie, MSGF_LEG_MASK);
 	nwl_bridge_writel(pcie, (val & (~mask)), MSGF_LEG_MASK);
 	raw_spin_unlock_irqrestore(&pcie->leg_mask_lock, flags);
 }
 
-static void nwl_unmask_intx_irq(struct irq_data *data)
+static void nwl_unmask_leg_irq(struct irq_data *data)
 {
 	struct nwl_pcie *pcie = irq_data_get_irq_chip_data(data);
 	unsigned long flags;
 	u32 mask;
 	u32 val;
 
-	mask = 1 << data->hwirq;
+	mask = 1 << (data->hwirq - 1);
 	raw_spin_lock_irqsave(&pcie->leg_mask_lock, flags);
 	val = nwl_bridge_readl(pcie, MSGF_LEG_MASK);
 	nwl_bridge_writel(pcie, (val | mask), MSGF_LEG_MASK);
 	raw_spin_unlock_irqrestore(&pcie->leg_mask_lock, flags);
 }
 
-static struct irq_chip nwl_intx_irq_chip = {
+static struct irq_chip nwl_leg_irq_chip = {
 	.name = "nwl_pcie:legacy",
-	.irq_enable = nwl_unmask_intx_irq,
-	.irq_disable = nwl_mask_intx_irq,
-	.irq_mask = nwl_mask_intx_irq,
-	.irq_unmask = nwl_unmask_intx_irq,
+	.irq_enable = nwl_unmask_leg_irq,
+	.irq_disable = nwl_mask_leg_irq,
+	.irq_mask = nwl_mask_leg_irq,
+	.irq_unmask = nwl_unmask_leg_irq,
 };
 
-static int nwl_intx_map(struct irq_domain *domain, unsigned int irq,
-			irq_hw_number_t hwirq)
+static int nwl_legacy_map(struct irq_domain *domain, unsigned int irq,
+			  irq_hw_number_t hwirq)
 {
-	irq_set_chip_and_handler(irq, &nwl_intx_irq_chip, handle_level_irq);
+	irq_set_chip_and_handler(irq, &nwl_leg_irq_chip, handle_level_irq);
 	irq_set_chip_data(irq, domain->host_data);
 	irq_set_status_flags(irq, IRQ_LEVEL);
 
 	return 0;
 }
 
-static const struct irq_domain_ops intx_domain_ops = {
-	.map = nwl_intx_map,
+static const struct irq_domain_ops legacy_domain_ops = {
+	.map = nwl_legacy_map,
 	.xlate = pci_irqd_intx_xlate,
 };
 
@@ -425,8 +426,8 @@ static struct irq_chip nwl_msi_irq_chip = {
 };
 
 static struct msi_domain_info nwl_msi_domain_info = {
-	.flags = MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS |
-		 MSI_FLAG_NO_AFFINITY | MSI_FLAG_MULTI_PCI_MSI,
+	.flags = (MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS |
+		  MSI_FLAG_MULTI_PCI_MSI),
 	.chip = &nwl_msi_irq_chip,
 };
 #endif
@@ -441,9 +442,16 @@ static void nwl_compose_msi_msg(struct irq_data *data, struct msi_msg *msg)
 	msg->data = data->hwirq;
 }
 
+static int nwl_msi_set_affinity(struct irq_data *irq_data,
+				const struct cpumask *mask, bool force)
+{
+	return -EINVAL;
+}
+
 static struct irq_chip nwl_irq_chip = {
 	.name = "Xilinx MSI",
 	.irq_compose_msi_msg = nwl_compose_msi_msg,
+	.irq_set_affinity = nwl_msi_set_affinity,
 };
 
 static int nwl_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
@@ -465,7 +473,7 @@ static int nwl_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
 	for (i = 0; i < nr_irqs; i++) {
 		irq_domain_set_info(domain, virq + i, bit + i, &nwl_irq_chip,
 				    domain->host_data, handle_simple_irq,
-				    NULL, NULL);
+				NULL, NULL);
 	}
 	mutex_unlock(&msi->lock);
 	return 0;
@@ -518,20 +526,20 @@ static int nwl_pcie_init_irq_domain(struct nwl_pcie *pcie)
 {
 	struct device *dev = pcie->dev;
 	struct device_node *node = dev->of_node;
-	struct device_node *intc_node;
+	struct device_node *legacy_intc_node;
 
-	intc_node = of_get_next_child(node, NULL);
-	if (!intc_node) {
+	legacy_intc_node = of_get_next_child(node, NULL);
+	if (!legacy_intc_node) {
 		dev_err(dev, "No legacy intc node found\n");
 		return -EINVAL;
 	}
 
-	pcie->intx_irq_domain = irq_domain_add_linear(intc_node,
-						      PCI_NUM_INTX,
-						      &intx_domain_ops,
-						      pcie);
-	of_node_put(intc_node);
-	if (!pcie->intx_irq_domain) {
+	pcie->legacy_irq_domain = irq_domain_add_linear(legacy_intc_node,
+							PCI_NUM_INTX,
+							&legacy_domain_ops,
+							pcie);
+	of_node_put(legacy_intc_node);
+	if (!pcie->legacy_irq_domain) {
 		dev_err(dev, "failed to create IRQ domain\n");
 		return -ENOMEM;
 	}
@@ -665,10 +673,9 @@ static int nwl_pcie_bridge_init(struct nwl_pcie *pcie)
 	nwl_bridge_writel(pcie, nwl_bridge_readl(pcie, E_ECAM_CONTROL) |
 			  E_ECAM_CR_ENABLE, E_ECAM_CONTROL);
 
-	ecam_val = nwl_bridge_readl(pcie, E_ECAM_CONTROL);
-	ecam_val &= ~E_ECAM_SIZE_LOC;
-	ecam_val |= NWL_ECAM_MAX_SIZE << E_ECAM_SIZE_SHIFT;
-	nwl_bridge_writel(pcie, ecam_val, E_ECAM_CONTROL);
+	nwl_bridge_writel(pcie, nwl_bridge_readl(pcie, E_ECAM_CONTROL) |
+			  (NWL_ECAM_MAX_SIZE << E_ECAM_SIZE_SHIFT),
+			  E_ECAM_CONTROL);
 
 	nwl_bridge_writel(pcie, lower_32_bits(pcie->phys_ecam_base),
 			  E_ECAM_BASE_LO);
@@ -704,14 +711,14 @@ static int nwl_pcie_bridge_init(struct nwl_pcie *pcie)
 	/* Enable all misc interrupts */
 	nwl_bridge_writel(pcie, MSGF_MISC_SR_MASKALL, MSGF_MISC_MASK);
 
-	/* Disable all INTX interrupts */
+	/* Disable all legacy interrupts */
 	nwl_bridge_writel(pcie, (u32)~MSGF_LEG_SR_MASKALL, MSGF_LEG_MASK);
 
-	/* Clear pending INTX interrupts */
+	/* Clear pending legacy interrupts */
 	nwl_bridge_writel(pcie, nwl_bridge_readl(pcie, MSGF_LEG_STATUS) &
 			  MSGF_LEG_SR_MASKALL, MSGF_LEG_STATUS);
 
-	/* Enable all INTX interrupts */
+	/* Enable all legacy interrupts */
 	nwl_bridge_writel(pcie, MSGF_LEG_SR_MASKALL, MSGF_LEG_MASK);
 
 	/* Enable the bridge config interrupt */
@@ -773,7 +780,6 @@ static int nwl_pcie_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	pcie = pci_host_bridge_priv(bridge);
-	platform_set_drvdata(pdev, pcie);
 
 	pcie->dev = dev;
 
@@ -796,13 +802,13 @@ static int nwl_pcie_probe(struct platform_device *pdev)
 	err = nwl_pcie_bridge_init(pcie);
 	if (err) {
 		dev_err(dev, "HW Initialization failed\n");
-		goto err_clk;
+		return err;
 	}
 
 	err = nwl_pcie_init_irq_domain(pcie);
 	if (err) {
 		dev_err(dev, "Failed creating IRQ Domain\n");
-		goto err_clk;
+		return err;
 	}
 
 	bridge->sysdata = pcie;
@@ -812,24 +818,11 @@ static int nwl_pcie_probe(struct platform_device *pdev)
 		err = nwl_pcie_enable_msi(pcie);
 		if (err < 0) {
 			dev_err(dev, "failed to enable MSI support: %d\n", err);
-			goto err_clk;
+			return err;
 		}
 	}
 
-	err = pci_host_probe(bridge);
-	if (!err)
-		return 0;
-
-err_clk:
-	clk_disable_unprepare(pcie->clk);
-	return err;
-}
-
-static void nwl_pcie_remove(struct platform_device *pdev)
-{
-	struct nwl_pcie *pcie = platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(pcie->clk);
+	return pci_host_probe(bridge);
 }
 
 static struct platform_driver nwl_pcie_driver = {
@@ -839,6 +832,5 @@ static struct platform_driver nwl_pcie_driver = {
 		.of_match_table = nwl_pcie_of_match,
 	},
 	.probe = nwl_pcie_probe,
-	.remove_new = nwl_pcie_remove,
 };
 builtin_platform_driver(nwl_pcie_driver);

@@ -14,18 +14,18 @@
 /*
  * Error Event Node Ids
  */
-#define VERSAL_NET_EVENT_ERROR_PMC_ERR1	(0x28100000U)
-#define VERSAL_NET_EVENT_ERROR_PMC_ERR2	(0x28104000U)
-#define VERSAL_NET_EVENT_ERROR_PMC_ERR3	(0x28108000U)
-#define VERSAL_NET_EVENT_ERROR_PSM_ERR1	(0x2810C000U)
-#define VERSAL_NET_EVENT_ERROR_PSM_ERR2	(0x28110000U)
-#define VERSAL_NET_EVENT_ERROR_PSM_ERR3	(0x28114000U)
-#define VERSAL_NET_EVENT_ERROR_PSM_ERR4	(0x28118000U)
-#define VERSAL_NET_EVENT_ERROR_SW_ERR	(0x2811C000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PMC_ERR1	(0x28100000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PMC_ERR2	(0x28104000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PMC_ERR3	(0x28108000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR1	(0x2810C000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR2	(0x28110000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR3	(0x28114000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR4	(0x28118000U)
+#define XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_SW_ERR	(0x2811C000U)
 
 /*
  * Error Event Mask belongs to PMC ERR1 node.
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_PMC_ERR1
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PMC_ERR1
  */
 
 /**
@@ -201,7 +201,7 @@
 
 /*
  * Error Event Mask belongs to PMC ERR2 node,
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_PMC_ERR2
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PMC_ERR2
  */
 
 /**
@@ -378,7 +378,7 @@
 
 /*
  * Error Event Mask belongs to PMC ERR3 node,
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_PMC_ERR3
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PMC_ERR3
  */
 
 /**
@@ -464,7 +464,7 @@
 
 /*
  * Error Event Mask belongs to PSM ERR1 node,
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_PSM_ERR1
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR1
  */
 
 /**
@@ -643,7 +643,7 @@
 
 /*
  * Error Event Mask belongs to PSM ERR2 node,
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_PSM_ERR2
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR2
  */
 
 /**
@@ -825,7 +825,7 @@
 
 /*
  * Error Event Mask belongs to PSM ERR3 node,
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_PSM_ERR3
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR3
  */
 
 /**
@@ -1010,7 +1010,7 @@
 
 /*
  * Error Event Mask belongs to PSM ERR4 node,
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_PSM_ERR4
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_PSM_ERR4
  */
 
 /**
@@ -1074,7 +1074,7 @@
 
 /*
  * Error Event Mask belongs to SW ERR node,
- * For which Node_Id = VERSAL_NET_EVENT_ERROR_SW_ERR
+ * For which Node_Id = XPM_NODETYPE_VERSAL_NET_EVENT_ERROR_SW_ERR
  */
 
 /**
@@ -1098,24 +1098,24 @@
 #define XPM_VERSAL_NET_EVENT_ERROR_MASK_HB_MON_3		BIT(3)
 
 /**
- * XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_CE: Error event mask for handling
+ * XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_CE_5: Error event mask for handling
  * correctable error in Versal Configuration RAM which is reported by
  * Soft Error Mitigation (XilSEM).
  */
-#define XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_CE		BIT(7)
+#define XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_CE_5		BIT(5)
 
 /**
- * XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_UE: Error event mask for handling
+ * XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_UE_6: Error event mask for handling
  * uncorrectable error in Versal Configuration RAM which is reported by
  * Soft Error Mitigation (XilSEM).
  */
-#define XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_UE		BIT(8)
+#define XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_CRAM_UE_6		BIT(6)
 
 /**
- * XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_NPI_UE: Error event mask for handling
+ * XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_NPI_UE_7: Error event mask for handling
  * uncorrectable error in Versal NoC programming interface (NPI)
  * register which is reported by Soft Error Mitigation (XilSEM).
  */
-#define XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_NPI_UE		BIT(9)
+#define XPM_VERSAL_NET_EVENT_ERROR_MASK_XSEM_NPI_UE_7		BIT(7)
 
 #endif /* _FIRMWARE_XLNX_VERSAL_NET_ERROR_EVENTS_H_ */

@@ -511,7 +511,7 @@ static struct sk_buff *ip_rcv_core(struct sk_buff *skb, struct net *net)
 	if (unlikely(ip_fast_csum((u8 *)iph, iph->ihl)))
 		goto csum_error;
 
-	len = iph_totlen(skb, iph);
+	len = ntohs(iph->tot_len);
 	if (skb->len < len) {
 		drop_reason = SKB_DROP_REASON_PKT_TOO_SMALL;
 		__IP_INC_STATS(net, IPSTATS_MIB_INTRUNCATEDPKTS);
@@ -582,14 +582,9 @@ static void ip_sublist_rcv_finish(struct list_head *head)
 }
 
 static struct sk_buff *ip_extract_route_hint(const struct net *net,
-					     struct sk_buff *skb)
+					     struct sk_buff *skb, int rt_type)
 {
-	const struct iphdr *iph = ip_hdr(skb);
-
-	if (fib4_has_custom_rules(net) ||
-	    ipv4_is_lbcast(iph->daddr) ||
-	    ipv4_is_zeronet(iph->daddr) ||
-	    IPCB(skb)->flags & IPSKB_MULTIPATH)
+	if (fib4_has_custom_rules(net) || rt_type == RTN_BROADCAST)
 		return NULL;
 
 	return skb;
@@ -600,8 +595,9 @@ static void ip_list_rcv_finish(struct net *net, struct sock *sk,
 {
 	struct sk_buff *skb, *next, *hint = NULL;
 	struct dst_entry *curr_dst = NULL;
-	LIST_HEAD(sublist);
+	struct list_head sublist;
 
+	INIT_LIST_HEAD(&sublist);
 	list_for_each_entry_safe(skb, next, head, list) {
 		struct net_device *dev = skb->dev;
 		struct dst_entry *dst;
@@ -618,7 +614,8 @@ static void ip_list_rcv_finish(struct net *net, struct sock *sk,
 
 		dst = skb_dst(skb);
 		if (curr_dst != dst) {
-			hint = ip_extract_route_hint(net, skb);
+			hint = ip_extract_route_hint(net, skb,
+					       ((struct rtable *)dst)->rt_type);
 
 			/* dispatch old sublist */
 			if (!list_empty(&sublist))
@@ -648,8 +645,9 @@ void ip_list_rcv(struct list_head *head, struct packet_type *pt,
 	struct net_device *curr_dev = NULL;
 	struct net *curr_net = NULL;
 	struct sk_buff *skb, *next;
-	LIST_HEAD(sublist);
+	struct list_head sublist;
 
+	INIT_LIST_HEAD(&sublist);
 	list_for_each_entry_safe(skb, next, head, list) {
 		struct net_device *dev = skb->dev;
 		struct net *net = dev_net(dev);

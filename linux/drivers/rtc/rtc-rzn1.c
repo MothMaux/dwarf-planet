@@ -15,7 +15,7 @@
 #include <linux/init.h>
 #include <linux/iopoll.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/rtc.h>
@@ -111,8 +111,8 @@ static int rzn1_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	tm->tm_hour = bcd2bin(tm->tm_hour);
 	tm->tm_wday = bcd2bin(tm->tm_wday);
 	tm->tm_mday = bcd2bin(tm->tm_mday);
-	tm->tm_mon = bcd2bin(tm->tm_mon) - 1;
-	tm->tm_year = bcd2bin(tm->tm_year) + 100;
+	tm->tm_mon = bcd2bin(tm->tm_mon);
+	tm->tm_year = bcd2bin(tm->tm_year);
 
 	return 0;
 }
@@ -128,8 +128,8 @@ static int rzn1_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	tm->tm_hour = bin2bcd(tm->tm_hour);
 	tm->tm_wday = bin2bcd(rzn1_rtc_tm_to_wday(tm));
 	tm->tm_mday = bin2bcd(tm->tm_mday);
-	tm->tm_mon = bin2bcd(tm->tm_mon + 1);
-	tm->tm_year = bin2bcd(tm->tm_year - 100);
+	tm->tm_mon = bin2bcd(tm->tm_mon);
+	tm->tm_year = bin2bcd(tm->tm_year);
 
 	val = readl(rtc->base + RZN1_RTC_CTL2);
 	if (!(val & RZN1_RTC_CTL2_STOPPED)) {
@@ -227,7 +227,7 @@ static int rzn1_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 		return ret;
 
 	/* We cannot set alarms more than one week ahead */
-	farest = rtc_tm_to_time64(&tm_now) + rtc->rtcdev->alarm_offset_max;
+	farest = rtc_tm_to_time64(&tm_now) + (7 * 86400);
 	alarm = rtc_tm_to_time64(tm);
 	if (time_after(alarm, farest))
 		return -ERANGE;
@@ -351,14 +351,11 @@ static int rzn1_rtc_probe(struct platform_device *pdev)
 
 	rtc->rtcdev->range_min = RTC_TIMESTAMP_BEGIN_2000;
 	rtc->rtcdev->range_max = RTC_TIMESTAMP_END_2099;
-	rtc->rtcdev->alarm_offset_max = 7 * 86400;
 	rtc->rtcdev->ops = &rzn1_rtc_ops;
 	set_bit(RTC_FEATURE_ALARM_RES_MINUTE, rtc->rtcdev->features);
 	clear_bit(RTC_FEATURE_UPDATE_INTERRUPT, rtc->rtcdev->features);
 
-	ret = devm_pm_runtime_enable(&pdev->dev);
-	if (ret < 0)
-		return ret;
+	devm_pm_runtime_enable(&pdev->dev);
 	ret = pm_runtime_resume_and_get(&pdev->dev);
 	if (ret < 0)
 		return ret;
@@ -392,9 +389,11 @@ dis_runtime_pm:
 	return ret;
 }
 
-static void rzn1_rtc_remove(struct platform_device *pdev)
+static int rzn1_rtc_remove(struct platform_device *pdev)
 {
 	pm_runtime_put(&pdev->dev);
+
+	return 0;
 }
 
 static const struct of_device_id rzn1_rtc_of_match[] = {
@@ -405,7 +404,7 @@ MODULE_DEVICE_TABLE(of, rzn1_rtc_of_match);
 
 static struct platform_driver rzn1_rtc_driver = {
 	.probe = rzn1_rtc_probe,
-	.remove_new = rzn1_rtc_remove,
+	.remove = rzn1_rtc_remove,
 	.driver = {
 		.name	= "rzn1-rtc",
 		.of_match_table = rzn1_rtc_of_match,

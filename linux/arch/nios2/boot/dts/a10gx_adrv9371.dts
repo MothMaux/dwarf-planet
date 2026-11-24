@@ -419,7 +419,7 @@
 			clock-output-names = "jesd204_rx_os_lane_clock";
 		};
 
-		axi_ad9371_tx_dma: dma-controller@1002c000 {
+		axi_ad9371_tx_dma: axi-ad9371-tx-dma@1002c000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x1002c000 0x00004000>;
 			interrupt-parent = <&sys_cpu>;
@@ -427,9 +427,16 @@
 			#dma-cells = <1>;
 			clocks = <&dma_clk>;
 			clock-names = "dma_clkin";
+
+			dma-channel {
+				adi,source-bus-width = <128>;
+				adi,destination-bus-width = <128>;
+				adi,type = <1>;
+				adi,cyclic;
+			};
 		};
 
-		axi_ad9371_rx_dma: dma-controller@1003c000 {
+		axi_ad9371_rx_dma: axi-ad9371-rx-dma@1003c000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x1003c000 0x00004000>;
 			interrupt-parent = <&sys_cpu>;
@@ -437,9 +444,15 @@
 			#dma-cells = <1>;
 			clocks = <&dma_clk>;
 			clock-names = "dma_clkin";
+
+			dma-channel {
+				adi,source-bus-width = <64>;
+				adi,destination-bus-width = <128>;
+				adi,type = <0>;
+			};
 		};
 
-		axi_ad9371_rx_os_dma: dma-controller@1004c000 {
+		axi_ad9371_rx_os_dma: axi-ad9371-rx-os-dma@1004c000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x1004c000 0x00004000>;
 			interrupt-parent = <&sys_cpu>;
@@ -447,6 +460,12 @@
 			#dma-cells = <1>;
 			clocks = <&dma_clk>;
 			clock-names = "dma_clkin";
+
+			dma-channel {
+				adi,source-bus-width = <64>;
+				adi,destination-bus-width = <128>;
+				adi,type = <0>;
+			};
 		};
 
 		axi_ad9371_rx: axi-ad9371-rx-hpc@10050000 {

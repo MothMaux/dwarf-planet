@@ -1359,6 +1359,62 @@ int32_t adi_adrv9001_arm_NextPfir_Set(adi_adrv9001_Device_t *device,
     ADI_API_RETURN(device);
 }
 
+int32_t adi_adrv9001_arm_NextRxChannelFilter_Set(adi_adrv9001_Device_t *device,
+                                                 const adi_adrv9001_PfirWbNbBuffer_t *pfirRx1WbNbChFilterCoeff,
+                                                 const adi_adrv9001_PfirWbNbBuffer_t *pfirRx2WbNbChFilterCoeff)
+{
+    ADI_ENTRY_EXPECT(device);
+
+    if (pfirRx1WbNbChFilterCoeff != NULL)
+    {
+        /* Send Rx1 coeffs, which may be the same as Rx2 coeffs */
+        uint8_t channelMask = ADI_ADRV9001_RX1 |
+            ((pfirRx1WbNbChFilterCoeff == pfirRx2WbNbChFilterCoeff)? ADI_ADRV9001_RX2 : 0);
+        ADI_EXPECT(adi_adrv9001_arm_NextPfir_Set, device, channelMask, pfirRx1WbNbChFilterCoeff);
+    }
+    else
+    {
+        /* Error if both Rx1 and Rx2 coeffs are NULL */
+        ADI_NULL_PTR_RETURN(&device->common, pfirRx2WbNbChFilterCoeff);
+    }
+
+    if ((pfirRx2WbNbChFilterCoeff != NULL) && (pfirRx2WbNbChFilterCoeff != pfirRx1WbNbChFilterCoeff))
+    {
+        /* Send Rx2 coefs because different from Rx1 coeffs */
+        ADI_EXPECT(adi_adrv9001_arm_NextPfir_Set, device, ADI_ADRV9001_RX2, pfirRx2WbNbChFilterCoeff);
+    }
+
+    ADI_API_RETURN(device);
+}
+
+int32_t adi_adrv9001_arm_NextTxPulseShaper_Set(adi_adrv9001_Device_t *device,
+                                               const adi_adrv9001_PfirWbNbBuffer_t *pfirTx1WbNbPulShpCoeff,
+                                               const adi_adrv9001_PfirWbNbBuffer_t *pfirTx2WbNbPulShpCoeff)
+{
+    ADI_ENTRY_EXPECT(device);
+
+    if (pfirTx1WbNbPulShpCoeff != NULL)
+    {
+        /* Send Tx1 coeffs, which may be the same as Tx2 coeffs */
+        uint8_t channelMask = ADI_ADRV9001_TX1 |
+            ((pfirTx1WbNbPulShpCoeff == pfirTx2WbNbPulShpCoeff)? ADI_ADRV9001_TX2 : 0);
+        ADI_EXPECT(adi_adrv9001_arm_NextPfir_Set, device, channelMask, pfirTx1WbNbPulShpCoeff);
+    }
+    else
+    {
+        /* Error if both Tx1 and Tx2 coeffs are NULL */
+        ADI_NULL_PTR_RETURN(&device->common, pfirTx2WbNbPulShpCoeff);
+    }
+
+    if ((pfirTx2WbNbPulShpCoeff != NULL) && (pfirTx2WbNbPulShpCoeff != pfirTx1WbNbPulShpCoeff))
+    {
+        /* Send Tx2 coefs because different from Tx1 coeffs */
+        ADI_EXPECT(adi_adrv9001_arm_NextPfir_Set, device, ADI_ADRV9001_TX2, pfirTx2WbNbPulShpCoeff);
+    }
+
+    ADI_API_RETURN(device);
+}
+
 static __maybe_unused int32_t adi_adrv9001_arm_Profile_Switch_Validate(adi_adrv9001_Device_t *adrv9001)
 {
     uint8_t chan_index = 0;

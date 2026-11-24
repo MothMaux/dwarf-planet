@@ -91,7 +91,7 @@ enum fpga_mgr_states {
 #define FPGA_MGR_USERKEY_ENCRYPTED_BITSTREAM	BIT(5)
 #define FPGA_MGR_DDR_MEM_AUTH_BITSTREAM		BIT(6)
 #define FPGA_MGR_SECURE_MEM_AUTH_BITSTREAM	BIT(7)
-#define FPGA_MGR_CONFIG_DMA_BUF		BIT(5)
+#define FPGA_MGR_CONFIG_DMA_BUF			BIT(8)
 
 /**
  * struct fpga_image_info - information specific to an FPGA image
@@ -211,6 +211,12 @@ struct fpga_manager_ops {
 #define FPGA_MGR_STATUS_INCOMPATIBLE_IMAGE_ERR	BIT(2)
 #define FPGA_MGR_STATUS_IP_PROTOCOL_ERR		BIT(3)
 #define FPGA_MGR_STATUS_FIFO_OVERFLOW_ERR	BIT(4)
+#define FPGA_MGR_STATUS_SECURITY_ERR		BIT(5)
+#define FPGA_MGR_STATUS_DEVICE_INIT_ERR		BIT(6)
+#define FPGA_MGR_STATUS_SIGNAL_ERR		BIT(7)
+#define FPGA_MGR_STATUS_HIGH_Z_STATE_ERR	BIT(8)
+#define FPGA_MGR_STATUS_EOS_ERR			BIT(9)
+#define FPGA_MGR_STATUS_FIRMWARE_REQ_ERR	BIT(10)
 
 /**
  * struct fpga_manager - fpga manager structure
@@ -218,13 +224,12 @@ struct fpga_manager_ops {
  * @flags: flags determines the type of Bitstream
  * @key: key value useful for Encrypted Bitstream loading to read the userkey
  * @dev: fpga manager device
+ * @miscdev: information about character device node
  * @dmabuf: shared dma buffer
  * @ref_mutex: only allows one reference to fpga manager
- * @miscdev: information about character device node
  * @state: state of fpga manager
  * @compat_id: FPGA manager id for compatibility check.
  * @mops: pointer to struct of fpga manager ops
- * @mops_owner: module containing the mops
  * @priv: low level driver private date
  * @err: low level driver error code
  * @dir: debugfs image directory
@@ -234,13 +239,12 @@ struct fpga_manager {
 	unsigned long flags;
 	char key[ENCRYPTED_KEY_LEN + 1];
 	struct device dev;
+	struct miscdevice miscdev;
 	struct dma_buf *dmabuf;
 	struct mutex ref_mutex;
-	struct miscdevice miscdev;
 	enum fpga_mgr_states state;
 	struct fpga_compat_id *compat_id;
 	const struct fpga_manager_ops *mops;
-	struct module *mops_owner;
 	void *priv;
 	int err;
 #ifdef CONFIG_FPGA_MGR_DEBUG_FS
@@ -265,31 +269,19 @@ struct fpga_manager *fpga_mgr_get(struct device *dev);
 
 void fpga_mgr_put(struct fpga_manager *mgr);
 
-#define fpga_mgr_register_full(parent, info) \
-	__fpga_mgr_register_full(parent, info, THIS_MODULE)
 struct fpga_manager *
-__fpga_mgr_register_full(struct device *parent, const struct fpga_manager_info *info,
-			 struct module *owner);
+fpga_mgr_register_full(struct device *parent, const struct fpga_manager_info *info);
 
-#define fpga_mgr_register(parent, name, mops, priv) \
-	__fpga_mgr_register(parent, name, mops, priv, THIS_MODULE)
 struct fpga_manager *
-__fpga_mgr_register(struct device *parent, const char *name,
-		    const struct fpga_manager_ops *mops, void *priv, struct module *owner);
-
+fpga_mgr_register(struct device *parent, const char *name,
+		  const struct fpga_manager_ops *mops, void *priv);
 void fpga_mgr_unregister(struct fpga_manager *mgr);
 
-#define devm_fpga_mgr_register_full(parent, info) \
-	__devm_fpga_mgr_register_full(parent, info, THIS_MODULE)
 struct fpga_manager *
-__devm_fpga_mgr_register_full(struct device *parent, const struct fpga_manager_info *info,
-			      struct module *owner);
-#define devm_fpga_mgr_register(parent, name, mops, priv) \
-	__devm_fpga_mgr_register(parent, name, mops, priv, THIS_MODULE)
+devm_fpga_mgr_register_full(struct device *parent, const struct fpga_manager_info *info);
 struct fpga_manager *
-__devm_fpga_mgr_register(struct device *parent, const char *name,
-			 const struct fpga_manager_ops *mops, void *priv,
-			 struct module *owner);
+devm_fpga_mgr_register(struct device *parent, const char *name,
+		       const struct fpga_manager_ops *mops, void *priv);
 
 #define FPGA_IOCTL_LOAD_DMA_BUFF	_IOWR('R', 1, __u32)
 

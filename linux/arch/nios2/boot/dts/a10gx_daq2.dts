@@ -301,22 +301,35 @@
 			};
 		};
 
-		rx_dma: dma-controller@1004c000 {
+		rx_dma: rx-dmac@1004c000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x1004c000 0x4000>;
 			#dma-cells = <1>;
 			interrupt-parent = <&sys_cpu>;
 			interrupts = <10>;
 			clocks = <&dma_clk>;
+
+			dma-channel {
+				adi,source-bus-width = <128>;
+				adi,destination-bus-width = <128>;
+				adi,type = <0>;
+			};
 		};
 
-		tx_dma: dma-controller@1002c000 {
+		tx_dma: tx-dmac@1002c000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x1002c000 0x4000>;
 			#dma-cells = <1>;
 			interrupt-parent = <&sys_cpu>;
 			interrupts = <11>;
 			clocks = <&dma_clk>;
+
+			dma-channel {
+				adi,source-bus-width = <128>;
+				adi,destination-bus-width = <128>;
+				adi,type = <1>;
+				adi,cyclic;
+			};
 		};
 
 		axi_ad9144_core: axi-ad9144-hpc@10034000 {

@@ -22,6 +22,9 @@
 #include <net/ip6_route.h>
 #include <net/addrconf.h>
 
+#define IOAM6_MASK_SHORT_FIELDS 0xff100000
+#define IOAM6_MASK_WIDE_FIELDS 0xe00000
+
 struct ioam6_lwt_encap {
 	struct ipv6_hopopt_hdr eh;
 	u8 pad[2];			/* 2-octet padding for 4n-alignment */
@@ -39,13 +42,11 @@ struct ioam6_lwt {
 	struct ioam6_lwt_freq freq;
 	atomic_t pkt_cnt;
 	u8 mode;
-	bool has_tunsrc;
-	struct in6_addr tunsrc;
 	struct in6_addr tundst;
-	struct ioam6_lwt_encap tuninfo;
+	struct ioam6_lwt_encap	tuninfo;
 };
 
-static const struct netlink_range_validation freq_range = {
+static struct netlink_range_validation freq_range = {
 	.min = IOAM6_IPTUNNEL_FREQ_MIN,
 	.max = IOAM6_IPTUNNEL_FREQ_MAX,
 };
@@ -71,10 +72,8 @@ static const struct nla_policy ioam6_iptunnel_policy[IOAM6_IPTUNNEL_MAX + 1] = {
 	[IOAM6_IPTUNNEL_MODE]	= NLA_POLICY_RANGE(NLA_U8,
 						   IOAM6_IPTUNNEL_MODE_MIN,
 						   IOAM6_IPTUNNEL_MODE_MAX),
-	[IOAM6_IPTUNNEL_SRC]	= NLA_POLICY_EXACT_LEN(sizeof(struct in6_addr)),
 	[IOAM6_IPTUNNEL_DST]	= NLA_POLICY_EXACT_LEN(sizeof(struct in6_addr)),
-	[IOAM6_IPTUNNEL_TRACE]	= NLA_POLICY_EXACT_LEN(
-					sizeof(struct ioam6_trace_hdr)),
+	[IOAM6_IPTUNNEL_TRACE]	= NLA_POLICY_EXACT_LEN(sizeof(struct ioam6_trace_hdr)),
 };
 
 static bool ioam6_validate_trace_hdr(struct ioam6_trace_hdr *trace)
@@ -86,11 +85,16 @@ static bool ioam6_validate_trace_hdr(struct ioam6_trace_hdr *trace)
 	    trace->type.bit12 | trace->type.bit13 | trace->type.bit14 |
 	    trace->type.bit15 | trace->type.bit16 | trace->type.bit17 |
 	    trace->type.bit18 | trace->type.bit19 | trace->type.bit20 |
-	    trace->type.bit21 | trace->type.bit23)
+	    trace->type.bit21)
 		return false;
 
+	trace->nodelen = 0;
 	fields = be32_to_cpu(trace->type_be32);
-	trace->nodelen = ioam6_trace_compute_nodelen(fields);
+
+	trace->nodelen += hweight32(fields & IOAM6_MASK_SHORT_FIELDS)
+				* (sizeof(__be32) / 4);
+	trace->nodelen += hweight32(fields & IOAM6_MASK_WIDE_FIELDS)
+				* (sizeof(__be64) / 4);
 
 	return true;
 }
@@ -139,11 +143,6 @@ static int ioam6_build_state(struct net *net, struct nlattr *nla,
 	else
 		mode = nla_get_u8(tb[IOAM6_IPTUNNEL_MODE]);
 
-	if (tb[IOAM6_IPTUNNEL_SRC] && mode == IOAM6_IPTUNNEL_MODE_INLINE) {
-		NL_SET_ERR_MSG(extack, "no tunnel src expected with this mode");
-		return -EINVAL;
-	}
-
 	if (!tb[IOAM6_IPTUNNEL_DST] && mode != IOAM6_IPTUNNEL_MODE_INLINE) {
 		NL_SET_ERR_MSG(extack, "this mode needs a tunnel destination");
 		return -EINVAL;
@@ -168,39 +167,18 @@ static int ioam6_build_state(struct net *net, struct nlattr *nla,
 
 	ilwt = ioam6_lwt_state(lwt);
 	err = dst_cache_init(&ilwt->cache, GFP_ATOMIC);
-	if (err)
-		goto free_lwt;
+	if (err) {
+		kfree(lwt);
+		return err;
+	}
 
 	atomic_set(&ilwt->pkt_cnt, 0);
 	ilwt->freq.k = freq_k;
 	ilwt->freq.n = freq_n;
 
 	ilwt->mode = mode;
-
-	if (!tb[IOAM6_IPTUNNEL_SRC]) {
-		ilwt->has_tunsrc = false;
-	} else {
-		ilwt->has_tunsrc = true;
-		ilwt->tunsrc = nla_get_in6_addr(tb[IOAM6_IPTUNNEL_SRC]);
-
-		if (ipv6_addr_any(&ilwt->tunsrc)) {
-			NL_SET_ERR_MSG_ATTR(extack, tb[IOAM6_IPTUNNEL_SRC],
-					    "invalid tunnel source address");
-			err = -EINVAL;
-			goto free_cache;
-		}
-	}
-
-	if (tb[IOAM6_IPTUNNEL_DST]) {
+	if (tb[IOAM6_IPTUNNEL_DST])
 		ilwt->tundst = nla_get_in6_addr(tb[IOAM6_IPTUNNEL_DST]);
-
-		if (ipv6_addr_any(&ilwt->tundst)) {
-			NL_SET_ERR_MSG_ATTR(extack, tb[IOAM6_IPTUNNEL_DST],
-					    "invalid tunnel dest address");
-			err = -EINVAL;
-			goto free_cache;
-		}
-	}
 
 	tuninfo = ioam6_lwt_info(lwt);
 	tuninfo->eh.hdrlen = ((sizeof(*tuninfo) + len_aligned) >> 3) - 1;
@@ -223,11 +201,6 @@ static int ioam6_build_state(struct net *net, struct nlattr *nla,
 	*ts = lwt;
 
 	return 0;
-free_cache:
-	dst_cache_destroy(&ilwt->cache);
-free_lwt:
-	kfree(lwt);
-	return err;
 }
 
 static int ioam6_do_fill(struct net *net, struct sk_buff *skb)
@@ -247,15 +220,14 @@ static int ioam6_do_fill(struct net *net, struct sk_buff *skb)
 }
 
 static int ioam6_do_inline(struct net *net, struct sk_buff *skb,
-			   struct ioam6_lwt_encap *tuninfo,
-			   struct dst_entry *cache_dst)
+			   struct ioam6_lwt_encap *tuninfo)
 {
 	struct ipv6hdr *oldhdr, *hdr;
 	int hdrlen, err;
 
 	hdrlen = (tuninfo->eh.hdrlen + 1) << 3;
 
-	err = skb_cow_head(skb, hdrlen + dst_dev_overhead(cache_dst, skb));
+	err = skb_cow_head(skb, hdrlen + skb->mac_len);
 	if (unlikely(err))
 		return err;
 
@@ -284,10 +256,7 @@ static int ioam6_do_inline(struct net *net, struct sk_buff *skb,
 
 static int ioam6_do_encap(struct net *net, struct sk_buff *skb,
 			  struct ioam6_lwt_encap *tuninfo,
-			  bool has_tunsrc,
-			  struct in6_addr *tunsrc,
-			  struct in6_addr *tundst,
-			  struct dst_entry *cache_dst)
+			  struct in6_addr *tundst)
 {
 	struct dst_entry *dst = skb_dst(skb);
 	struct ipv6hdr *hdr, *inner_hdr;
@@ -296,7 +265,7 @@ static int ioam6_do_encap(struct net *net, struct sk_buff *skb,
 	hdrlen = (tuninfo->eh.hdrlen + 1) << 3;
 	len = sizeof(*hdr) + hdrlen;
 
-	err = skb_cow_head(skb, len + dst_dev_overhead(cache_dst, skb));
+	err = skb_cow_head(skb, len + skb->mac_len);
 	if (unlikely(err))
 		return err;
 
@@ -316,12 +285,8 @@ static int ioam6_do_encap(struct net *net, struct sk_buff *skb,
 	hdr->nexthdr = NEXTHDR_HOP;
 	hdr->payload_len = cpu_to_be16(skb->len - sizeof(*hdr));
 	hdr->daddr = *tundst;
-
-	if (has_tunsrc)
-		memcpy(&hdr->saddr, tunsrc, sizeof(*tunsrc));
-	else
-		ipv6_dev_get_saddr(net, dst_dev(dst), &hdr->daddr,
-				   IPV6_PREFER_SRC_PUBLIC, &hdr->saddr);
+	ipv6_dev_get_saddr(net, dst->dev, &hdr->daddr,
+			   IPV6_PREFER_SRC_PUBLIC, &hdr->saddr);
 
 	skb_postpush_rcsum(skb, hdr, len);
 
@@ -330,8 +295,8 @@ static int ioam6_do_encap(struct net *net, struct sk_buff *skb,
 
 static int ioam6_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
-	struct dst_entry *orig_dst = skb_dst(skb);
-	struct dst_entry *dst = NULL;
+	struct dst_entry *dst = skb_dst(skb);
+	struct in6_addr orig_daddr;
 	struct ioam6_lwt *ilwt;
 	int err = -EINVAL;
 	u32 pkt_cnt;
@@ -339,16 +304,14 @@ static int ioam6_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	if (skb->protocol != htons(ETH_P_IPV6))
 		goto drop;
 
-	ilwt = ioam6_lwt_state(orig_dst->lwtstate);
+	ilwt = ioam6_lwt_state(dst->lwtstate);
 
 	/* Check for insertion frequency (i.e., "k over n" insertions) */
 	pkt_cnt = atomic_fetch_inc(&ilwt->pkt_cnt);
 	if (pkt_cnt % ilwt->freq.n >= ilwt->freq.k)
 		goto out;
 
-	local_bh_disable();
-	dst = dst_cache_get(&ilwt->cache);
-	local_bh_enable();
+	orig_daddr = ipv6_hdr(skb)->daddr;
 
 	switch (ilwt->mode) {
 	case IOAM6_IPTUNNEL_MODE_INLINE:
@@ -357,7 +320,7 @@ do_inline:
 		if (ipv6_hdr(skb)->nexthdr == NEXTHDR_HOP)
 			goto out;
 
-		err = ioam6_do_inline(net, skb, &ilwt->tuninfo, dst);
+		err = ioam6_do_inline(net, skb, &ilwt->tuninfo);
 		if (unlikely(err))
 			goto drop;
 
@@ -365,9 +328,7 @@ do_inline:
 	case IOAM6_IPTUNNEL_MODE_ENCAP:
 do_encap:
 		/* Encapsulation (ip6ip6) */
-		err = ioam6_do_encap(net, skb, &ilwt->tuninfo,
-				     ilwt->has_tunsrc, &ilwt->tunsrc,
-				     &ilwt->tundst, dst);
+		err = ioam6_do_encap(net, skb, &ilwt->tuninfo, &ilwt->tundst);
 		if (unlikely(err))
 			goto drop;
 
@@ -385,48 +346,46 @@ do_encap:
 		goto drop;
 	}
 
-	if (unlikely(!dst)) {
-		struct ipv6hdr *hdr = ipv6_hdr(skb);
-		struct flowi6 fl6;
+	err = skb_cow_head(skb, LL_RESERVED_SPACE(dst->dev));
+	if (unlikely(err))
+		goto drop;
 
-		memset(&fl6, 0, sizeof(fl6));
-		fl6.daddr = hdr->daddr;
-		fl6.saddr = hdr->saddr;
-		fl6.flowlabel = ip6_flowinfo(hdr);
-		fl6.flowi6_mark = skb->mark;
-		fl6.flowi6_proto = hdr->nexthdr;
+	if (!ipv6_addr_equal(&orig_daddr, &ipv6_hdr(skb)->daddr)) {
+		preempt_disable();
+		dst = dst_cache_get(&ilwt->cache);
+		preempt_enable();
 
-		dst = ip6_route_output(net, NULL, &fl6);
-		if (dst->error) {
-			err = dst->error;
-			goto drop;
-		}
+		if (unlikely(!dst)) {
+			struct ipv6hdr *hdr = ipv6_hdr(skb);
+			struct flowi6 fl6;
 
-		/* cache only if we don't create a dst reference loop */
-		if (orig_dst->lwtstate != dst->lwtstate) {
-			local_bh_disable();
+			memset(&fl6, 0, sizeof(fl6));
+			fl6.daddr = hdr->daddr;
+			fl6.saddr = hdr->saddr;
+			fl6.flowlabel = ip6_flowinfo(hdr);
+			fl6.flowi6_mark = skb->mark;
+			fl6.flowi6_proto = hdr->nexthdr;
+
+			dst = ip6_route_output(net, NULL, &fl6);
+			if (dst->error) {
+				err = dst->error;
+				dst_release(dst);
+				goto drop;
+			}
+
+			preempt_disable();
 			dst_cache_set_ip6(&ilwt->cache, dst, &fl6.saddr);
-			local_bh_enable();
+			preempt_enable();
 		}
 
-		err = skb_cow_head(skb, LL_RESERVED_SPACE(dst_dev(dst)));
-		if (unlikely(err))
-			goto drop;
-	}
-
-	/* avoid lwtunnel_output() reentry loop when destination is the same
-	 * after transformation (e.g., with the inline mode)
-	 */
-	if (orig_dst->lwtstate != dst->lwtstate) {
 		skb_dst_drop(skb);
 		skb_dst_set(skb, dst);
+
 		return dst_output(net, sk, skb);
 	}
 out:
-	dst_release(dst);
-	return orig_dst->lwtstate->orig_output(net, sk, skb);
+	return dst->lwtstate->orig_output(net, sk, skb);
 drop:
-	dst_release(dst);
 	kfree_skb(skb);
 	return err;
 }
@@ -455,13 +414,6 @@ static int ioam6_fill_encap_info(struct sk_buff *skb,
 		goto ret;
 
 	if (ilwt->mode != IOAM6_IPTUNNEL_MODE_INLINE) {
-		if (ilwt->has_tunsrc) {
-			err = nla_put_in6_addr(skb, IOAM6_IPTUNNEL_SRC,
-					       &ilwt->tunsrc);
-			if (err)
-				goto ret;
-		}
-
 		err = nla_put_in6_addr(skb, IOAM6_IPTUNNEL_DST, &ilwt->tundst);
 		if (err)
 			goto ret;
@@ -483,12 +435,8 @@ static int ioam6_encap_nlsize(struct lwtunnel_state *lwtstate)
 		  nla_total_size(sizeof(ilwt->mode)) +
 		  nla_total_size(sizeof(ilwt->tuninfo.traceh));
 
-	if (ilwt->mode != IOAM6_IPTUNNEL_MODE_INLINE) {
-		if (ilwt->has_tunsrc)
-			nlsize += nla_total_size(sizeof(ilwt->tunsrc));
-
+	if (ilwt->mode != IOAM6_IPTUNNEL_MODE_INLINE)
 		nlsize += nla_total_size(sizeof(ilwt->tundst));
-	}
 
 	return nlsize;
 }
@@ -503,21 +451,17 @@ static int ioam6_encap_cmp(struct lwtunnel_state *a, struct lwtunnel_state *b)
 	return (ilwt_a->freq.k != ilwt_b->freq.k ||
 		ilwt_a->freq.n != ilwt_b->freq.n ||
 		ilwt_a->mode != ilwt_b->mode ||
-		ilwt_a->has_tunsrc != ilwt_b->has_tunsrc ||
 		(ilwt_a->mode != IOAM6_IPTUNNEL_MODE_INLINE &&
 		 !ipv6_addr_equal(&ilwt_a->tundst, &ilwt_b->tundst)) ||
-		(ilwt_a->mode != IOAM6_IPTUNNEL_MODE_INLINE &&
-		 ilwt_a->has_tunsrc &&
-		 !ipv6_addr_equal(&ilwt_a->tunsrc, &ilwt_b->tunsrc)) ||
 		trace_a->namespace_id != trace_b->namespace_id);
 }
 
 static const struct lwtunnel_encap_ops ioam6_iptun_ops = {
 	.build_state		= ioam6_build_state,
 	.destroy_state		= ioam6_destroy_state,
-	.output			= ioam6_output,
+	.output		= ioam6_output,
 	.fill_encap		= ioam6_fill_encap_info,
-	.get_encap_size		= ioam6_encap_nlsize,
+	.get_encap_size	= ioam6_encap_nlsize,
 	.cmp_encap		= ioam6_encap_cmp,
 	.owner			= THIS_MODULE,
 };

@@ -59,9 +59,7 @@ xvip_dma_remote_subdev(struct media_pad *local, u32 *pad)
 
 static int xvip_dma_verify_format(struct xvip_dma *dma)
 {
-	struct v4l2_subdev_format fmt = {
-		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
-	};
+	struct v4l2_subdev_format fmt;
 	struct v4l2_subdev *subdev;
 	int ret;
 
@@ -69,6 +67,7 @@ static int xvip_dma_verify_format(struct xvip_dma *dma)
 	if (!subdev)
 		return -EPIPE;
 
+	fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
 	ret = v4l2_subdev_call(subdev, pad, get_fmt, NULL, &fmt);
 	if (ret < 0)
 		return ret == -ENOIOCTLCMD ? -EINVAL : ret;
@@ -145,25 +144,41 @@ done:
 static int xvip_pipeline_validate(struct xvip_pipeline *pipe,
 				  struct xvip_dma *start)
 {
-	struct media_pipeline_pad_iter iter;
+	struct media_graph graph;
+	struct media_entity *entity = &start->video.entity;
+	struct media_device *mdev = entity->graph_obj.mdev;
 	unsigned int num_inputs = 0;
 	unsigned int num_outputs = 0;
-	struct media_pad *pad;
+	int ret;
 
-	/* Locate the video nodes in the pipeline. */
-	media_pipeline_for_each_pad(&pipe->pipe, &iter, pad) {
+	mutex_lock(&mdev->graph_mutex);
+
+	/* Walk the graph to locate the video nodes. */
+	ret = media_graph_walk_init(&graph, mdev);
+	if (ret) {
+		mutex_unlock(&mdev->graph_mutex);
+		return ret;
+	}
+
+	media_graph_walk_start(&graph, entity);
+
+	while ((entity = media_graph_walk_next(&graph))) {
 		struct xvip_dma *dma;
 
-		if (pad->entity->function != MEDIA_ENT_F_IO_V4L)
+		if (entity->function != MEDIA_ENT_F_IO_V4L)
 			continue;
 
-		dma = to_xvip_dma(media_entity_to_video_device(pad->entity));
+		dma = to_xvip_dma(media_entity_to_video_device(entity));
 
 		if (dma->pad.flags & MEDIA_PAD_FL_SINK)
 			num_outputs++;
 		else
 			num_inputs++;
 	}
+
+	mutex_unlock(&mdev->graph_mutex);
+
+	media_graph_walk_cleanup(&graph);
 
 	/* We need at least one DMA to proceed */
 	if (num_outputs == 0 && num_inputs == 0)
@@ -406,9 +421,9 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 		size = ((size_t)dma->r.width * dma->fmtinfo->bpl_factor *
 			padding_factor_nume * bpl_nume) /
 			((size_t)padding_factor_deno * bpl_deno);
-		dma->sgl.size = size;
+		dma->sgl[0].size = size;
 
-		dma->sgl.icg = bpl - dma->sgl.size;
+		dma->sgl[0].icg = bpl - dma->sgl[0].size;
 		dma->xt.numf = dma->r.height;
 
 		/*
@@ -418,7 +433,7 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 
 		/* Handling contiguous data with mplanes */
 		if (dma->fmtinfo->buffers == 1) {
-			dma->sgl.dst_icg = (size_t)bpl *
+			dma->sgl[0].dst_icg = (size_t)bpl *
 					      (pix_mp->height - dma->r.height);
 		} else {
 			/* Handling non-contiguous data with mplanes */
@@ -427,7 +442,7 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 					vb2_dma_contig_plane_dma_addr(vb, 1);
 				luma_size = bpl * dma->xt.numf;
 				if (chroma_addr > addr)
-					dma->sgl.dst_icg = chroma_addr -
+					dma->sgl[0].dst_icg = chroma_addr -
 						addr - luma_size;
 			}
 			/* Handle the 3rd plane for Y_U_V8 */
@@ -439,7 +454,7 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 				u32 chroma_size = bpl * dma->xt.numf;
 
 				if (third_plane_addr > chroma_addr)
-					dma->sgl.dst_icg = third_plane_addr -
+					dma->sgl[0].dst_icg = third_plane_addr -
 						chroma_addr - chroma_size;
 			}
 		}
@@ -460,12 +475,12 @@ static void xvip_dma_buffer_queue(struct vb2_buffer *vb)
 		size = ((size_t)dma->r.width * dma->fmtinfo->bpl_factor *
 			padding_factor_nume * bpl_nume) /
 			((size_t)padding_factor_deno * bpl_deno);
-		dma->sgl.size = size;
-		dma->sgl.icg = bpl - dma->sgl.size;
+		dma->sgl[0].size = size;
+		dma->sgl[0].icg = bpl - dma->sgl[0].size;
 		dma->xt.numf = dma->r.height;
-		dma->sgl.dst_icg = 0;
+		dma->sgl[0].dst_icg = 0;
 		dst_icg = (size_t)bpl * (pix->height - dma->r.height);
-		dma->sgl.dst_icg = dst_icg;
+		dma->sgl[0].dst_icg = dst_icg;
 	}
 
 	desc = dmaengine_prep_interleaved_dma(dma->dma, &dma->xt, flags);
@@ -709,7 +724,7 @@ xvip_dma_enum_input(struct file *file, void *priv, struct v4l2_input *i)
 	 * input like V4L2_INPUT_TYPE_TUNER and V4L2_INPUT_TYPE_TOUCH.
 	 */
 	i->type = V4L2_INPUT_TYPE_CAMERA;
-	strscpy((char *)i->name, (char *)subdev->name, sizeof(i->name));
+	strlcpy((char *)i->name, (char *)subdev->name, sizeof(i->name));
 
 	return 0;
 }
@@ -1424,8 +1439,9 @@ int xvip_dma_init(struct xvip_composite_device *xdev, struct xvip_dma *dma,
 	snprintf(name, sizeof(name), "port%u", port);
 	dma->dma = dma_request_chan(dma->xdev->dev, name);
 	if (IS_ERR(dma->dma)) {
-		ret = dev_err_probe(dma->xdev->dev, PTR_ERR(dma->dma),
-				    "no VDMA channel found\n");
+		ret = PTR_ERR(dma->dma);
+		if (ret != -EPROBE_DEFER)
+			dev_err(dma->xdev->dev, "no VDMA channel found\n");
 		goto error;
 	}
 

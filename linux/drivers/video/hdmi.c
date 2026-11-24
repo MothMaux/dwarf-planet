@@ -60,7 +60,7 @@ void hdmi_avi_infoframe_init(struct hdmi_avi_infoframe *frame)
 	memset(frame, 0, sizeof(*frame));
 
 	frame->type = HDMI_INFOFRAME_TYPE_AVI;
-	frame->version = 3;
+	frame->version = 2;
 	frame->length = HDMI_AVI_INFOFRAME_SIZE;
 }
 EXPORT_SYMBOL(hdmi_avi_infoframe_init);
@@ -68,7 +68,7 @@ EXPORT_SYMBOL(hdmi_avi_infoframe_init);
 static int hdmi_avi_infoframe_check_only(const struct hdmi_avi_infoframe *frame)
 {
 	if (frame->type != HDMI_INFOFRAME_TYPE_AVI ||
-	    frame->version != 3 ||
+	    frame->version != 2 ||
 	    frame->length != HDMI_AVI_INFOFRAME_SIZE)
 		return -EINVAL;
 
@@ -160,7 +160,7 @@ ssize_t hdmi_avi_infoframe_pack_only(const struct hdmi_avi_infoframe *frame,
 	if (frame->itc)
 		ptr[2] |= BIT(7);
 
-	ptr[3] = frame->video_code & 0xff;
+	ptr[3] = frame->video_code & 0x7f;
 
 	ptr[4] = ((frame->ycc_quantization_range & 0x3) << 6) |
 		 ((frame->content_type & 0x3) << 4) |
@@ -1310,11 +1310,17 @@ static void hdmi_spd_infoframe_log(const char *level,
 				   struct device *dev,
 				   const struct hdmi_spd_infoframe *frame)
 {
+	u8 buf[17];
+
 	hdmi_infoframe_log_header(level, dev,
 				  (const struct hdmi_any_infoframe *)frame);
 
-	hdmi_log("    vendor: %.8s\n", frame->vendor);
-	hdmi_log("    product: %.16s\n", frame->product);
+	memset(buf, 0, sizeof(buf));
+
+	strncpy(buf, frame->vendor, 8);
+	hdmi_log("    vendor: %s\n", buf);
+	strncpy(buf, frame->product, 16);
+	hdmi_log("    product: %s\n", buf);
 	hdmi_log("    source device information: %s (0x%x)\n",
 		hdmi_spd_sdi_get_name(frame->sdi), frame->sdi);
 }
@@ -1629,7 +1635,7 @@ static int hdmi_avi_infoframe_unpack(struct hdmi_avi_infoframe *frame,
 	frame->quantization_range = (ptr[2] >> 2) & 0x3;
 	frame->nups = ptr[2] & 0x3;
 
-	frame->video_code = ptr[3] & 0xff;
+	frame->video_code = ptr[3] & 0x7f;
 	frame->ycc_quantization_range = (ptr[4] >> 6) & 0x3;
 	frame->content_type = (ptr[4] >> 4) & 0x3;
 

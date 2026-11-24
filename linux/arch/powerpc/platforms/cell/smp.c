@@ -54,7 +54,6 @@ static cpumask_t of_spin_map;
 
 /**
  * smp_startup_cpu() - start the given cpu
- * @lcpu: Logical CPU ID of the CPU to be started.
  *
  * At boot time, there is nothing to do for primary threads which were
  * started from Open Firmware.  For anything else, call RTAS with the
@@ -82,7 +81,7 @@ static inline int smp_startup_cpu(unsigned int lcpu)
 	 * If the RTAS start-cpu token does not exist then presume the
 	 * cpu is already spinning.
 	 */
-	start_cpu = rtas_function_token(RTAS_FN_START_CPU);
+	start_cpu = rtas_token("start-cpu");
 	if (start_cpu == RTAS_UNKNOWN_SERVICE)
 		return 1;
 
@@ -153,7 +152,7 @@ void __init smp_init_cell(void)
 	cpumask_clear_cpu(boot_cpuid, &of_spin_map);
 
 	/* Non-lpar has additional take/give timebase */
-	if (rtas_function_token(RTAS_FN_FREEZE_TIME_BASE) != RTAS_UNKNOWN_SERVICE) {
+	if (rtas_token("freeze-time-base") != RTAS_UNKNOWN_SERVICE) {
 		smp_ops->give_timebase = rtas_give_timebase;
 		smp_ops->take_timebase = rtas_take_timebase;
 	}

@@ -16,8 +16,6 @@
 
 #include "match.h"
 
-extern struct aa_dfa *stacksplitdfa;
-
 /*
  * DEBUG remains global (no per profile flag) since it is mostly used in sysctl
  * which is not related to profile accesses.
@@ -48,11 +46,7 @@ extern struct aa_dfa *stacksplitdfa;
 #define AA_BUG_FMT(X, fmt, args...)					\
 	WARN((X), "AppArmor WARN %s: (" #X "): " fmt, __func__, ##args)
 #else
-#define AA_BUG_FMT(X, fmt, args...)					\
-	do {								\
-		BUILD_BUG_ON_INVALID(X);				\
-		no_printk(fmt, ##args);					\
-	} while (0)
+#define AA_BUG_FMT(X, fmt, args...) no_printk(fmt, ##args)
 #endif
 
 #define AA_ERROR(fmt, args...)						\
@@ -70,18 +64,6 @@ void aa_info_message(const char *str);
 
 /* Security blob offsets */
 extern struct lsm_blob_sizes apparmor_blob_sizes;
-
-enum reftype {
-	REF_NS,
-	REF_PROXY,
-	REF_RAWDATA,
-};
-
-/* common reference count used by data the shows up in aafs */
-struct aa_common_ref {
-	struct kref count;
-	enum reftype reftype;
-};
 
 /**
  * aa_strneq - compare null terminated @str to a non null terminated substring
@@ -105,8 +87,8 @@ static inline bool aa_strneq(const char *str, const char *sub, int len)
  * character which is not used in standard matching and is only
  * used to separate pairs.
  */
-static inline aa_state_t aa_dfa_null_transition(struct aa_dfa *dfa,
-						aa_state_t start)
+static inline unsigned int aa_dfa_null_transition(struct aa_dfa *dfa,
+						  unsigned int start)
 {
 	/* the null transition only needs the string's null terminator byte */
 	return aa_dfa_next(dfa, start, 0);
@@ -117,12 +99,6 @@ static inline bool path_mediated_fs(struct dentry *dentry)
 	return !(dentry->d_sb->s_flags & SB_NOUSER);
 }
 
-struct aa_str_table {
-	int size;
-	char **table;
-};
-
-void aa_free_str_table(struct aa_str_table *table);
 
 struct counted_str {
 	struct kref count;
@@ -250,7 +226,7 @@ void aa_policy_destroy(struct aa_policy *policy);
  */
 #define fn_label_build(L, P, GFP, FN)					\
 ({									\
-	__label__ __do_cleanup, __done;					\
+	__label__ __cleanup, __done;					\
 	struct aa_label *__new_;					\
 									\
 	if ((L)->size > 1) {						\
@@ -268,7 +244,7 @@ void aa_policy_destroy(struct aa_policy *policy);
 			__new_ = (FN);					\
 			AA_BUG(!__new_);				\
 			if (IS_ERR(__new_))				\
-				goto __do_cleanup;			\
+				goto __cleanup;				\
 			__lvec[__j++] = __new_;				\
 		}							\
 		for (__j = __count = 0; __j < (L)->size; __j++)		\
@@ -290,7 +266,7 @@ void aa_policy_destroy(struct aa_policy *policy);
 			vec_cleanup(profile, __pvec, __count);		\
 		} else							\
 			__new_ = NULL;					\
-__do_cleanup:								\
+__cleanup:								\
 		vec_cleanup(label, __lvec, (L)->size);			\
 	} else {							\
 		(P) = labels_profile(L);				\

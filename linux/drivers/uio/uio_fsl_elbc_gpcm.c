@@ -384,24 +384,19 @@ static int uio_fsl_elbc_gpcm_probe(struct platform_device *pdev)
 
 	/* set all UIO data */
 	info->mem[0].name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%pOFn", node);
-	if (!info->mem[0].name) {
-		ret = -ENODEV;
-		goto out_err3;
-	}
-
 	info->mem[0].addr = res.start;
 	info->mem[0].size = resource_size(&res);
 	info->mem[0].memtype = UIO_MEM_PHYS;
 	info->priv = priv;
 	info->name = uio_name;
 	info->version = "0.0.1";
-	if (irq) {
+	if (irq != NO_IRQ) {
 		if (priv->irq_handler) {
 			info->irq = irq;
 			info->irq_flags = IRQF_SHARED;
 			info->handler = priv->irq_handler;
 		} else {
-			irq = 0;
+			irq = NO_IRQ;
 			dev_warn(priv->dev, "ignoring irq, no handler\n");
 		}
 	}
@@ -422,19 +417,17 @@ static int uio_fsl_elbc_gpcm_probe(struct platform_device *pdev)
 	dev_info(priv->dev,
 		 "eLBC/GPCM device (%s) at 0x%llx, bank %d, irq=%d\n",
 		 priv->name, (unsigned long long)res.start, priv->bank,
-		 irq ? : -1);
+		 irq != NO_IRQ ? irq : -1);
 
 	return 0;
 out_err2:
 	if (priv->shutdown)
 		priv->shutdown(info, true);
-
-out_err3:
 	iounmap(info->mem[0].internal_addr);
 	return ret;
 }
 
-static void uio_fsl_elbc_gpcm_remove(struct platform_device *pdev)
+static int uio_fsl_elbc_gpcm_remove(struct platform_device *pdev)
 {
 	struct uio_info *info = platform_get_drvdata(pdev);
 	struct fsl_elbc_gpcm *priv = info->priv;
@@ -444,6 +437,8 @@ static void uio_fsl_elbc_gpcm_remove(struct platform_device *pdev)
 	if (priv->shutdown)
 		priv->shutdown(info, false);
 	iounmap(info->mem[0].internal_addr);
+
+	return 0;
 
 }
 
@@ -460,7 +455,7 @@ static struct platform_driver uio_fsl_elbc_gpcm_driver = {
 		.dev_groups = uio_fsl_elbc_gpcm_groups,
 	},
 	.probe = uio_fsl_elbc_gpcm_probe,
-	.remove_new = uio_fsl_elbc_gpcm_remove,
+	.remove = uio_fsl_elbc_gpcm_remove,
 };
 module_platform_driver(uio_fsl_elbc_gpcm_driver);
 

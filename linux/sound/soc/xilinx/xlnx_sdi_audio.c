@@ -404,6 +404,7 @@ static int xlnx_sdi_audio_probe(struct platform_device *pdev)
 	u32 val, irq;
 	int ret;
 	struct dev_ctx *ctx;
+	struct resource *res;
 	struct device *video_dev;
 	struct device_node *video_node;
 	struct platform_device *video_pdev;
@@ -421,16 +422,33 @@ static int xlnx_sdi_audio_probe(struct platform_device *pdev)
 	if (!ctx)
 		return -ENODEV;
 
-	ctx->axi_clk = devm_clk_get_enabled(&pdev->dev, "s_axi_aclk");
+	ctx->axi_clk = devm_clk_get(&pdev->dev, "s_axi_aclk");
 	if (IS_ERR(ctx->axi_clk)) {
 		ret = PTR_ERR(ctx->axi_clk);
 		dev_err(&pdev->dev, "failed to get s_axi_aclk(%d)\n", ret);
 		return ret;
 	}
 
-	ctx->base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(ctx->base))
-		return PTR_ERR(ctx->base);
+	ret = clk_prepare_enable(ctx->axi_clk);
+	if (ret) {
+		dev_err(&pdev->dev,
+			"failed to enable s_axi_aclk(%d)\n", ret);
+		return ret;
+	}
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		dev_err(&pdev->dev, "No IO MEM resource found\n");
+		ret = -ENODEV;
+		goto err_axis;
+	}
+
+	ctx->base = devm_ioremap_resource(&pdev->dev, res);
+	if (!ctx->base) {
+		dev_err(&pdev->dev, "ioremap failed\n");
+		ret = -EADDRNOTAVAIL;
+		goto err_axis;
+	}
 
 	ctx->dev = &pdev->dev;
 
@@ -438,33 +456,35 @@ static int xlnx_sdi_audio_probe(struct platform_device *pdev)
 	if (val & BIT(6)) {
 		ctx->mode = EXTRACT;
 
-		ctx->axis_clk = devm_clk_get_enabled(&pdev->dev, "m_axis_clk");
+		ctx->axis_clk = devm_clk_get(&pdev->dev, "m_axis_clk");
 		if (IS_ERR(ctx->axis_clk)) {
 			ret = PTR_ERR(ctx->axis_clk);
 			dev_err(&pdev->dev, "failed to get m_axis_clk(%d)\n",
 				ret);
-			return ret;
+			goto err_axis;
 		}
 
-		ctx->aud_clk = devm_clk_get_enabled(&pdev->dev, "sdi_extract_clk");
+		ctx->aud_clk = devm_clk_get(&pdev->dev, "sdi_extract_clk");
 		if (IS_ERR(ctx->aud_clk)) {
 			ret = PTR_ERR(ctx->aud_clk);
 			dev_err(&pdev->dev, "failed to get sdi_extract_clk(%d)\n",
 				ret);
-			return ret;
+			goto err_axis;
 		}
 
 		irq = platform_get_irq(pdev, 0);
 		if (irq < 0) {
 			dev_err(&pdev->dev, "No IRQ resource found\n");
-			return irq;
+			ret = irq;
+			goto err_axis;
 		}
 		ret = devm_request_irq(&pdev->dev, irq,
 				       xtract_irq_handler,
 				       0, "XLNX_SDI_AUDIO_XTRACT", ctx);
 		if (ret) {
 			dev_err(&pdev->dev, "extract irq request failed\n");
-			return -ENODEV;
+			ret = -ENODEV;
+			goto err_axis;
 		}
 
 		init_waitqueue_head(&ctx->srate_q);
@@ -472,33 +492,35 @@ static int xlnx_sdi_audio_probe(struct platform_device *pdev)
 		snd_dai = &xlnx_sdi_rx_dai;
 	} else {
 		ctx->mode = EMBED;
-		ctx->axis_clk = devm_clk_get_enabled(&pdev->dev, "s_axis_clk");
+		ctx->axis_clk = devm_clk_get(&pdev->dev, "s_axis_clk");
 		if (IS_ERR(ctx->axis_clk)) {
 			ret = PTR_ERR(ctx->axis_clk);
 			dev_err(&pdev->dev, "failed to get s_axis_clk(%d)\n",
 				ret);
-			return ret;
+			goto err_axis;
 		}
 
-		ctx->aud_clk = devm_clk_get_enabled(&pdev->dev, "sdi_embed_clk");
+		ctx->aud_clk = devm_clk_get(&pdev->dev, "sdi_embed_clk");
 		if (IS_ERR(ctx->aud_clk)) {
 			ret = PTR_ERR(ctx->aud_clk);
 			dev_err(&pdev->dev, "failed to get aud_clk(%d)\n",
 				ret);
-			return ret;
+			goto err_axis;
 		}
 
 		video_node = of_graph_get_remote_node(pdev->dev.of_node, 0, 0);
 		if (!video_node) {
 			dev_err(ctx->dev, "video_node not found\n");
 			of_node_put(video_node);
-			return -ENODEV;
+			ret = -ENODEV;
+			goto err_axis;
 		}
 
 		video_pdev = of_find_device_by_node(video_node);
 		if (!video_pdev) {
 			of_node_put(video_node);
-			return -ENODEV;
+			ret = -ENODEV;
+			goto err_axis;
 		}
 
 		video_dev = &video_pdev->dev;
@@ -507,18 +529,33 @@ static int xlnx_sdi_audio_probe(struct platform_device *pdev)
 		/* invalid 'platform_data' implies video driver is not loaded */
 		if (!ctx->video_mode) {
 			of_node_put(video_node);
-			return -EPROBE_DEFER;
+			ret = -EPROBE_DEFER;
+			goto err_axis;
 		}
 
 		snd_dai = &xlnx_sdi_tx_dai;
 		of_node_put(video_node);
 	}
 
+	ret = clk_prepare_enable(ctx->axis_clk);
+	if (ret) {
+		dev_err(&pdev->dev,
+			"failed to enable s_axis_clk(%d)\n", ret);
+		goto err_axis;
+	}
+
+	ret = clk_prepare_enable(ctx->aud_clk);
+	if (ret) {
+		dev_err(&pdev->dev,
+			"failed to enable sdi_extract_clk(%d)\n", ret);
+		goto err_aud_clk;
+	}
+
 	ret = devm_snd_soc_register_component(&pdev->dev, &xlnx_sdi_component,
 					      snd_dai, 1);
 	if (ret) {
 		dev_err(&pdev->dev, "couldn't register codec DAI\n");
-		return ret;
+		goto err_clk;
 	}
 
 	dev_set_drvdata(&pdev->dev, ctx);
@@ -528,14 +565,27 @@ static int xlnx_sdi_audio_probe(struct platform_device *pdev)
 
 	dev_info(&pdev->dev, "xlnx sdi codec dai component registered\n");
 	return 0;
+
+err_clk:
+	clk_disable_unprepare(ctx->aud_clk);
+err_aud_clk:
+	clk_disable_unprepare(ctx->axis_clk);
+err_axis:
+	clk_disable_unprepare(ctx->axi_clk);
+	return ret;
 }
 
-static void xlnx_sdi_audio_remove(struct platform_device *pdev)
+static int xlnx_sdi_audio_remove(struct platform_device *pdev)
 {
 	struct dev_ctx *ctx = dev_get_drvdata(&pdev->dev);
 
 	audio_disable(ctx->base);
 	audio_reset_core(ctx->base, true);
+
+	clk_disable_unprepare(ctx->aud_clk);
+	clk_disable_unprepare(ctx->axis_clk);
+	clk_disable_unprepare(ctx->axi_clk);
+	return 0;
 }
 
 static const struct of_device_id xlnx_sdi_audio_of_match[] = {
@@ -558,4 +608,4 @@ module_platform_driver(xlnx_sdi_audio_driver);
 
 MODULE_DESCRIPTION("xilinx sdi audio codec driver");
 MODULE_AUTHOR("Maruthi Srinivas Bayyavarapu");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

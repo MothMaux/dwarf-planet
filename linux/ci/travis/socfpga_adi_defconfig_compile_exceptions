@@ -52,7 +52,6 @@ drivers/iio/adc/xilinx-xadc-events.o
 drivers/iio/jesd204/axi_jesd204b_gt.o
 drivers/iio/jesd204/axi_jesd204b_v51.o
 drivers/media/platform/adi/imageon-bridge.o
-drivers/media/i2c/mt9m114.o
 drivers/spi/spi-xcomm.o
 drivers/clk/clk-axi-clkgen.o
 drivers/misc/mathworks/mathworks_generic_of.o
@@ -62,14 +61,9 @@ drivers/misc/mathworks/mw_sharedmem_iio_channel.o
 drivers/misc/mathworks/mw_mm_iio_channel.o
 drivers/misc/mathworks/mw_stream_channel.o
 drivers/misc/mathworks/mw_stream_iio_channel.o
-drivers/iio/adc/adrv902x/devices/adrv9025/private/src/adrv9025_dfe.o
-drivers/iio/adc/adrv902x/devices/adrv9025/private/src/adrv9025_dynamic_slicer.o
-drivers/iio/adc/adrv902x/devices/adrv9025/public/src/adi_adrv9025_dfe.o
-drivers/iio/adc/adrv902x/devices/adrv9025/public/src/adi_adrv9025_dynamic_slicer.o
-drivers/iio/adc/adrv902x/platforms/adi_platform.o
-drivers/gpu/drm/tegra/fbdev.o
-drivers/pci/controller/pcie-rcar-host.o
-sound/soc/codecs/max98363.o
-sound/soc/codecs/ssm3515.o
-tools/iio/ad9088_cal_dump.o
+drivers/iio/adc/madura/devices/adrv9025/private/src/adrv9025_dfe.o
+drivers/iio/adc/madura/devices/adrv9025/private/src/adrv9025_dynamic_slicer.o
+drivers/iio/adc/madura/devices/adrv9025/public/src/adi_adrv9025_dfe.o
+drivers/iio/adc/madura/devices/adrv9025/public/src/adi_adrv9025_dynamic_slicer.o
+drivers/iio/adc/madura/platforms/adi_platform.o
 

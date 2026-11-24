@@ -100,10 +100,11 @@ struct page **etnaviv_gem_get_pages(struct etnaviv_gem_object *etnaviv_obj)
 
 	if (!etnaviv_obj->sgt) {
 		struct drm_device *dev = etnaviv_obj->base.dev;
-		unsigned int npages = etnaviv_obj->base.size >> PAGE_SHIFT;
+		int npages = etnaviv_obj->base.size >> PAGE_SHIFT;
 		struct sg_table *sgt;
 
-		sgt = drm_prime_pages_to_sg(dev, etnaviv_obj->pages, npages);
+		sgt = drm_prime_pages_to_sg(etnaviv_obj->base.dev,
+					    etnaviv_obj->pages, npages);
 		if (IS_ERR(sgt)) {
 			dev_err(dev->dev, "failed to allocate sgt: %ld\n",
 				PTR_ERR(sgt));
@@ -129,7 +130,7 @@ static int etnaviv_gem_mmap_obj(struct etnaviv_gem_object *etnaviv_obj,
 {
 	pgprot_t vm_page_prot;
 
-	vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP);
+	vma->vm_flags |= VM_IO | VM_MIXEDMAP | VM_DONTEXPAND | VM_DONTDUMP;
 
 	vm_page_prot = vm_get_page_prot(vma->vm_flags);
 
@@ -164,8 +165,7 @@ static vm_fault_t etnaviv_gem_fault(struct vm_fault *vmf)
 	struct vm_area_struct *vma = vmf->vma;
 	struct drm_gem_object *obj = vma->vm_private_data;
 	struct etnaviv_gem_object *etnaviv_obj = to_etnaviv_bo(obj);
-	struct page **pages;
-	unsigned long pfn;
+	struct page **pages, *page;
 	pgoff_t pgoff;
 	int err;
 
@@ -189,12 +189,12 @@ static vm_fault_t etnaviv_gem_fault(struct vm_fault *vmf)
 	/* We don't use vmf->pgoff since that has the fake offset: */
 	pgoff = (vmf->address - vma->vm_start) >> PAGE_SHIFT;
 
-	pfn = page_to_pfn(pages[pgoff]);
+	page = pages[pgoff];
 
 	VERB("Inserting %p pfn %lx, pa %lx", (void *)vmf->address,
-	     pfn, pfn << PAGE_SHIFT);
+	     page_to_pfn(page), page_to_pfn(page) << PAGE_SHIFT);
 
-	return vmf_insert_pfn(vma, vmf->address, pfn);
+	return vmf_insert_page(vma, vmf->address, page);
 }
 
 int etnaviv_gem_mmap_offset(struct drm_gem_object *obj, u64 *offset)
@@ -258,12 +258,7 @@ struct etnaviv_vram_mapping *etnaviv_gem_mapping_get(
 		if (mapping->use == 0) {
 			mutex_lock(&mmu_context->lock);
 			if (mapping->context == mmu_context)
-				if (va && mapping->iova != va) {
-					etnaviv_iommu_reap_mapping(mapping);
-					mapping = NULL;
-				} else {
-					mapping->use += 1;
-				}
+				mapping->use += 1;
 			else
 				mapping = NULL;
 			mutex_unlock(&mmu_context->lock);
@@ -342,7 +337,6 @@ void *etnaviv_gem_vmap(struct drm_gem_object *obj)
 static void *etnaviv_gem_vmap_impl(struct etnaviv_gem_object *obj)
 {
 	struct page **pages;
-	pgprot_t prot;
 
 	lockdep_assert_held(&obj->lock);
 
@@ -350,28 +344,15 @@ static void *etnaviv_gem_vmap_impl(struct etnaviv_gem_object *obj)
 	if (IS_ERR(pages))
 		return NULL;
 
-	switch (obj->flags & ETNA_BO_CACHE_MASK) {
-	case ETNA_BO_CACHED:
-		prot = PAGE_KERNEL;
-		break;
-	case ETNA_BO_UNCACHED:
-		prot = pgprot_noncached(PAGE_KERNEL);
-		break;
-	case ETNA_BO_WC:
-	default:
-		prot = pgprot_writecombine(PAGE_KERNEL);
-	}
-
-	return vmap(pages, obj->base.size >> PAGE_SHIFT, VM_MAP, prot);
+	return vmap(pages, obj->base.size >> PAGE_SHIFT,
+			VM_MAP, pgprot_writecombine(PAGE_KERNEL));
 }
 
 static inline enum dma_data_direction etnaviv_op_to_dma_dir(u32 op)
 {
-	op &= ETNA_PREP_READ | ETNA_PREP_WRITE;
-
-	if (op == ETNA_PREP_READ)
+	if (op & ETNA_PREP_READ)
 		return DMA_FROM_DEVICE;
-	else if (op == ETNA_PREP_WRITE)
+	else if (op & ETNA_PREP_WRITE)
 		return DMA_TO_DEVICE;
 	else
 		return DMA_BIDIRECTIONAL;
@@ -523,6 +504,7 @@ void etnaviv_gem_free_object(struct drm_gem_object *obj)
 		kfree(mapping);
 	}
 
+	drm_gem_free_mmap_offset(obj);
 	etnaviv_obj->ops->release(etnaviv_obj);
 	drm_gem_object_release(obj);
 
@@ -555,7 +537,7 @@ static const struct drm_gem_object_funcs etnaviv_gem_object_funcs = {
 	.vm_ops = &vm_ops,
 };
 
-static int etnaviv_gem_new_impl(struct drm_device *dev, u32 flags,
+static int etnaviv_gem_new_impl(struct drm_device *dev, u32 size, u32 flags,
 	const struct etnaviv_gem_ops *ops, struct drm_gem_object **obj)
 {
 	struct etnaviv_gem_object *etnaviv_obj;
@@ -604,7 +586,8 @@ int etnaviv_gem_new_handle(struct drm_device *dev, struct drm_file *file,
 
 	size = PAGE_ALIGN(size);
 
-	ret = etnaviv_gem_new_impl(dev, flags, &etnaviv_gem_shmem_ops, &obj);
+	ret = etnaviv_gem_new_impl(dev, size, flags,
+				   &etnaviv_gem_shmem_ops, &obj);
 	if (ret)
 		goto fail;
 
@@ -639,7 +622,7 @@ int etnaviv_gem_new_private(struct drm_device *dev, size_t size, u32 flags,
 	struct drm_gem_object *obj;
 	int ret;
 
-	ret = etnaviv_gem_new_impl(dev, flags, ops, &obj);
+	ret = etnaviv_gem_new_impl(dev, size, flags, ops, &obj);
 	if (ret)
 		return ret;
 
@@ -655,7 +638,6 @@ static int etnaviv_gem_userptr_get_pages(struct etnaviv_gem_object *etnaviv_obj)
 	struct page **pvec = NULL;
 	struct etnaviv_gem_userptr *userptr = &etnaviv_obj->userptr;
 	int ret, pinned = 0, npages = etnaviv_obj->base.size >> PAGE_SHIFT;
-	unsigned int gup_flags = FOLL_LONGTERM;
 
 	might_lock_read(&current->mm->mmap_lock);
 
@@ -666,15 +648,14 @@ static int etnaviv_gem_userptr_get_pages(struct etnaviv_gem_object *etnaviv_obj)
 	if (!pvec)
 		return -ENOMEM;
 
-	if (!userptr->ro)
-		gup_flags |= FOLL_WRITE;
-
 	do {
 		unsigned num_pages = npages - pinned;
 		uint64_t ptr = userptr->ptr + pinned * PAGE_SIZE;
 		struct page **pages = pvec + pinned;
 
-		ret = pin_user_pages_fast(ptr, num_pages, gup_flags, pages);
+		ret = pin_user_pages_fast(ptr, num_pages,
+					  FOLL_WRITE | FOLL_FORCE | FOLL_LONGTERM,
+					  pages);
 		if (ret < 0) {
 			unpin_user_pages(pvec, pinned);
 			kvfree(pvec);

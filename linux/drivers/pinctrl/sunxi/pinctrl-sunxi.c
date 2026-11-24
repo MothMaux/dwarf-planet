@@ -10,25 +10,26 @@
  * warranty of any kind, whether express or implied.
  */
 
+#include <linux/io.h>
 #include <linux/clk.h>
-#include <linux/export.h>
 #include <linux/gpio/driver.h>
 #include <linux/interrupt.h>
-#include <linux/io.h>
-#include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
+#include <linux/irqchip/chained_irq.h>
+#include <linux/export.h>
 #include <linux/of.h>
 #include <linux/of_clk.h>
-#include <linux/platform_device.h>
-#include <linux/regulator/consumer.h>
-#include <linux/slab.h>
-
+#include <linux/of_address.h>
+#include <linux/of_device.h>
+#include <linux/of_irq.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/pinctrl/machine.h>
-#include <linux/pinctrl/pinconf-generic.h>
-#include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
+#include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinmux.h>
+#include <linux/regulator/consumer.h>
+#include <linux/platform_device.h>
+#include <linux/slab.h>
 
 #include <dt-bindings/pinctrl/sun4i-a10.h>
 
@@ -221,16 +222,16 @@ static int sunxi_pctrl_get_group_pins(struct pinctrl_dev *pctldev,
 
 static bool sunxi_pctrl_has_bias_prop(struct device_node *node)
 {
-	return of_property_present(node, "bias-pull-up") ||
-		of_property_present(node, "bias-pull-down") ||
-		of_property_present(node, "bias-disable") ||
-		of_property_present(node, "allwinner,pull");
+	return of_find_property(node, "bias-pull-up", NULL) ||
+		of_find_property(node, "bias-pull-down", NULL) ||
+		of_find_property(node, "bias-disable", NULL) ||
+		of_find_property(node, "allwinner,pull", NULL);
 }
 
 static bool sunxi_pctrl_has_drive_prop(struct device_node *node)
 {
-	return of_property_present(node, "drive-strength") ||
-		of_property_present(node, "allwinner,drive");
+	return of_find_property(node, "drive-strength", NULL) ||
+		of_find_property(node, "allwinner,drive", NULL);
 }
 
 static int sunxi_pctrl_parse_bias_prop(struct device_node *node)
@@ -238,13 +239,13 @@ static int sunxi_pctrl_parse_bias_prop(struct device_node *node)
 	u32 val;
 
 	/* Try the new style binding */
-	if (of_property_present(node, "bias-pull-up"))
+	if (of_find_property(node, "bias-pull-up", NULL))
 		return PIN_CONFIG_BIAS_PULL_UP;
 
-	if (of_property_present(node, "bias-pull-down"))
+	if (of_find_property(node, "bias-pull-down", NULL))
 		return PIN_CONFIG_BIAS_PULL_DOWN;
 
-	if (of_property_present(node, "bias-disable"))
+	if (of_find_property(node, "bias-disable", NULL))
 		return PIN_CONFIG_BIAS_DISABLE;
 
 	/* And fall back to the old binding */
@@ -395,7 +396,6 @@ static int sunxi_pctrl_dt_node_to_map(struct pinctrl_dev *pctldev,
 	const char *function, *pin_prop;
 	const char *group;
 	int ret, npins, nmaps, configlen = 0, i = 0;
-	struct pinctrl_map *new_map;
 
 	*map = NULL;
 	*num_maps = 0;
@@ -470,13 +470,9 @@ static int sunxi_pctrl_dt_node_to_map(struct pinctrl_dev *pctldev,
 	 * We know have the number of maps we need, we can resize our
 	 * map array
 	 */
-	new_map = krealloc(*map, i * sizeof(struct pinctrl_map), GFP_KERNEL);
-	if (!new_map) {
-		ret = -ENOMEM;
-		goto err_free_map;
-	}
-
-	*map = new_map;
+	*map = krealloc(*map, i * sizeof(struct pinctrl_map), GFP_KERNEL);
+	if (!*map)
+		return -ENOMEM;
 
 	return 0;
 
@@ -849,9 +845,6 @@ static int sunxi_pmx_request(struct pinctrl_dev *pctldev, unsigned offset)
 	struct regulator *reg = s_reg->regulator;
 	char supply[16];
 	int ret;
-
-	if (WARN_ON_ONCE(bank_offset >= ARRAY_SIZE(pctl->regulators)))
-		return -EINVAL;
 
 	if (reg) {
 		refcount_inc(&s_reg->refcount);
@@ -1429,7 +1422,7 @@ static int sunxi_pinctrl_setup_debounce(struct sunxi_pinctrl *pctl,
 		return 0;
 
 	/* If we don't have any setup, bail out */
-	if (!of_property_present(node, "input-debounce"))
+	if (!of_find_property(node, "input-debounce", NULL))
 		return 0;
 
 	losc = devm_clk_get(pctl->dev, "losc");
@@ -1608,11 +1601,15 @@ int sunxi_pinctrl_init_with_variant(struct platform_device *pdev,
 	}
 
 	ret = of_clk_get_parent_count(node);
-	clk = devm_clk_get_enabled(&pdev->dev, ret == 1 ? NULL : "apb");
+	clk = devm_clk_get(&pdev->dev, ret == 1 ? NULL : "apb");
 	if (IS_ERR(clk)) {
 		ret = PTR_ERR(clk);
 		goto gpiochip_error;
 	}
+
+	ret = clk_prepare_enable(clk);
+	if (ret)
+		goto gpiochip_error;
 
 	pctl->irq = devm_kcalloc(&pdev->dev,
 				 pctl->desc->irq_banks,
@@ -1620,14 +1617,14 @@ int sunxi_pinctrl_init_with_variant(struct platform_device *pdev,
 				 GFP_KERNEL);
 	if (!pctl->irq) {
 		ret = -ENOMEM;
-		goto gpiochip_error;
+		goto clk_error;
 	}
 
 	for (i = 0; i < pctl->desc->irq_banks; i++) {
 		pctl->irq[i] = platform_get_irq(pdev, i);
 		if (pctl->irq[i] < 0) {
 			ret = pctl->irq[i];
-			goto gpiochip_error;
+			goto clk_error;
 		}
 	}
 
@@ -1638,7 +1635,7 @@ int sunxi_pinctrl_init_with_variant(struct platform_device *pdev,
 	if (!pctl->domain) {
 		dev_err(&pdev->dev, "Couldn't register IRQ domain\n");
 		ret = -ENOMEM;
-		goto gpiochip_error;
+		goto clk_error;
 	}
 
 	for (i = 0; i < (pctl->desc->irq_banks * IRQ_PER_BANK); i++) {
@@ -1670,6 +1667,8 @@ int sunxi_pinctrl_init_with_variant(struct platform_device *pdev,
 
 	return 0;
 
+clk_error:
+	clk_disable_unprepare(clk);
 gpiochip_error:
 	gpiochip_remove(pctl->chip);
 	return ret;

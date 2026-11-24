@@ -53,23 +53,20 @@ static inline void sysmon_i2c_write_reg(struct sysmon *sysmon, u32 offset, u32 d
 	(void)i2c_master_send(sysmon->client, write_data, SYSMON_WRITE_DATA_SIZE);
 }
 
-static inline int sysmon_i2c_read_reg(struct sysmon *sysmon, u32 offset, u32 *data)
+static inline void sysmon_i2c_read_reg(struct sysmon *sysmon, u32 offset, u32 *data)
 {
 	char read_data[SYSMON_READ_DATA_SIZE];
 	char write_data[SYSMON_WRITE_DATA_SIZE] = { 0 };
-	int ret;
 
 	write_data[SYSMON_PYLD_OFS_LOW_IDX] = (u8)(FIELD_GET(SYSMON_PYLD_OFS_LOW_MASK, offset));
 	write_data[SYSMON_PYLD_OFS_HIGH_IDX] = (u8)(FIELD_GET(SYSMON_PYLD_OFS_HIGH_MASK, offset));
 	write_data[SYSMON_PYLD_INSTR_IDX] = (u8)(SYSMON_INSTR_READ);
 	(void)i2c_master_send(sysmon->client, write_data, SYSMON_WRITE_DATA_SIZE);
-	ret = i2c_master_recv(sysmon->client, read_data, SYSMON_READ_DATA_SIZE);
+	(void)i2c_master_recv(sysmon->client, read_data, SYSMON_READ_DATA_SIZE);
 	*data = (FIELD_PREP(SYSMON_PYLD_DATA0_MASK, read_data[0]) |
 		 FIELD_PREP(SYSMON_PYLD_DATA1_MASK, read_data[1]) |
 		 FIELD_PREP(SYSMON_PYLD_DATA2_MASK, read_data[2]) |
 		 FIELD_PREP(SYSMON_PYLD_DATA3_MASK, read_data[3]));
-
-	return ret;
 }
 
 static inline void sysmon_i2c_update_reg(struct sysmon *sysmon, u32 offset, u32 mask, u32 data)
@@ -90,13 +87,11 @@ static int sysmon_i2c_temp_read(struct sysmon *sysmon, int offset)
 {
 	u32 regval;
 
-	if (sysmon_read_reg(sysmon, offset, &regval) < 0)
-		regval = SYSMON_UPPER_SATURATION_SIGNED;
-
+	sysmon_read_reg(sysmon, offset, &regval);
 	return regval;
 }
 
-static int sysmon_i2c_probe(struct i2c_client *client)
+static int sysmon_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	struct iio_dev *indio_dev;
 	struct sysmon *sysmon;
@@ -160,6 +155,6 @@ static struct i2c_driver sysmon_i2c_driver = {
 };
 module_i2c_driver(sysmon_i2c_driver);
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Xilinx Versal I2C SysMon Driver");
 MODULE_AUTHOR("Conall O Griofa <conall.ogriofa@amd.com>");

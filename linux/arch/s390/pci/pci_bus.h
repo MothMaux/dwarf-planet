@@ -17,8 +17,11 @@ int zpci_bus_scan_device(struct zpci_dev *zdev);
 void zpci_bus_remove_device(struct zpci_dev *zdev, bool set_error);
 
 void zpci_release_device(struct kref *kref);
-
-void zpci_zdev_put(struct zpci_dev *zdev);
+static inline void zpci_zdev_put(struct zpci_dev *zdev)
+{
+	if (zdev)
+		kref_put(&zdev->kref, zpci_release_device);
+}
 
 static inline void zpci_zdev_get(struct zpci_dev *zdev)
 {
@@ -27,7 +30,8 @@ static inline void zpci_zdev_get(struct zpci_dev *zdev)
 
 int zpci_alloc_domain(int domain);
 void zpci_free_domain(int domain);
-int zpci_setup_bus_resources(struct zpci_dev *zdev);
+int zpci_setup_bus_resources(struct zpci_dev *zdev,
+			     struct list_head *resources);
 
 static inline struct zpci_dev *zdev_from_bus(struct pci_bus *bus,
 					     unsigned int devfn)

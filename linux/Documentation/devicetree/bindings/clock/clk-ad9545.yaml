@@ -74,7 +74,6 @@ properties:
     maxItems: 14
 
   assigned-clock-phases:
-    $ref: /schemas/types.yaml#/definitions/uint32-array
     minItems: 1
     maxItems: 14
 

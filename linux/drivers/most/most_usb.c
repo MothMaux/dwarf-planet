@@ -660,7 +660,7 @@ static void hdm_request_netinfo(struct most_interface *iface, int channel,
 
 /**
  * link_stat_timer_handler - schedule work obtaining mac address and link status
- * @t: pointer to timer_list which holds a pointer to the USB device instance
+ * @data: pointer to USB device instance
  *
  * The handler runs in interrupt context. That's why we need to defer the
  * tasks to a work queue.
@@ -763,14 +763,14 @@ static void wq_clear_halt(struct work_struct *wq_obj)
 	mutex_unlock(&mdev->io_mutex);
 }
 
-/*
+/**
  * hdm_usb_fops - file operation table for USB driver
  */
 static const struct file_operations hdm_usb_fops = {
 	.owner = THIS_MODULE,
 };
 
-/*
+/**
  * usb_device_id - ID table for HCD device probing
  */
 static const struct usb_device_id usbid[] = {
@@ -929,10 +929,6 @@ static void release_mdev(struct device *dev)
 {
 	struct most_dev *mdev = to_mdev_from_dev(dev);
 
-	kfree(mdev->busy_urbs);
-	kfree(mdev->cap);
-	kfree(mdev->conf);
-	kfree(mdev->ep_address);
 	kfree(mdev);
 }
 /**
@@ -1058,7 +1054,7 @@ hdm_probe(struct usb_interface *interface, const struct usb_device_id *id)
 
 	ret = most_register_interface(&mdev->iface);
 	if (ret)
-		return ret;
+		goto err_free_busy_urbs;
 
 	mutex_lock(&mdev->io_mutex);
 	if (le16_to_cpu(usb_dev->descriptor.idProduct) == USB_DEV_ID_OS81118 ||
@@ -1068,7 +1064,8 @@ hdm_probe(struct usb_interface *interface, const struct usb_device_id *id)
 		if (!mdev->dci) {
 			mutex_unlock(&mdev->io_mutex);
 			most_deregister_interface(&mdev->iface);
-			return -ENOMEM;
+			ret = -ENOMEM;
+			goto err_free_busy_urbs;
 		}
 
 		mdev->dci->dev.init_name = "dci";
@@ -1077,15 +1074,18 @@ hdm_probe(struct usb_interface *interface, const struct usb_device_id *id)
 		mdev->dci->dev.release = release_dci;
 		if (device_register(&mdev->dci->dev)) {
 			mutex_unlock(&mdev->io_mutex);
-			put_device(&mdev->dci->dev);
 			most_deregister_interface(&mdev->iface);
-			return -ENOMEM;
+			ret = -ENOMEM;
+			goto err_free_dci;
 		}
 		mdev->dci->usb_device = mdev->usb_device;
 	}
 	mutex_unlock(&mdev->io_mutex);
 	return 0;
-
+err_free_dci:
+	put_device(&mdev->dci->dev);
+err_free_busy_urbs:
+	kfree(mdev->busy_urbs);
 err_free_ep_address:
 	kfree(mdev->ep_address);
 err_free_cap:
@@ -1093,7 +1093,7 @@ err_free_cap:
 err_free_conf:
 	kfree(mdev->conf);
 err_free_mdev:
-	kfree(mdev);
+	put_device(&mdev->dev);
 	return ret;
 }
 
@@ -1121,6 +1121,13 @@ static void hdm_disconnect(struct usb_interface *interface)
 	if (mdev->dci)
 		device_unregister(&mdev->dci->dev);
 	most_deregister_interface(&mdev->iface);
+
+	kfree(mdev->busy_urbs);
+	kfree(mdev->cap);
+	kfree(mdev->conf);
+	kfree(mdev->ep_address);
+	put_device(&mdev->dci->dev);
+	put_device(&mdev->dev);
 }
 
 static int hdm_suspend(struct usb_interface *interface, pm_message_t message)

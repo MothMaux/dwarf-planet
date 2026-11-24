@@ -1,30 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
-
-#include <linux/bitops.h>
-#include <linux/cleanup.h>
-#include <linux/device.h>
 #include <linux/idr.h>
-#include <linux/init.h>
-#include <linux/interrupt.h>
-#include <linux/kdev_t.h>
-#include <linux/kstrtox.h>
-#include <linux/list.h>
 #include <linux/mutex.h>
-#include <linux/printk.h>
-#include <linux/slab.h>
-#include <linux/spinlock.h>
-#include <linux/string.h>
-#include <linux/srcu.h>
+#include <linux/device.h>
 #include <linux/sysfs.h>
-#include <linux/types.h>
-
 #include <linux/gpio/consumer.h>
 #include <linux/gpio/driver.h>
+#include <linux/interrupt.h>
+#include <linux/kdev_t.h>
+#include <linux/slab.h>
+#include <linux/ctype.h>
 
 #include "gpiolib.h"
 #include "gpiolib-sysfs.h"
-
-struct kernfs_node;
 
 #define GPIO_IRQF_TRIGGER_NONE		0
 #define GPIO_IRQF_TRIGGER_FALLING	BIT(0)
@@ -167,14 +154,10 @@ static irqreturn_t gpio_sysfs_irq(int irq, void *priv)
 /* Caller holds gpiod-data mutex. */
 static int gpio_sysfs_request_irq(struct device *dev, unsigned char flags)
 {
-	struct gpiod_data *data = dev_get_drvdata(dev);
-	struct gpio_desc *desc = data->desc;
-	unsigned long irq_flags;
-	int ret;
-
-	CLASS(gpio_chip_guard, guard)(desc);
-	if (!guard.gc)
-		return -ENODEV;
+	struct gpiod_data	*data = dev_get_drvdata(dev);
+	struct gpio_desc	*desc = data->desc;
+	unsigned long		irq_flags;
+	int			ret;
 
 	data->irq = gpiod_to_irq(desc);
 	if (data->irq < 0)
@@ -200,7 +183,7 @@ static int gpio_sysfs_request_irq(struct device *dev, unsigned char flags)
 	 *        Remove this redundant call (along with the corresponding
 	 *        unlock) when those drivers have been fixed.
 	 */
-	ret = gpiochip_lock_as_irq(guard.gc, gpio_chip_hwgpio(desc));
+	ret = gpiochip_lock_as_irq(desc->gdev->chip, gpio_chip_hwgpio(desc));
 	if (ret < 0)
 		goto err_put_kn;
 
@@ -214,7 +197,7 @@ static int gpio_sysfs_request_irq(struct device *dev, unsigned char flags)
 	return 0;
 
 err_unlock:
-	gpiochip_unlock_as_irq(guard.gc, gpio_chip_hwgpio(desc));
+	gpiochip_unlock_as_irq(desc->gdev->chip, gpio_chip_hwgpio(desc));
 err_put_kn:
 	sysfs_put(data->value_kn);
 
@@ -230,13 +213,9 @@ static void gpio_sysfs_free_irq(struct device *dev)
 	struct gpiod_data *data = dev_get_drvdata(dev);
 	struct gpio_desc *desc = data->desc;
 
-	CLASS(gpio_chip_guard, guard)(desc);
-	if (!guard.gc)
-		return;
-
 	data->irq_flags = 0;
 	free_irq(data->irq, data);
-	gpiochip_unlock_as_irq(guard.gc, gpio_chip_hwgpio(desc));
+	gpiochip_unlock_as_irq(desc->gdev->chip, gpio_chip_hwgpio(desc));
 	sysfs_put(data->value_kn);
 }
 
@@ -269,7 +248,7 @@ static ssize_t edge_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
 {
 	struct gpiod_data *data = dev_get_drvdata(dev);
-	ssize_t status = size;
+	ssize_t	status = size;
 	int flags;
 
 	flags = sysfs_match_string(trigger_names, buf);
@@ -302,11 +281,10 @@ static DEVICE_ATTR_RW(edge);
 /* Caller holds gpiod-data mutex. */
 static int gpio_sysfs_set_active_low(struct device *dev, int value)
 {
-	struct gpiod_data *data = dev_get_drvdata(dev);
-	unsigned int flags = data->irq_flags;
-	struct gpio_desc *desc = data->desc;
-	int status = 0;
-
+	struct gpiod_data	*data = dev_get_drvdata(dev);
+	struct gpio_desc	*desc = data->desc;
+	int			status = 0;
+	unsigned int		flags = data->irq_flags;
 
 	if (!!test_bit(FLAG_ACTIVE_LOW, &desc->flags) == !!value)
 		return 0;
@@ -342,9 +320,9 @@ static ssize_t active_low_show(struct device *dev,
 static ssize_t active_low_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
 {
-	struct gpiod_data *data = dev_get_drvdata(dev);
-	ssize_t status;
-	long value;
+	struct gpiod_data	*data = dev_get_drvdata(dev);
+	ssize_t			status;
+	long			value;
 
 	status = kstrtol(buf, 0, &value);
 	if (status)
@@ -410,27 +388,27 @@ static const struct attribute_group *gpio_groups[] = {
 static ssize_t base_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
-	const struct gpio_device *gdev = dev_get_drvdata(dev);
+	const struct gpio_chip	*chip = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "%u\n", gdev->base);
+	return sysfs_emit(buf, "%d\n", chip->base);
 }
 static DEVICE_ATTR_RO(base);
 
 static ssize_t label_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
-	const struct gpio_device *gdev = dev_get_drvdata(dev);
+	const struct gpio_chip	*chip = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "%s\n", gdev->label);
+	return sysfs_emit(buf, "%s\n", chip->label ?: "");
 }
 static DEVICE_ATTR_RO(label);
 
 static ssize_t ngpio_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
-	const struct gpio_device *gdev = dev_get_drvdata(dev);
+	const struct gpio_chip	*chip = dev_get_drvdata(dev);
 
-	return sysfs_emit(buf, "%u\n", gdev->ngpio);
+	return sysfs_emit(buf, "%u\n", chip->ngpio);
 }
 static DEVICE_ATTR_RO(ngpio);
 
@@ -448,17 +426,19 @@ ATTRIBUTE_GROUPS(gpiochip);
  * /sys/class/gpio/unexport ... write-only
  *	integer N ... number of GPIO to unexport
  */
-static ssize_t export_store(const struct class *class,
-				const struct class_attribute *attr,
+static ssize_t export_store(struct class *class,
+				struct class_attribute *attr,
 				const char *buf, size_t len)
 {
-	struct gpio_desc *desc;
-	int status, offset;
-	long gpio;
+	long			gpio;
+	struct gpio_desc	*desc;
+	int			status;
+	struct gpio_chip	*gc;
+	int			offset;
 
 	status = kstrtol(buf, 0, &gpio);
-	if (status)
-		return status;
+	if (status < 0)
+		goto done;
 
 	desc = gpio_to_desc(gpio);
 	/* reject invalid GPIOs */
@@ -466,13 +446,9 @@ static ssize_t export_store(const struct class *class,
 		pr_warn("%s: invalid GPIO %ld\n", __func__, gpio);
 		return -EINVAL;
 	}
-
-	CLASS(gpio_chip_guard, guard)(desc);
-	if (!guard.gc)
-		return -ENODEV;
-
+	gc = desc->gdev->chip;
 	offset = gpio_chip_hwgpio(desc);
-	if (!gpiochip_line_is_valid(guard.gc, offset)) {
+	if (!gpiochip_line_is_valid(gc, offset)) {
 		pr_warn("%s: GPIO %ld masked\n", __func__, gpio);
 		return -EINVAL;
 	}
@@ -487,16 +463,13 @@ static ssize_t export_store(const struct class *class,
 		goto done;
 
 	status = gpiod_set_transitory(desc, false);
-	if (status) {
-		gpiod_free(desc);
-		goto done;
+	if (!status) {
+		status = gpiod_export(desc, true);
+		if (status < 0)
+			gpiod_free(desc);
+		else
+			set_bit(FLAG_SYSFS, &desc->flags);
 	}
-
-	status = gpiod_export(desc, true);
-	if (status < 0)
-		gpiod_free(desc);
-	else
-		set_bit(FLAG_SYSFS, &desc->flags);
 
 done:
 	if (status)
@@ -505,20 +478,20 @@ done:
 }
 static CLASS_ATTR_WO(export);
 
-static ssize_t unexport_store(const struct class *class,
-				const struct class_attribute *attr,
+static ssize_t unexport_store(struct class *class,
+				struct class_attribute *attr,
 				const char *buf, size_t len)
 {
-	struct gpio_desc *desc;
-	int status;
-	long gpio;
+	long			gpio;
+	struct gpio_desc	*desc;
+	int			status;
 
 	status = kstrtol(buf, 0, &gpio);
 	if (status < 0)
 		goto done;
 
 	desc = gpio_to_desc(gpio);
-	/* reject bogus commands (gpiod_unexport() ignores them) */
+	/* reject bogus commands (gpio_unexport ignores them) */
 	if (!desc) {
 		pr_warn("%s: invalid GPIO %ld\n", __func__, gpio);
 		return -EINVAL;
@@ -531,9 +504,8 @@ static ssize_t unexport_store(const struct class *class,
 	 * they may be undone on its behalf too.
 	 */
 	if (test_and_clear_bit(FLAG_SYSFS, &desc->flags)) {
-		gpiod_unexport(desc);
-		gpiod_free(desc);
 		status = 0;
+		gpiod_free(desc);
 	}
 done:
 	if (status)
@@ -551,6 +523,8 @@ ATTRIBUTE_GROUPS(gpio_class);
 
 static struct class gpio_class = {
 	.name =		"gpio",
+	.owner =	THIS_MODULE,
+
 	.class_groups = gpio_class_groups,
 };
 
@@ -568,19 +542,21 @@ static struct class gpio_class = {
  * will see "direction" sysfs attribute which may be used to change
  * the gpio's direction.  A "value" attribute will always be provided.
  *
- * Returns:
- * 0 on success, or negative errno on failure.
+ * Returns zero on success, else an error.
  */
 int gpiod_export(struct gpio_desc *desc, bool direction_may_change)
 {
-	const char *ioname = NULL;
-	struct gpio_device *gdev;
-	struct gpiod_data *data;
-	struct device *dev;
-	int status, offset;
+	struct gpio_chip	*chip;
+	struct gpio_device	*gdev;
+	struct gpiod_data	*data;
+	unsigned long		flags;
+	int			status;
+	const char		*ioname = NULL;
+	struct device		*dev;
+	int			offset;
 
 	/* can't export until sysfs is available ... */
-	if (!class_is_registered(&gpio_class)) {
+	if (!gpio_class.p) {
 		pr_debug("%s: called too early!\n", __func__);
 		return -ENOENT;
 	}
@@ -590,28 +566,29 @@ int gpiod_export(struct gpio_desc *desc, bool direction_may_change)
 		return -EINVAL;
 	}
 
-	CLASS(gpio_chip_guard, guard)(desc);
-	if (!guard.gc)
-		return -ENODEV;
-
-	if (test_and_set_bit(FLAG_EXPORT, &desc->flags))
-		return -EPERM;
-
 	gdev = desc->gdev;
+	chip = gdev->chip;
 
 	mutex_lock(&sysfs_lock);
 
 	/* check if chip is being removed */
-	if (!gdev->mockdev) {
+	if (!chip || !gdev->mockdev) {
 		status = -ENODEV;
 		goto err_unlock;
 	}
 
-	if (!test_bit(FLAG_REQUESTED, &desc->flags)) {
-		gpiod_dbg(desc, "%s: unavailable (not requested)\n", __func__);
+	spin_lock_irqsave(&gpio_lock, flags);
+	if (!test_bit(FLAG_REQUESTED, &desc->flags) ||
+	     test_bit(FLAG_EXPORT, &desc->flags)) {
+		spin_unlock_irqrestore(&gpio_lock, flags);
+		gpiod_dbg(desc, "%s: unavailable (requested=%d, exported=%d)\n",
+				__func__,
+				test_bit(FLAG_REQUESTED, &desc->flags),
+				test_bit(FLAG_EXPORT, &desc->flags));
 		status = -EPERM;
 		goto err_unlock;
 	}
+	spin_unlock_irqrestore(&gpio_lock, flags);
 
 	data = kzalloc(sizeof(*data), GFP_KERNEL);
 	if (!data) {
@@ -621,14 +598,14 @@ int gpiod_export(struct gpio_desc *desc, bool direction_may_change)
 
 	data->desc = desc;
 	mutex_init(&data->mutex);
-	if (guard.gc->direction_input && guard.gc->direction_output)
+	if (chip->direction_input && chip->direction_output)
 		data->direction_can_change = direction_may_change;
 	else
 		data->direction_can_change = false;
 
 	offset = gpio_chip_hwgpio(desc);
-	if (guard.gc->names && guard.gc->names[offset])
-		ioname = guard.gc->names[offset];
+	if (chip->names && chip->names[offset])
+		ioname = chip->names[offset];
 
 	dev = device_create_with_groups(&gpio_class, &gdev->dev,
 					MKDEV(0, 0), data, gpio_groups,
@@ -639,6 +616,7 @@ int gpiod_export(struct gpio_desc *desc, bool direction_may_change)
 		goto err_free_data;
 	}
 
+	set_bit(FLAG_EXPORT, &desc->flags);
 	mutex_unlock(&sysfs_lock);
 	return 0;
 
@@ -646,7 +624,6 @@ err_free_data:
 	kfree(data);
 err_unlock:
 	mutex_unlock(&sysfs_lock);
-	clear_bit(FLAG_EXPORT, &desc->flags);
 	gpiod_dbg(desc, "%s: status %d\n", __func__, status);
 	return status;
 }
@@ -668,8 +645,7 @@ static int match_export(struct device *dev, const void *desc)
  * Set up a symlink from /sys/.../dev/name to /sys/class/gpio/gpioN
  * node. Caller is responsible for unlinking.
  *
- * Returns:
- * 0 on success, or negative errno on failure.
+ * Returns zero on success, else an error.
  */
 int gpiod_export_link(struct device *dev, const char *name,
 		      struct gpio_desc *desc)
@@ -744,9 +720,9 @@ EXPORT_SYMBOL_GPL(gpiod_unexport);
 
 int gpiochip_sysfs_register(struct gpio_device *gdev)
 {
-	struct gpio_chip *chip;
-	struct device *parent;
-	struct device *dev;
+	struct device	*dev;
+	struct device	*parent;
+	struct gpio_chip *chip = gdev->chip;
 
 	/*
 	 * Many systems add gpio chips for SOC support very early,
@@ -754,14 +730,8 @@ int gpiochip_sysfs_register(struct gpio_device *gdev)
 	 * register later, in gpiolib_sysfs_init() ... here we just
 	 * verify that _some_ field of gpio_class got initialized.
 	 */
-	if (!class_is_registered(&gpio_class))
+	if (!gpio_class.p)
 		return 0;
-
-	guard(srcu)(&gdev->srcu);
-
-	chip = srcu_dereference(gdev->chip, &gdev->srcu);
-	if (!chip)
-		return -ENODEV;
 
 	/*
 	 * For sysfs backward compatibility we need to preserve this
@@ -773,7 +743,7 @@ int gpiochip_sysfs_register(struct gpio_device *gdev)
 		parent = &gdev->dev;
 
 	/* use chip->base for the ID; it's already known to be unique */
-	dev = device_create_with_groups(&gpio_class, parent, MKDEV(0, 0), gdev,
+	dev = device_create_with_groups(&gpio_class, parent, MKDEV(0, 0), chip,
 					gpiochip_groups, GPIOCHIP_NAME "%d",
 					chip->base);
 	if (IS_ERR(dev))
@@ -789,54 +759,28 @@ int gpiochip_sysfs_register(struct gpio_device *gdev)
 void gpiochip_sysfs_unregister(struct gpio_device *gdev)
 {
 	struct gpio_desc *desc;
-	struct gpio_chip *chip;
+	struct gpio_chip *chip = gdev->chip;
 
-	scoped_guard(mutex, &sysfs_lock) {
-		if (!gdev->mockdev)
-			return;
-
-		device_unregister(gdev->mockdev);
-
-		/* prevent further gpiod exports */
-		gdev->mockdev = NULL;
-	}
-
-	guard(srcu)(&gdev->srcu);
-
-	chip = srcu_dereference(gdev->chip, &gdev->srcu);
-	if (!chip)
+	if (!gdev->mockdev)
 		return;
 
+	device_unregister(gdev->mockdev);
+
+	/* prevent further gpiod exports */
+	mutex_lock(&sysfs_lock);
+	gdev->mockdev = NULL;
+	mutex_unlock(&sysfs_lock);
+
 	/* unregister gpiod class devices owned by sysfs */
-	for_each_gpio_desc_with_flag(chip, desc, FLAG_SYSFS) {
-		gpiod_unexport(desc);
+	for_each_gpio_desc_with_flag(chip, desc, FLAG_SYSFS)
 		gpiod_free(desc);
-	}
-}
-
-/*
- * We're not really looking for a device - we just want to iterate over the
- * list and call this callback for each GPIO device. This is why this function
- * always returns 0.
- */
-static int gpiofind_sysfs_register(struct gpio_chip *gc, const void *data)
-{
-	struct gpio_device *gdev = gc->gpiodev;
-	int ret;
-
-	if (gdev->mockdev)
-		return 0;
-
-	ret = gpiochip_sysfs_register(gdev);
-	if (ret)
-		chip_err(gc, "failed to register the sysfs entry: %d\n", ret);
-
-	return 0;
 }
 
 static int __init gpiolib_sysfs_init(void)
 {
-	int status;
+	int		status;
+	unsigned long	flags;
+	struct gpio_device *gdev;
 
 	status = class_register(&gpio_class);
 	if (status < 0)
@@ -846,10 +790,28 @@ static int __init gpiolib_sysfs_init(void)
 	 * early (e.g. before the class_register above was called).
 	 *
 	 * We run before arch_initcall() so chip->dev nodes can have
-	 * registered, and so arch_initcall() can always gpiod_export().
+	 * registered, and so arch_initcall() can always gpio_export().
 	 */
-	(void)gpio_device_find(NULL, gpiofind_sysfs_register);
+	spin_lock_irqsave(&gpio_lock, flags);
+	list_for_each_entry(gdev, &gpio_devices, list) {
+		if (gdev->mockdev)
+			continue;
 
-	return 0;
+		/*
+		 * TODO we yield gpio_lock here because
+		 * gpiochip_sysfs_register() acquires a mutex. This is unsafe
+		 * and needs to be fixed.
+		 *
+		 * Also it would be nice to use gpiochip_find() here so we
+		 * can keep gpio_chips local to gpiolib.c, but the yield of
+		 * gpio_lock prevents us from doing this.
+		 */
+		spin_unlock_irqrestore(&gpio_lock, flags);
+		status = gpiochip_sysfs_register(gdev);
+		spin_lock_irqsave(&gpio_lock, flags);
+	}
+	spin_unlock_irqrestore(&gpio_lock, flags);
+
+	return status;
 }
 postcore_initcall(gpiolib_sysfs_init);

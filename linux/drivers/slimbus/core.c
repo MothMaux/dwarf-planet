@@ -30,10 +30,10 @@ static const struct slim_device_id *slim_match(const struct slim_device_id *id,
 	return NULL;
 }
 
-static int slim_device_match(struct device *dev, const struct device_driver *drv)
+static int slim_device_match(struct device *dev, struct device_driver *drv)
 {
 	struct slim_device *sbdev = to_slim_device(dev);
-	const struct slim_driver *sbdrv = to_slim_driver(drv);
+	struct slim_driver *sbdrv = to_slim_driver(drv);
 
 	/* Attempt an OF style match first */
 	if (of_driver_match_device(dev, drv))
@@ -93,14 +93,14 @@ static void slim_device_remove(struct device *dev)
 	}
 }
 
-static int slim_device_uevent(const struct device *dev, struct kobj_uevent_env *env)
+static int slim_device_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
-	const struct slim_device *sbdev = to_slim_device(dev);
+	struct slim_device *sbdev = to_slim_device(dev);
 
 	return add_uevent_var(env, "MODALIAS=slim:%s", dev_name(&sbdev->dev));
 }
 
-const struct bus_type slimbus_bus = {
+struct bus_type slimbus_bus = {
 	.name		= "slimbus",
 	.match		= slim_device_match,
 	.probe		= slim_device_probe,
@@ -378,8 +378,6 @@ struct slim_device *slim_get_device(struct slim_controller *ctrl,
 		sbdev = slim_alloc_device(ctrl, e_addr, NULL);
 		if (!sbdev)
 			return ERR_PTR(-ENOMEM);
-
-		get_device(&sbdev->dev);
 	}
 
 	return sbdev;
@@ -438,8 +436,8 @@ static int slim_device_alloc_laddr(struct slim_device *sbdev,
 		if (ret < 0)
 			goto err;
 	} else if (report_present) {
-		ret = ida_alloc_max(&ctrl->laddr_ida,
-				    SLIM_LA_MANAGER - 1, GFP_KERNEL);
+		ret = ida_simple_get(&ctrl->laddr_ida,
+				     0, SLIM_LA_MANAGER - 1, GFP_KERNEL);
 		if (ret < 0)
 			goto err;
 
@@ -498,24 +496,21 @@ int slim_device_report_present(struct slim_controller *ctrl,
 	if (ctrl->sched.clk_state != SLIM_CLK_ACTIVE) {
 		dev_err(ctrl->dev, "slim ctrl not active,state:%d, ret:%d\n",
 				    ctrl->sched.clk_state, ret);
-		goto out_put_rpm;
+		goto slimbus_not_active;
 	}
 
 	sbdev = slim_get_device(ctrl, e_addr);
-	if (IS_ERR(sbdev)) {
-		ret = -ENODEV;
-		goto out_put_rpm;
-	}
+	if (IS_ERR(sbdev))
+		return -ENODEV;
 
 	if (sbdev->is_laddr_valid) {
 		*laddr = sbdev->laddr;
-		ret = 0;
-	} else {
-		ret = slim_device_alloc_laddr(sbdev, true);
+		return 0;
 	}
 
-	put_device(&sbdev->dev);
-out_put_rpm:
+	ret = slim_device_alloc_laddr(sbdev, true);
+
+slimbus_not_active:
 	pm_runtime_mark_last_busy(ctrl->dev);
 	pm_runtime_put_autosuspend(ctrl->dev);
 	return ret;

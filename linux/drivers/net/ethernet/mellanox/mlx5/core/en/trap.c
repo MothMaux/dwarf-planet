@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
 /* Copyright (c) 2020 Mellanox Technologies */
 
+#include <net/page_pool.h>
 #include "en/txrx.h"
 #include "en/params.h"
 #include "en/trap.h"
@@ -63,25 +64,21 @@ static int mlx5e_open_trap_rq(struct mlx5e_priv *priv, struct mlx5e_trap *t)
 	struct mlx5e_create_cq_param ccp = {};
 	struct dim_cq_moder trap_moder = {};
 	struct mlx5e_rq *rq = &t->rq;
-	u16 q_counter;
 	int node;
 	int err;
 
 	node = dev_to_node(mdev->device);
-	q_counter = priv->q_counter[0];
 
-	ccp.netdev   = priv->netdev;
-	ccp.wq       = priv->wq;
 	ccp.node     = node;
 	ccp.ch_stats = t->stats;
 	ccp.napi     = &t->napi;
 	ccp.ix       = 0;
-	err = mlx5e_open_cq(priv->mdev, trap_moder, &rq_param->cqp, &ccp, &rq->cq);
+	err = mlx5e_open_cq(priv, trap_moder, &rq_param->cqp, &ccp, &rq->cq);
 	if (err)
 		return err;
 
 	mlx5e_init_trap_rq(t, &t->params, rq);
-	err = mlx5e_open_rq(&t->params, rq_param, NULL, node, q_counter, rq);
+	err = mlx5e_open_rq(&t->params, rq_param, NULL, node, rq);
 	if (err)
 		goto err_destroy_cq;
 
@@ -118,19 +115,20 @@ static int mlx5e_create_trap_direct_rq_tir(struct mlx5_core_dev *mdev, struct ml
 }
 
 static void mlx5e_build_trap_params(struct mlx5_core_dev *mdev,
-				    int max_mtu, struct mlx5e_trap *t)
+				    int max_mtu, u16 q_counter,
+				    struct mlx5e_trap *t)
 {
 	struct mlx5e_params *params = &t->params;
 
 	params->rq_wq_type = MLX5_WQ_TYPE_CYCLIC;
 	mlx5e_init_rq_type_params(mdev, params);
 	params->sw_mtu = max_mtu;
-	mlx5e_build_rq_param(mdev, params, NULL, &t->rq_param);
+	mlx5e_build_rq_param(mdev, params, NULL, q_counter, &t->rq_param);
 }
 
 static struct mlx5e_trap *mlx5e_open_trap(struct mlx5e_priv *priv)
 {
-	int cpu = mlx5_comp_vector_get_cpu(priv->mdev, 0);
+	int cpu = cpumask_first(mlx5_comp_irq_get_affinity_mask(priv->mdev, 0));
 	struct net_device *netdev = priv->netdev;
 	struct mlx5e_trap *t;
 	int err;
@@ -139,7 +137,7 @@ static struct mlx5e_trap *mlx5e_open_trap(struct mlx5e_priv *priv)
 	if (!t)
 		return ERR_PTR(-ENOMEM);
 
-	mlx5e_build_trap_params(priv->mdev, netdev->max_mtu, t);
+	mlx5e_build_trap_params(priv->mdev, netdev->max_mtu, priv->q_counter, t);
 
 	t->priv     = priv;
 	t->mdev     = priv->mdev;

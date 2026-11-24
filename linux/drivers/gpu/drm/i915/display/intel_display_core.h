@@ -14,43 +14,36 @@
 #include <linux/workqueue.h>
 
 #include <drm/drm_connector.h>
-#include <drm/drm_modeset_lock.h>
 
 #include "intel_cdclk.h"
-#include "intel_display_device.h"
-#include "intel_display_limits.h"
-#include "intel_display_params.h"
+#include "intel_display.h"
 #include "intel_display_power.h"
+#include "intel_dmc.h"
 #include "intel_dpll_mgr.h"
 #include "intel_fbc.h"
 #include "intel_global_state.h"
 #include "intel_gmbus.h"
 #include "intel_opregion.h"
-#include "intel_dmc_wl.h"
-#include "intel_wm_types.h"
-
-struct task_struct;
+#include "intel_pm_types.h"
 
 struct drm_i915_private;
 struct drm_property;
-struct drm_property_blob;
 struct i915_audio_component;
-struct i915_hdcp_arbiter;
+struct i915_hdcp_comp_master;
 struct intel_atomic_state;
 struct intel_audio_funcs;
+struct intel_bios_encoder_data;
 struct intel_cdclk_funcs;
 struct intel_cdclk_vals;
 struct intel_color_funcs;
 struct intel_crtc;
 struct intel_crtc_state;
-struct intel_dmc;
 struct intel_dpll_funcs;
 struct intel_dpll_mgr;
 struct intel_fbdev;
 struct intel_fdi_funcs;
 struct intel_hotplug_funcs;
 struct intel_initial_plane_config;
-struct intel_opregion;
 struct intel_overlay;
 
 /* Amount of SAGV/QGV points, BSpec precisely defines this */
@@ -68,8 +61,6 @@ struct intel_display_funcs {
 				struct intel_crtc_state *);
 	void (*get_initial_plane_config)(struct intel_crtc *,
 					 struct intel_initial_plane_config *);
-	bool (*fixup_initial_plane_config)(struct intel_crtc *crtc,
-					   const struct intel_initial_plane_config *plane_config);
 	void (*crtc_enable)(struct intel_atomic_state *state,
 			    struct intel_crtc *crtc);
 	void (*crtc_disable)(struct intel_atomic_state *state,
@@ -92,12 +83,6 @@ struct intel_wm_funcs {
 	void (*optimize_watermarks)(struct intel_atomic_state *state,
 				    struct intel_crtc *crtc);
 	int (*compute_global_watermarks)(struct intel_atomic_state *state);
-	void (*get_hw_state)(struct drm_i915_private *i915);
-};
-
-struct intel_audio_state {
-	struct intel_encoder *encoder;
-	u8 eld[MAX_ELD_BYTES];
 };
 
 struct intel_audio {
@@ -109,8 +94,8 @@ struct intel_audio {
 	int power_refcount;
 	u32 freq_cntrl;
 
-	/* current audio state for the audio component hooks */
-	struct intel_audio_state state[I915_MAX_TRANSCODERS];
+	/* Used to save the pipe-to-encoder mapping for audio */
+	struct intel_encoder *encoder_map[I915_MAX_PIPES];
 
 	/* necessary resource sharing with HDMI LPE audio driver. */
 	struct {
@@ -135,11 +120,6 @@ struct intel_dpll {
 		int nssc;
 		int ssc;
 	} ref_clks;
-
-	/*
-	 * Bitmask of PLLs using the PCH SSC, indexed using enum intel_dpll_id.
-	 */
-	u8 pch_ssc_use;
 };
 
 struct intel_frontbuffer_tracking {
@@ -178,18 +158,9 @@ struct intel_hotplug {
 	struct work_struct poll_init_work;
 	bool poll_enabled;
 
-	/*
-	 * Queuing of hotplug_work, reenable_work and poll_init_work is
-	 * enabled. Protected by drm_i915_private::irq_lock.
-	 */
-	bool detection_work_enabled;
-
 	unsigned int hpd_storm_threshold;
 	/* Whether or not to count short HPD IRQs in HPD storms */
 	u8 hpd_short_storm_enabled;
-
-	/* Last state reported by oob_hotplug_event for each encoder */
-	unsigned long oob_hotplug_last_state;
 
 	/*
 	 * if we get a HPD irq from DP and a HPD irq from non-DP
@@ -199,17 +170,6 @@ struct intel_hotplug {
 	 * blocked behind the non-DP one.
 	 */
 	struct workqueue_struct *dp_wq;
-
-	/*
-	 * Flag to track if long HPDs need not to be processed
-	 *
-	 * Some panels generate long HPDs while keep connected to the port.
-	 * This can cause issues with CI tests results. In CI systems we
-	 * don't expect to disconnect the panels and could ignore the long
-	 * HPDs generated from the faulty panels. This flag can be used as
-	 * cue to ignore the long HPDs and can be set / unset using debugfs.
-	 */
-	bool ignore_long_hpd;
 };
 
 struct intel_vbt_data {
@@ -234,10 +194,11 @@ struct intel_vbt_data {
 	struct list_head display_devices;
 	struct list_head bdb_blocks;
 
+	struct intel_bios_encoder_data *ports[I915_MAX_PORTS]; /* Non-NULL if port present. */
 	struct sdvo_device_mapping {
 		u8 initialized;
 		u8 dvo_port;
-		u8 target_addr;
+		u8 slave_addr;
 		u8 dvo_wiring;
 		u8 i2c_pin;
 		u8 ddc_pin;
@@ -270,7 +231,7 @@ struct intel_wm {
 		struct g4x_wm_values g4x;
 	};
 
-	u8 num_levels;
+	u8 max_level;
 
 	/*
 	 * Should be held around atomic WM register writing; also
@@ -283,9 +244,6 @@ struct intel_wm {
 };
 
 struct intel_display {
-	/* drm device backpointer */
-	struct drm_device *drm;
-
 	/* Display functions */
 	struct {
 		/* Top level crtc-ish functions */
@@ -313,10 +271,11 @@ struct intel_display {
 		const struct intel_audio_funcs *audio;
 	} funcs;
 
-	struct {
-		bool any_task_allowed;
-		struct task_struct *allowed_task;
-	} access;
+	/* Grouping using anonymous structs. Keep sorted. */
+	struct intel_atomic_helper {
+		struct llist_head free_list;
+		struct work_struct free_work;
+	} atomic_helper;
 
 	struct {
 		/* backlight registers and fields in struct intel_panel */
@@ -331,8 +290,6 @@ struct intel_display {
 			unsigned int deratedbw[I915_NUM_QGV_POINTS];
 			/* for each PSF GV point */
 			unsigned int psf_bw[I915_NUM_PSF_GV_POINTS];
-			/* Peak BW for each QGV point */
-			unsigned int peakbw[I915_NUM_QGV_POINTS];
 			u8 num_qgv_points;
 			u8 num_psf_gv_points;
 			u8 num_planes;
@@ -349,13 +306,7 @@ struct intel_display {
 		struct intel_global_obj obj;
 
 		unsigned int max_cdclk_freq;
-		unsigned int max_dotclk_freq;
-		unsigned int skl_preferred_vco_freq;
 	} cdclk;
-
-	struct {
-		struct drm_property_blob *glk_linear_degamma_lut;
-	} color;
 
 	struct {
 		/* The current hardware dbuf configuration */
@@ -373,11 +324,6 @@ struct intel_display {
 	} dkl;
 
 	struct {
-		struct intel_dmc *dmc;
-		intel_wakeref_t wakeref;
-	} dmc;
-
-	struct {
 		/* VLV/CHV/BXT/GLK DSI MMIO register base address */
 		u32 mmio_base;
 	} dsi;
@@ -392,10 +338,6 @@ struct intel_display {
 		unsigned int pll_freq;
 		u32 rx_config;
 	} fdi;
-
-	struct {
-		struct list_head obj_list;
-	} global;
 
 	struct {
 		/*
@@ -416,59 +358,12 @@ struct intel_display {
 	} gmbus;
 
 	struct {
-		struct i915_hdcp_arbiter *arbiter;
+		struct i915_hdcp_comp_master *master;
 		bool comp_added;
 
-		/*
-		 * HDCP message struct for allocation of memory which can be
-		 * reused when sending message to gsc cs.
-		 * this is only populated post Meteorlake
-		 */
-		struct intel_hdcp_gsc_message *hdcp_message;
-		/* Mutex to protect the above hdcp related values. */
-		struct mutex hdcp_mutex;
+		/* Mutex to protect the above hdcp component related values. */
+		struct mutex comp_mutex;
 	} hdcp;
-
-	struct {
-		/*
-		 * HTI (aka HDPORT) state read during initial hw readout. Most
-		 * platforms don't have HTI, so this will just stay 0. Those
-		 * that do will use this later to figure out which PLLs and PHYs
-		 * are unavailable for driver usage.
-		 */
-		u32 state;
-	} hti;
-
-	struct {
-		/* Access with DISPLAY_INFO() */
-		const struct intel_display_device_info *__device_info;
-
-		/* Access with DISPLAY_RUNTIME_INFO() */
-		struct intel_display_runtime_info __runtime_info;
-	} info;
-
-	struct {
-		bool false_color;
-	} ips;
-
-	struct {
-		bool display_irqs_enabled;
-
-		/* For i915gm/i945gm vblank irq workaround */
-		u8 vblank_enabled;
-
-		u32 de_irq_mask[I915_MAX_PIPES];
-		u32 pipestat_irq_mask[I915_MAX_PIPES];
-	} irq;
-
-	struct {
-		wait_queue_head_t waitqueue;
-
-		/* mutex to protect pmdemand programming sequence */
-		struct mutex lock;
-
-		struct intel_global_obj obj;
-	} pmdemand;
 
 	struct {
 		struct i915_power_domains domains;
@@ -497,12 +392,6 @@ struct intel_display {
 	} quirks;
 
 	struct {
-		/* restore state for suspend/resume and display reset */
-		struct drm_atomic_state *modeset_state;
-		struct drm_modeset_acquire_ctx reset_ctx;
-	} restore;
-
-	struct {
 		enum {
 			I915_SAGV_UNKNOWN = 0,
 			I915_SAGV_DISABLED,
@@ -514,24 +403,6 @@ struct intel_display {
 	} sagv;
 
 	struct {
-		/*
-		 * DG2: Mask of PHYs that were not calibrated by the firmware
-		 * and should not be used.
-		 */
-		u8 phy_failed_calibration;
-	} snps;
-
-	struct {
-		/*
-		 * Shadows for CHV DPLL_MD regs to keep the state
-		 * checker somewhat working in the presence hardware
-		 * crappiness (can't read out DPLL_MD for pipes B & C).
-		 */
-		u32 chv_dpll_md[I915_MAX_PIPES];
-		u32 bxt_phy_grc;
-	} state;
-
-	struct {
 		/* ordered wq for modesets */
 		struct workqueue_struct *modeset;
 
@@ -540,17 +411,15 @@ struct intel_display {
 	} wq;
 
 	/* Grouping using named structs. Keep sorted. */
-	struct drm_dp_tunnel_mgr *dp_tunnel_mgr;
 	struct intel_audio audio;
+	struct intel_dmc dmc;
 	struct intel_dpll dpll;
 	struct intel_fbc *fbc[I915_MAX_FBCS];
 	struct intel_frontbuffer_tracking fb_tracking;
 	struct intel_hotplug hotplug;
-	struct intel_opregion *opregion;
+	struct intel_opregion opregion;
 	struct intel_overlay *overlay;
-	struct intel_display_params params;
 	struct intel_vbt_data vbt;
-	struct intel_dmc_wl wl;
 	struct intel_wm wm;
 };
 

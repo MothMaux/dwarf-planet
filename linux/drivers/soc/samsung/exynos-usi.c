@@ -6,7 +6,6 @@
  * Samsung Exynos USI driver (Universal Serial Interface).
  */
 
-#include <linux/array_size.h>
 #include <linux/clk.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>

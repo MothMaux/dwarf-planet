@@ -226,11 +226,11 @@ static int hd44780_probe(struct platform_device *pdev)
 	if (!hdc)
 		return -ENOMEM;
 
-	lcd = charlcd_alloc(0);
+	lcd = charlcd_alloc();
 	if (!lcd)
 		goto fail1;
 
-	hd = kzalloc(sizeof(*hd), GFP_KERNEL);
+	hd = kzalloc(sizeof(struct hd44780), GFP_KERNEL);
 	if (!hd)
 		goto fail2;
 
@@ -313,22 +313,21 @@ static int hd44780_probe(struct platform_device *pdev)
 fail3:
 	kfree(hd);
 fail2:
-	charlcd_free(lcd);
+	kfree(lcd);
 fail1:
 	kfree(hdc);
 	return ret;
 }
 
-static void hd44780_remove(struct platform_device *pdev)
+static int hd44780_remove(struct platform_device *pdev)
 {
 	struct charlcd *lcd = platform_get_drvdata(pdev);
-	struct hd44780_common *hdc = lcd->drvdata;
 
 	charlcd_unregister(lcd);
-	kfree(hdc->hd44780);
 	kfree(lcd->drvdata);
 
-	charlcd_free(lcd);
+	kfree(lcd);
+	return 0;
 }
 
 static const struct of_device_id hd44780_of_match[] = {
@@ -339,7 +338,7 @@ MODULE_DEVICE_TABLE(of, hd44780_of_match);
 
 static struct platform_driver hd44780_driver = {
 	.probe = hd44780_probe,
-	.remove_new = hd44780_remove,
+	.remove = hd44780_remove,
 	.driver		= {
 		.name	= "hd44780",
 		.of_match_table = hd44780_of_match,

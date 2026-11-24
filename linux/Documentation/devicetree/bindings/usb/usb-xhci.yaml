@@ -10,7 +10,7 @@ maintainers:
   - Mathias Nyman <mathias.nyman@intel.com>
 
 allOf:
-  - $ref: usb-hcd.yaml#
+  - $ref: "usb-hcd.yaml#"
 
 properties:
   usb2-lpm-disable:
@@ -21,13 +21,6 @@ properties:
     description: Determines if platform is USB3 LPM capable
     type: boolean
 
-  snps,xhci-reset-on-resume:
-    description:
-      When set, xhci host will reset the host controller on resume from
-      suspend. Some controllers might lose power during suspend, so host
-      require re-initialization.
-    type: boolean
-
   quirk-broken-port-ped:
     description: Set if the controller has broken port disable mechanism
     type: boolean
@@ -35,12 +28,6 @@ properties:
   imod-interval-ns:
     description: Interrupt moderation interval
     default: 5000
-
-  num-hc-interrupters:
-    description: Maximum number of interrupters to allocate
-    $ref: /schemas/types.yaml#/definitions/uint16
-    minimum: 1
-    maximum: 1024
 
 additionalProperties: true
 

@@ -876,7 +876,7 @@ static void cs42l42_resume(struct sub_codec *cs42l42)
 		{ CS42L42_DET_INT_STATUS2, 0x00 },
 		{ CS42L42_TSRS_PLUG_STATUS, 0x00 },
 	};
-	unsigned int fsv;
+	int fsv_old, fsv_new;
 
 	/* Bring CS42L42 out of Reset */
 	spec->gpio_data = snd_hda_codec_read(codec, CS8409_PIN_AFG, 0, AC_VERB_GET_GPIO_DATA, 0);
@@ -888,20 +888,18 @@ static void cs42l42_resume(struct sub_codec *cs42l42)
 
 	/* Initialize CS42L42 companion codec */
 	cs8409_i2c_bulk_write(cs42l42, cs42l42->init_seq, cs42l42->init_seq_num);
-	msleep(CS42L42_INIT_TIMEOUT_MS);
+	usleep_range(20000, 25000);
 
 	/* Clear interrupts, by reading interrupt status registers */
 	cs8409_i2c_bulk_read(cs42l42, irq_regs, ARRAY_SIZE(irq_regs));
 
-	fsv = cs8409_i2c_read(cs42l42, CS42L42_HP_CTL);
-	if (cs42l42->full_scale_vol) {
-		// Set the full scale volume bit
-		fsv |= CS42L42_FULL_SCALE_VOL_MASK;
-		cs8409_i2c_write(cs42l42, CS42L42_HP_CTL, fsv);
-	}
-	// Unmute analog channels A and B
-	fsv = (fsv & ~CS42L42_ANA_MUTE_AB);
-	cs8409_i2c_write(cs42l42, CS42L42_HP_CTL, fsv);
+	fsv_old = cs8409_i2c_read(cs42l42, CS42L42_HP_CTL);
+	if (cs42l42->full_scale_vol == CS42L42_FULL_SCALE_VOL_0DB)
+		fsv_new = fsv_old & ~CS42L42_FULL_SCALE_VOL_MASK;
+	else
+		fsv_new = fsv_old & CS42L42_FULL_SCALE_VOL_MASK;
+	if (fsv_new != fsv_old)
+		cs8409_i2c_write(cs42l42, CS42L42_HP_CTL, fsv_new);
 
 	/* we have to explicitly allow unsol event handling even during the
 	 * resume phase so that the jack event is processed properly
@@ -911,6 +909,7 @@ static void cs42l42_resume(struct sub_codec *cs42l42)
 	cs42l42_enable_jack_detect(cs42l42);
 }
 
+#ifdef CONFIG_PM
 static void cs42l42_suspend(struct sub_codec *cs42l42)
 {
 	struct hda_codec *codec = cs42l42->codec;
@@ -922,7 +921,7 @@ static void cs42l42_suspend(struct sub_codec *cs42l42)
 		{ CS42L42_MIXER_CHA_VOL, 0x3F },
 		{ CS42L42_MIXER_ADC_VOL, 0x3F },
 		{ CS42L42_MIXER_CHB_VOL, 0x3F },
-		{ CS42L42_HP_CTL, 0x0D },
+		{ CS42L42_HP_CTL, 0x0F },
 		{ CS42L42_ASP_RX_DAI0_EN, 0x00 },
 		{ CS42L42_ASP_CLK_CFG, 0x00 },
 		{ CS42L42_PWR_CTL1, 0xFE },
@@ -949,6 +948,7 @@ static void cs42l42_suspend(struct sub_codec *cs42l42)
 	spec->gpio_data &= ~cs42l42->reset_gpio;
 	snd_hda_codec_write(codec, CS8409_PIN_AFG, 0, AC_VERB_SET_GPIO_DATA, spec->gpio_data);
 }
+#endif
 
 static void cs8409_free(struct hda_codec *codec)
 {
@@ -1003,6 +1003,7 @@ static void cs8409_cs42l42_jack_unsol_event(struct hda_codec *codec, unsigned in
 	}
 }
 
+#ifdef CONFIG_PM
 /* Manage PDREF, when transition to D3hot */
 static int cs8409_cs42l42_suspend(struct hda_codec *codec)
 {
@@ -1024,6 +1025,7 @@ static int cs8409_cs42l42_suspend(struct hda_codec *codec)
 
 	return 0;
 }
+#endif
 
 /* Vendor specific HW configuration
  * PLL, ASP, I2C, SPI, GPIOs, DMIC etc...
@@ -1078,7 +1080,9 @@ static const struct hda_codec_ops cs8409_cs42l42_patch_ops = {
 	.init = cs8409_init,
 	.free = cs8409_free,
 	.unsol_event = cs8409_cs42l42_jack_unsol_event,
+#ifdef CONFIG_PM
 	.suspend = cs8409_cs42l42_suspend,
+#endif
 };
 
 static int cs8409_cs42l42_exec_verb(struct hdac_device *dev, unsigned int cmd, unsigned int flags,
@@ -1306,7 +1310,9 @@ static const struct hda_codec_ops cs8409_dolphin_patch_ops = {
 	.init = cs8409_init,
 	.free = cs8409_free,
 	.unsol_event = dolphin_jack_unsol_event,
+#ifdef CONFIG_PM
 	.suspend = cs8409_cs42l42_suspend,
+#endif
 };
 
 static int dolphin_exec_verb(struct hdac_device *dev, unsigned int cmd, unsigned int flags,
@@ -1365,7 +1371,6 @@ void dolphin_fixups(struct hda_codec *codec, const struct hda_fixup *fix, int ac
 		spec->scodecs[CS8409_CODEC1] = &dolphin_cs42l42_1;
 		spec->scodecs[CS8409_CODEC1]->codec = codec;
 		spec->num_scodecs = 2;
-		spec->gen.suppress_vmaster = 1;
 
 		codec->patch_ops = cs8409_dolphin_patch_ops;
 
@@ -1405,9 +1410,8 @@ void dolphin_fixups(struct hda_codec *codec, const struct hda_fixup *fix, int ac
 		kctrl = snd_hda_gen_add_kctl(&spec->gen, "Line Out Playback Volume",
 					     &cs42l42_dac_volume_mixer);
 		/* Update Line Out kcontrol template */
-		if (kctrl)
-			kctrl->private_value = HDA_COMPOSE_AMP_VAL_OFS(DOLPHIN_HP_PIN_NID, 3, CS8409_CODEC1,
-					       HDA_OUTPUT, CS42L42_VOL_DAC) | HDA_AMP_VAL_MIN_MUTE;
+		kctrl->private_value = HDA_COMPOSE_AMP_VAL_OFS(DOLPHIN_HP_PIN_NID, 3, CS8409_CODEC1,
+				       HDA_OUTPUT, CS42L42_VOL_DAC) | HDA_AMP_VAL_MIN_MUTE;
 		cs8409_enable_ur(codec, 0);
 		snd_hda_codec_set_name(codec, "CS8409/CS42L42");
 		break;

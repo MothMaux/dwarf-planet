@@ -141,7 +141,7 @@
 
 #define CHIPID_AD9434			0x6A
 #define AD9434_DEF_OUTPUT_MODE		0x00
-#define AD9434_REG_VREF_MASK		GENMASK(4, 0)
+#define AD9434_REG_VREF_MASK		0xC0
 
 /*
  * Analog Devices AD9652
@@ -681,12 +681,12 @@ static struct iio_chan_spec_ext_info axiadc_ext_info[] = {
 	{
 	 .name = "test_mode_available",
 	 .read = ad9467_testmode_mode_available,
-	 .shared = IIO_SHARED_BY_TYPE,
+	 .shared = true,
 	 },
 	{
 	 .name = "scale_available",
 	 .read = ad9467_show_scale_available,
-	 .shared = IIO_SHARED_BY_TYPE,
+	 .shared = true,
 	 },
 	{},
 };
@@ -1224,8 +1224,6 @@ static int ad9467_probe(struct spi_device *spi)
 	int ret;
 
 	info = of_device_get_match_data(&spi->dev);
-	if (!info)
-		info = (void *)spi_get_device_id(spi)->driver_data;
 	if (!info)
 		return -ENODEV;
 

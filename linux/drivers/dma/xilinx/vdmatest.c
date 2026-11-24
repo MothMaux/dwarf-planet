@@ -68,7 +68,7 @@ MODULE_PARM_DESC(vsize, "Vertical size in bytes");
 #define MAX_NUM_FRAMES	32
 
 /**
- * struct xilinx_vdmatest_slave_thread - VDMA test thread
+ * struct vdmatest_slave_thread - VDMA test thread
  * @node: Thread node
  * @task: Task structure pointer
  * @tx_chan: Tx channel pointer
@@ -76,7 +76,6 @@ MODULE_PARM_DESC(vsize, "Vertical size in bytes");
  * @srcs: Source buffer
  * @dsts: Destination buffer
  * @type: DMA transaction type
- * @done: Thread status indicator
  */
 struct xilinx_vdmatest_slave_thread {
 	struct list_head node;
@@ -90,7 +89,7 @@ struct xilinx_vdmatest_slave_thread {
 };
 
 /**
- * struct xilinx_vdmatest_chan - VDMA Test channel
+ * struct vdmatest_chan - VDMA Test channel
  * @node: Channel node
  * @chan: DMA channel pointer
  * @threads: List of VDMA test threads
@@ -327,7 +326,7 @@ static int xilinx_vdmatest_slave_func(void *data)
 			dma_dsts[i] = dma_map_single(rx_dev->dev,
 							thread->dsts[i],
 							test_buf_size,
-							DMA_FROM_DEVICE);
+							DMA_DEV_TO_MEM);
 
 			if (dma_mapping_error(rx_dev->dev, dma_dsts[i])) {
 				failed_tests++;
@@ -348,7 +347,7 @@ static int xilinx_vdmatest_slave_func(void *data)
 			u8 *buf = thread->srcs[i];
 
 			dma_srcs[i] = dma_map_single(tx_dev->dev, buf, len,
-							DMA_TO_DEVICE);
+							DMA_MEM_TO_DEV);
 
 			if (dma_mapping_error(tx_dev->dev, dma_srcs[i])) {
 				failed_tests++;
@@ -368,11 +367,11 @@ static int xilinx_vdmatest_slave_func(void *data)
 		if (!rxd || !txd) {
 			for (i = 0; i < frm_cnt; i++)
 				dma_unmap_single(tx_dev->dev, dma_srcs[i], len,
-						DMA_TO_DEVICE);
+						DMA_MEM_TO_DEV);
 			for (i = 0; i < frm_cnt; i++)
 				dma_unmap_single(rx_dev->dev, dma_dsts[i],
 						test_buf_size,
-						DMA_FROM_DEVICE);
+						DMA_DEV_TO_MEM);
 			pr_warn("%s: #%u: prep error with len=0x%x ",
 					thread_name, total_tests - 1, len);
 			msleep(100);
@@ -444,7 +443,7 @@ static int xilinx_vdmatest_slave_func(void *data)
 		/* Unmap by myself */
 		for (i = 0; i < frm_cnt; i++)
 			dma_unmap_single(rx_dev->dev, dma_dsts[i],
-					 test_buf_size, DMA_FROM_DEVICE);
+					 test_buf_size, DMA_DEV_TO_MEM);
 
 		error_count = 0;
 
@@ -628,7 +627,7 @@ free_tx:
 	return err;
 }
 
-static void xilinx_vdmatest_remove(struct platform_device *pdev)
+static int xilinx_vdmatest_remove(struct platform_device *pdev)
 {
 	struct xilinx_vdmatest_chan *dtc, *_dtc;
 	struct dma_chan *chan;
@@ -642,6 +641,7 @@ static void xilinx_vdmatest_remove(struct platform_device *pdev)
 		dmaengine_terminate_async(chan);
 		dma_release_channel(chan);
 	}
+	return 0;
 }
 
 static const struct of_device_id xilinx_vdmatest_of_ids[] = {
@@ -663,4 +663,4 @@ module_platform_driver(xilinx_vdmatest_driver);
 
 MODULE_AUTHOR("Xilinx, Inc.");
 MODULE_DESCRIPTION("Xilinx AXI VDMA Test Client");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

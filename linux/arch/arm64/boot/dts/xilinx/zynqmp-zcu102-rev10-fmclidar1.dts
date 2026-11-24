@@ -131,12 +131,25 @@
 			clocks = <&axi_ad9094_adxcvr 1>;
 		};
 
-		rx_dma: dma-controller@9c400000 {
+		rx_dma: rx-dmac@9c400000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x9c400000 0x10000>;
 			#dma-cells = <1>;
 			interrupts = <0 109 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&zynqmp_clk 71>;
+
+			adi,channels {
+				#size-cells = <0>;
+				#address-cells = <1>;
+
+				dma-channel@0 {
+					reg = <0>;
+					adi,source-bus-width = <256>;
+					adi,source-bus-type = <2>;
+					adi,destination-bus-width = <64>;
+					adi,destination-bus-type = <0>;
+				};
+			};
 		};
 
 		axi_ad9094_core: axi-ad9094-hpc@84a10000 {

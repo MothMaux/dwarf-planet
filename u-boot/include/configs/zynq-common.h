@@ -16,6 +16,9 @@
 # define CONFIG_CPU_FREQ_HZ	800000000
 #endif
 
+/* TODO Define LibreSDR PS Clock Frequency to 50MHz in dts */
+#define CONFIG_ZYNQ_PS_CLK_FREQ	50000000UL
+
 #define	CONFIG_SYS_DEVICE_NULLDEV	1
 
 /* Cache options */
@@ -361,6 +364,14 @@
 		"if test -n $uenvcmd; then " \
 			"echo Running uenvcmd ...; " \
 			"run uenvcmd; " \
+		"fi\0" \
+	"sdboot=if mmcinfo; then " \
+		"run uenvboot; " \
+		"echo Copying Linux from SD to RAM... && " \
+		"load mmc 0 ${fit_load_address} ${kernel_image} && " \
+		"load mmc 0 ${devicetree_load_address} ${devicetree_image} && " \
+		"load mmc 0 ${ramdisk_load_address} ${ramdisk_image} && " \
+		"bootm ${fit_load_address} ${ramdisk_load_address} ${devicetree_load_address}; " \
 		"fi\0" \
 	"usbboot=if usb start; then " \
 			"run uenvboot; " \

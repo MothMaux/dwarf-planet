@@ -544,11 +544,6 @@ static int hisi_l3c_pmu_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "hisi_sccl%u_l3c%u",
-			      l3c_pmu->sccl_id, l3c_pmu->ccl_id);
-	if (!name)
-		return -ENOMEM;
-
 	ret = cpuhp_state_add_instance(CPUHP_AP_PERF_ARM_HISI_L3_ONLINE,
 				       &l3c_pmu->node);
 	if (ret) {
@@ -556,7 +551,13 @@ static int hisi_l3c_pmu_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	hisi_pmu_init(l3c_pmu, THIS_MODULE);
+	/*
+	 * CCL_ID is used to identify the L3C in the same SCCL which was
+	 * used _UID by mistake.
+	 */
+	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "hisi_sccl%u_l3c%u",
+			      l3c_pmu->sccl_id, l3c_pmu->ccl_id);
+	hisi_pmu_init(&l3c_pmu->pmu, name, l3c_pmu->pmu_events.attr_groups, THIS_MODULE);
 
 	ret = perf_pmu_register(&l3c_pmu->pmu, name, -1);
 	if (ret) {
@@ -568,13 +569,14 @@ static int hisi_l3c_pmu_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void hisi_l3c_pmu_remove(struct platform_device *pdev)
+static int hisi_l3c_pmu_remove(struct platform_device *pdev)
 {
 	struct hisi_pmu *l3c_pmu = platform_get_drvdata(pdev);
 
 	perf_pmu_unregister(&l3c_pmu->pmu);
 	cpuhp_state_remove_instance_nocalls(CPUHP_AP_PERF_ARM_HISI_L3_ONLINE,
 					    &l3c_pmu->node);
+	return 0;
 }
 
 static struct platform_driver hisi_l3c_pmu_driver = {
@@ -584,7 +586,7 @@ static struct platform_driver hisi_l3c_pmu_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe = hisi_l3c_pmu_probe,
-	.remove_new = hisi_l3c_pmu_remove,
+	.remove = hisi_l3c_pmu_remove,
 };
 
 static int __init hisi_l3c_pmu_module_init(void)

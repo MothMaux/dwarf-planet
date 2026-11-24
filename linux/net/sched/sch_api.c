@@ -31,7 +31,6 @@
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
-#include <net/tc_wrapper.h>
 
 #include <trace/events/qdisc.h>
 
@@ -228,7 +227,7 @@ int qdisc_set_default(const char *name)
 	if (!ops) {
 		/* Not found, drop lock and try to load module */
 		write_unlock(&qdisc_mod_lock);
-		request_module(NET_SCH_ALIAS_PREFIX "%s", name);
+		request_module("sch_%s", name);
 		write_lock(&qdisc_mod_lock);
 
 		ops = qdisc_lookup_default(name);
@@ -309,7 +308,7 @@ struct Qdisc *qdisc_lookup(struct net_device *dev, u32 handle)
 
 	if (dev_ingress_queue(dev))
 		q = qdisc_match_from_root(
-			rtnl_dereference(dev_ingress_queue(dev)->qdisc_sleeping),
+			dev_ingress_queue(dev)->qdisc_sleeping,
 			handle);
 out:
 	return q;
@@ -328,28 +327,22 @@ struct Qdisc *qdisc_lookup_rcu(struct net_device *dev, u32 handle)
 
 	nq = dev_ingress_queue_rcu(dev);
 	if (nq)
-		q = qdisc_match_from_root(rcu_dereference(nq->qdisc_sleeping),
-					  handle);
+		q = qdisc_match_from_root(nq->qdisc_sleeping, handle);
 out:
 	return q;
 }
 
-static struct Qdisc *qdisc_leaf(struct Qdisc *p, u32 classid,
-				struct netlink_ext_ack *extack)
+static struct Qdisc *qdisc_leaf(struct Qdisc *p, u32 classid)
 {
 	unsigned long cl;
 	const struct Qdisc_class_ops *cops = p->ops->cl_ops;
 
-	if (cops == NULL) {
-		NL_SET_ERR_MSG(extack, "Parent qdisc is not classful");
-		return ERR_PTR(-EOPNOTSUPP);
-	}
+	if (cops == NULL)
+		return NULL;
 	cl = cops->find(p, classid);
 
-	if (cl == 0) {
-		NL_SET_ERR_MSG(extack, "Specified class not found");
-		return ERR_PTR(-ENOENT);
-	}
+	if (cl == 0)
+		return NULL;
 	return cops->leaf(p, cl);
 }
 
@@ -598,6 +591,17 @@ out:
 		pkt_len = 1;
 	qdisc_skb_cb(skb)->pkt_len = pkt_len;
 }
+EXPORT_SYMBOL(__qdisc_calculate_pkt_len);
+
+void qdisc_warn_nonwc(const char *txt, struct Qdisc *qdisc)
+{
+	if (!(qdisc->flags & TCQ_F_WARN_NONWC)) {
+		pr_warn("%s: %s qdisc %X: is non-work-conserving?\n",
+			txt, qdisc->ops->id, qdisc->handle >> 16);
+		qdisc->flags |= TCQ_F_WARN_NONWC;
+	}
+}
+EXPORT_SYMBOL(qdisc_warn_nonwc);
 
 static enum hrtimer_restart qdisc_watchdog(struct hrtimer *timer)
 {
@@ -629,26 +633,19 @@ EXPORT_SYMBOL(qdisc_watchdog_init);
 void qdisc_watchdog_schedule_range_ns(struct qdisc_watchdog *wd, u64 expires,
 				      u64 delta_ns)
 {
-	bool deactivated;
-
-	rcu_read_lock();
-	deactivated = test_bit(__QDISC_STATE_DEACTIVATED,
-			       &qdisc_root_sleeping(wd->qdisc)->state);
-	rcu_read_unlock();
-	if (deactivated)
+	if (test_bit(__QDISC_STATE_DEACTIVATED,
+		     &qdisc_root_sleeping(wd->qdisc)->state))
 		return;
 
 	if (hrtimer_is_queued(&wd->timer)) {
-		u64 softexpires;
-
-		softexpires = ktime_to_ns(hrtimer_get_softexpires(&wd->timer));
 		/* If timer is already set in [expires, expires + delta_ns],
 		 * do not reprogram it.
 		 */
-		if (softexpires - expires <= delta_ns)
+		if (wd->last_expires - expires <= delta_ns)
 			return;
 	}
 
+	wd->last_expires = expires;
 	hrtimer_start_range_ns(&wd->timer,
 			       ns_to_ktime(expires),
 			       delta_ns,
@@ -774,33 +771,42 @@ static u32 qdisc_alloc_handle(struct net_device *dev)
 
 void qdisc_tree_reduce_backlog(struct Qdisc *sch, int n, int len)
 {
+	bool qdisc_is_offloaded = sch->flags & TCQ_F_OFFLOADED;
 	const struct Qdisc_class_ops *cops;
 	unsigned long cl;
 	u32 parentid;
 	bool notify;
 	int drops;
 
+	if (n == 0 && len == 0)
+		return;
 	drops = max_t(int, n, 0);
 	rcu_read_lock();
 	while ((parentid = sch->parent)) {
-		if (parentid == TC_H_ROOT)
+		if (TC_H_MAJ(parentid) == TC_H_MAJ(TC_H_INGRESS))
 			break;
 
 		if (sch->flags & TCQ_F_NOPARENT)
 			break;
-		/* Notify parent qdisc only if child qdisc becomes empty. */
-		notify = !sch->q.qlen;
+		/* Notify parent qdisc only if child qdisc becomes empty.
+		 *
+		 * If child was empty even before update then backlog
+		 * counter is screwed and we skip notification because
+		 * parent class is already passive.
+		 *
+		 * If the original child was offloaded then it is allowed
+		 * to be seem as empty, so the parent is notified anyway.
+		 */
+		notify = !sch->q.qlen && !WARN_ON_ONCE(!n &&
+						       !qdisc_is_offloaded);
 		/* TODO: perform the search on a per txq basis */
-		sch = qdisc_lookup_rcu(qdisc_dev(sch), TC_H_MAJ(parentid));
+		sch = qdisc_lookup(qdisc_dev(sch), TC_H_MAJ(parentid));
 		if (sch == NULL) {
 			WARN_ON_ONCE(parentid != TC_H_ROOT);
 			break;
 		}
 		cops = sch->ops->cl_ops;
 		if (notify && cops->qlen_notify) {
-			/* Note that qlen_notify must be idempotent as it may get called
-			 * multiple times.
-			 */
 			cl = cops->find(sch, parentid);
 			cops->qlen_notify(sch, cl);
 		}
@@ -895,8 +901,7 @@ static void qdisc_offload_graft_root(struct net_device *dev,
 }
 
 static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
-			 u32 portid, u32 seq, u16 flags, int event,
-			 struct netlink_ext_ack *extack)
+			 u32 portid, u32 seq, u16 flags, int event)
 {
 	struct gnet_stats_basic_sync __percpu *cpu_bstats = NULL;
 	struct gnet_stats_queue __percpu *cpu_qstats = NULL;
@@ -964,12 +969,7 @@ static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
 	if (gnet_stats_finish_copy(&d) < 0)
 		goto nla_put_failure;
 
-	if (extack && extack->_msg &&
-	    nla_put_string(skb, TCA_EXT_WARN_MSG, extack->_msg))
-		goto out_nlmsg_trim;
-
 	nlh->nlmsg_len = skb_tail_pointer(skb) - b;
-
 	return skb->len;
 
 out_nlmsg_trim:
@@ -988,42 +988,12 @@ static bool tc_qdisc_dump_ignore(struct Qdisc *q, bool dump_invisible)
 	return false;
 }
 
-static int qdisc_get_notify(struct net *net, struct sk_buff *oskb,
-			    struct nlmsghdr *n, u32 clid, struct Qdisc *q,
-			    struct netlink_ext_ack *extack)
-{
-	struct sk_buff *skb;
-	u32 portid = oskb ? NETLINK_CB(oskb).portid : 0;
-
-	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
-	if (!skb)
-		return -ENOBUFS;
-
-	if (!tc_qdisc_dump_ignore(q, false)) {
-		if (tc_fill_qdisc(skb, q, clid, portid, n->nlmsg_seq, 0,
-				  RTM_NEWQDISC, extack) < 0)
-			goto err_out;
-	}
-
-	if (skb->len)
-		return rtnetlink_send(skb, net, portid, RTNLGRP_TC,
-				      n->nlmsg_flags & NLM_F_ECHO);
-
-err_out:
-	kfree_skb(skb);
-	return -EINVAL;
-}
-
 static int qdisc_notify(struct net *net, struct sk_buff *oskb,
 			struct nlmsghdr *n, u32 clid,
-			struct Qdisc *old, struct Qdisc *new,
-			struct netlink_ext_ack *extack)
+			struct Qdisc *old, struct Qdisc *new)
 {
 	struct sk_buff *skb;
 	u32 portid = oskb ? NETLINK_CB(oskb).portid : 0;
-
-	if (!rtnl_notify_needed(net, n->nlmsg_flags, RTNLGRP_TC))
-		return 0;
 
 	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
 	if (!skb)
@@ -1031,12 +1001,12 @@ static int qdisc_notify(struct net *net, struct sk_buff *oskb,
 
 	if (old && !tc_qdisc_dump_ignore(old, false)) {
 		if (tc_fill_qdisc(skb, old, clid, portid, n->nlmsg_seq,
-				  0, RTM_DELQDISC, extack) < 0)
+				  0, RTM_DELQDISC) < 0)
 			goto err_out;
 	}
 	if (new && !tc_qdisc_dump_ignore(new, false)) {
 		if (tc_fill_qdisc(skb, new, clid, portid, n->nlmsg_seq,
-				  old ? NLM_F_REPLACE : 0, RTM_NEWQDISC, extack) < 0)
+				  old ? NLM_F_REPLACE : 0, RTM_NEWQDISC) < 0)
 			goto err_out;
 	}
 
@@ -1051,11 +1021,10 @@ err_out:
 
 static void notify_and_destroy(struct net *net, struct sk_buff *skb,
 			       struct nlmsghdr *n, u32 clid,
-			       struct Qdisc *old, struct Qdisc *new,
-			       struct netlink_ext_ack *extack)
+			       struct Qdisc *old, struct Qdisc *new)
 {
 	if (new || old)
-		qdisc_notify(net, skb, n, clid, old, new, extack);
+		qdisc_notify(net, skb, n, clid, old, new);
 
 	if (old)
 		qdisc_put(old);
@@ -1093,28 +1062,16 @@ static int qdisc_graft(struct net_device *dev, struct Qdisc *parent,
 
 	if (parent == NULL) {
 		unsigned int i, num_q, ingress;
-		struct netdev_queue *dev_queue;
 
 		ingress = 0;
 		num_q = dev->num_tx_queues;
 		if ((q && q->flags & TCQ_F_INGRESS) ||
 		    (new && new->flags & TCQ_F_INGRESS)) {
+			num_q = 1;
 			ingress = 1;
-			dev_queue = dev_ingress_queue(dev);
-			if (!dev_queue) {
+			if (!dev_ingress_queue(dev)) {
 				NL_SET_ERR_MSG(extack, "Device does not have an ingress queue");
 				return -ENOENT;
-			}
-
-			q = rtnl_dereference(dev_queue->qdisc_sleeping);
-
-			/* This is the counterpart of that qdisc_refcount_inc_nz() call in
-			 * __tcf_qdisc_find() for filter requests.
-			 */
-			if (!qdisc_refcount_dec_if_one(q)) {
-				NL_SET_ERR_MSG(extack,
-					       "Current ingress or clsact Qdisc has ongoing filter requests");
-				return -EBUSY;
 			}
 		}
 
@@ -1126,26 +1083,18 @@ static int qdisc_graft(struct net_device *dev, struct Qdisc *parent,
 		if (new && new->ops->attach && !ingress)
 			goto skip;
 
-		if (!ingress) {
-			for (i = 0; i < num_q; i++) {
+		for (i = 0; i < num_q; i++) {
+			struct netdev_queue *dev_queue = dev_ingress_queue(dev);
+
+			if (!ingress)
 				dev_queue = netdev_get_tx_queue(dev, i);
-				old = dev_graft_qdisc(dev_queue, new);
 
-				if (new && i > 0)
-					qdisc_refcount_inc(new);
+			old = dev_graft_qdisc(dev_queue, new);
+			if (new && i > 0)
+				qdisc_refcount_inc(new);
+
+			if (!ingress)
 				qdisc_put(old);
-			}
-		} else {
-			old = dev_graft_qdisc(dev_queue, NULL);
-
-			/* {ingress,clsact}_destroy() @old before grafting @new to avoid
-			 * unprotected concurrent accesses to net_device::miniq_{in,e}gress
-			 * pointer(s) in mini_qdisc_pair_swap().
-			 */
-			qdisc_notify(net, skb, n, classid, old, new, extack);
-			qdisc_destroy(old);
-
-			dev_graft_qdisc(dev_queue, new);
 		}
 
 skip:
@@ -1155,10 +1104,12 @@ skip:
 				qdisc_refcount_inc(new);
 			rcu_assign_pointer(dev->qdisc, new ? : &noop_qdisc);
 
-			notify_and_destroy(net, skb, n, classid, old, new, extack);
+			notify_and_destroy(net, skb, n, classid, old, new);
 
 			if (new && new->ops->attach)
 				new->ops->attach(new);
+		} else {
+			notify_and_destroy(net, skb, n, classid, old, new);
 		}
 
 		if (dev->flags & IFF_UP)
@@ -1181,21 +1132,10 @@ skip:
 			return -ENOENT;
 		}
 
-		if (new && new->ops == &noqueue_qdisc_ops) {
-			NL_SET_ERR_MSG(extack, "Cannot assign noqueue to a class");
-			return -EINVAL;
-		}
-
-		if (new &&
-		    !(parent->flags & TCQ_F_MQROOT) &&
-		    rcu_access_pointer(new->stab)) {
-			NL_SET_ERR_MSG(extack, "STAB not supported on a non root");
-			return -EINVAL;
-		}
 		err = cops->graft(parent, cl, new, &old, extack);
 		if (err)
 			return err;
-		notify_and_destroy(net, skb, n, classid, old, new, extack);
+		notify_and_destroy(net, skb, n, classid, old, new);
 	}
 	return 0;
 }
@@ -1266,7 +1206,7 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 			 * go away in the mean time.
 			 */
 			rtnl_unlock();
-			request_module(NET_SCH_ALIAS_PREFIX "%s", name);
+			request_module("sch_%s", name);
 			rtnl_lock();
 			ops = qdisc_lookup_ops(kind);
 			if (ops != NULL) {
@@ -1296,12 +1236,7 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 	sch->parent = parent;
 
 	if (handle == TC_H_INGRESS) {
-		if (!(sch->flags & TCQ_F_INGRESS)) {
-			NL_SET_ERR_MSG(extack,
-				       "Specified parent ID is reserved for ingress and clsact Qdiscs");
-			err = -EINVAL;
-			goto err_out3;
-		}
+		sch->flags |= TCQ_F_INGRESS;
 		handle = TC_H_MAKE(TC_H_INGRESS, 0);
 	} else {
 		if (handle == 0) {
@@ -1325,7 +1260,7 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 	 * before again attaching a qdisc.
 	 */
 	if ((dev->priv_flags & IFF_NO_QUEUE) && (dev->tx_queue_len == 0)) {
-		WRITE_ONCE(dev->tx_queue_len, DEFAULT_TX_QUEUE_LEN);
+		dev->tx_queue_len = DEFAULT_TX_QUEUE_LEN;
 		netdev_info(dev, "Caught tx_queue_len zero misconfig\n");
 	}
 
@@ -1333,21 +1268,20 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 	if (err)
 		goto err_out3;
 
+	if (ops->init) {
+		err = ops->init(sch, tca[TCA_OPTIONS], extack);
+		if (err != 0)
+			goto err_out5;
+	}
+
 	if (tca[TCA_STAB]) {
 		stab = qdisc_get_stab(tca[TCA_STAB], extack);
 		if (IS_ERR(stab)) {
 			err = PTR_ERR(stab);
-			goto err_out3;
+			goto err_out4;
 		}
 		rcu_assign_pointer(sch->stab, stab);
 	}
-
-	if (ops->init) {
-		err = ops->init(sch, tca[TCA_OPTIONS], extack);
-		if (err != 0)
-			goto err_out4;
-	}
-
 	if (tca[TCA_RATE]) {
 		err = -EOPNOTSUPP;
 		if (sch->flags & TCQ_F_MQROOT) {
@@ -1372,15 +1306,11 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 
 	return sch;
 
-err_out4:
-	/* Even if ops->init() failed, we call ops->destroy()
-	 * like qdisc_create_dflt().
-	 */
+err_out5:
+	/* ops->init() failed, we call ->destroy() like qdisc_create_dflt() */
 	if (ops->destroy)
 		ops->destroy(sch);
-	qdisc_put_stab(rtnl_dereference(sch->stab));
 err_out3:
-	lockdep_unregister_key(&sch->root_lock_key);
 	netdev_put(dev, &sch->dev_tracker);
 	qdisc_free(sch);
 err_out2:
@@ -1388,6 +1318,16 @@ err_out2:
 err_out:
 	*errp = err;
 	return NULL;
+
+err_out4:
+	/*
+	 * Any broken qdiscs that would require a ops->reset() here?
+	 * The qdisc was never in action so it shouldn't be necessary.
+	 */
+	qdisc_put_stab(rtnl_dereference(sch->stab));
+	if (ops->destroy)
+		ops->destroy(sch);
+	goto err_out3;
 }
 
 static int qdisc_change(struct Qdisc *sch, struct nlattr **tca,
@@ -1521,9 +1461,9 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 					NL_SET_ERR_MSG(extack, "Failed to find qdisc with specified classid");
 					return -ENOENT;
 				}
-				q = qdisc_leaf(p, clid, extack);
+				q = qdisc_leaf(p, clid);
 			} else if (dev_ingress_queue(dev)) {
-				q = rtnl_dereference(dev_ingress_queue(dev)->qdisc_sleeping);
+				q = dev_ingress_queue(dev)->qdisc_sleeping;
 			}
 		} else {
 			q = rtnl_dereference(dev->qdisc);
@@ -1532,8 +1472,6 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 			NL_SET_ERR_MSG(extack, "Cannot find specified qdisc on specified device");
 			return -ENOENT;
 		}
-		if (IS_ERR(q))
-			return PTR_ERR(q);
 
 		if (tcm->tcm_handle && q->handle != tcm->tcm_handle) {
 			NL_SET_ERR_MSG(extack, "Invalid handle");
@@ -1565,33 +1503,15 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 		if (err != 0)
 			return err;
 	} else {
-		qdisc_get_notify(net, skb, n, clid, q, NULL);
+		qdisc_notify(net, skb, n, clid, NULL, q);
 	}
 	return 0;
-}
-
-static bool req_create_or_replace(struct nlmsghdr *n)
-{
-	return (n->nlmsg_flags & NLM_F_CREATE &&
-		n->nlmsg_flags & NLM_F_REPLACE);
-}
-
-static bool req_create_exclusive(struct nlmsghdr *n)
-{
-	return (n->nlmsg_flags & NLM_F_CREATE &&
-		n->nlmsg_flags & NLM_F_EXCL);
-}
-
-static bool req_change(struct nlmsghdr *n)
-{
-	return (!(n->nlmsg_flags & NLM_F_CREATE) &&
-		!(n->nlmsg_flags & NLM_F_REPLACE) &&
-		!(n->nlmsg_flags & NLM_F_EXCL));
 }
 
 /*
  * Create/change qdisc.
  */
+
 static int tc_modify_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 			   struct netlink_ext_ack *extack)
 {
@@ -1627,11 +1547,9 @@ replay:
 					NL_SET_ERR_MSG(extack, "Failed to find specified qdisc");
 					return -ENOENT;
 				}
-				q = qdisc_leaf(p, clid, extack);
-				if (IS_ERR(q))
-					return PTR_ERR(q);
+				q = qdisc_leaf(p, clid);
 			} else if (dev_ingress_queue_create(dev)) {
-				q = rtnl_dereference(dev_ingress_queue(dev)->qdisc_sleeping);
+				q = dev_ingress_queue(dev)->qdisc_sleeping;
 			}
 		} else {
 			q = rtnl_dereference(dev->qdisc);
@@ -1654,10 +1572,6 @@ replay:
 				q = qdisc_lookup(dev, tcm->tcm_handle);
 				if (!q)
 					goto create_n_graft;
-				if (q->parent != tcm->tcm_parent) {
-					NL_SET_ERR_MSG(extack, "Cannot move an existing qdisc to a different parent");
-					return -EINVAL;
-				}
 				if (n->nlmsg_flags & NLM_F_EXCL) {
 					NL_SET_ERR_MSG(extack, "Exclusivity flag on, cannot override");
 					return -EEXIST;
@@ -1667,19 +1581,10 @@ replay:
 					NL_SET_ERR_MSG(extack, "Invalid qdisc name");
 					return -EINVAL;
 				}
-				if (q->flags & TCQ_F_INGRESS) {
-					NL_SET_ERR_MSG(extack,
-						       "Cannot regraft ingress or clsact Qdiscs");
-					return -EINVAL;
-				}
 				if (q == p ||
 				    (p && check_loop(q, p, 0))) {
 					NL_SET_ERR_MSG(extack, "Qdisc parent/child loop detected");
 					return -ELOOP;
-				}
-				if (clid == TC_H_INGRESS) {
-					NL_SET_ERR_MSG(extack, "Ingress cannot graft directly");
-					return -EINVAL;
 				}
 				qdisc_refcount_inc(q);
 				goto graft;
@@ -1691,35 +1596,27 @@ replay:
 				 *
 				 *   We know, that some child q is already
 				 *   attached to this parent and have choice:
-				 *   1) change it or 2) create/graft new one.
-				 *   If the requested qdisc kind is different
-				 *   than the existing one, then we choose graft.
-				 *   If they are the same then this is "change"
-				 *   operation - just let it fallthrough..
+				 *   either to change it or to create/graft new one.
 				 *
 				 *   1. We are allowed to create/graft only
-				 *   if the request is explicitly stating
-				 *   "please create if it doesn't exist".
+				 *   if CREATE and REPLACE flags are set.
 				 *
-				 *   2. If the request is to exclusive create
-				 *   then the qdisc tcm_handle is not expected
+				 *   2. If EXCL is set, requestor wanted to say,
+				 *   that qdisc tcm_handle is not expected
 				 *   to exist, so that we choose create/graft too.
 				 *
 				 *   3. The last case is when no flags are set.
-				 *   This will happen when for example tc
-				 *   utility issues a "change" command.
 				 *   Alas, it is sort of hole in API, we
 				 *   cannot decide what to do unambiguously.
-				 *   For now we select create/graft.
+				 *   For now we select create/graft, if
+				 *   user gave KIND, which does not match existing.
 				 */
-				if (tca[TCA_KIND] &&
-				    nla_strcmp(tca[TCA_KIND], q->ops->id)) {
-					if (req_create_or_replace(n) ||
-					    req_create_exclusive(n))
-						goto create_n_graft;
-					else if (req_change(n))
-						goto create_n_graft2;
-				}
+				if ((n->nlmsg_flags & NLM_F_CREATE) &&
+				    (n->nlmsg_flags & NLM_F_REPLACE) &&
+				    ((n->nlmsg_flags & NLM_F_EXCL) ||
+				     (tca[TCA_KIND] &&
+				      nla_strcmp(tca[TCA_KIND], q->ops->id))))
+					goto create_n_graft;
 			}
 		}
 	} else {
@@ -1745,7 +1642,7 @@ replay:
 	}
 	err = qdisc_change(q, tca, extack);
 	if (err == 0)
-		qdisc_notify(net, skb, n, clid, NULL, q, extack);
+		qdisc_notify(net, skb, n, clid, NULL, q);
 	return err;
 
 create_n_graft:
@@ -1753,7 +1650,6 @@ create_n_graft:
 		NL_SET_ERR_MSG(extack, "Qdisc not found. To create specify NLM_F_CREATE flag");
 		return -ENOENT;
 	}
-create_n_graft2:
 	if (clid == TC_H_INGRESS) {
 		if (dev_ingress_queue(dev)) {
 			q = qdisc_create(dev, dev_ingress_queue(dev),
@@ -1813,7 +1709,7 @@ static int tc_dump_qdisc_root(struct Qdisc *root, struct sk_buff *skb,
 		if (!tc_qdisc_dump_ignore(q, dump_invisible) &&
 		    tc_fill_qdisc(skb, q, q->parent, NETLINK_CB(cb->skb).portid,
 				  cb->nlh->nlmsg_seq, NLM_F_MULTI,
-				  RTM_NEWQDISC, NULL) <= 0)
+				  RTM_NEWQDISC) <= 0)
 			goto done;
 		q_idx++;
 	}
@@ -1835,7 +1731,7 @@ static int tc_dump_qdisc_root(struct Qdisc *root, struct sk_buff *skb,
 		if (!tc_qdisc_dump_ignore(q, dump_invisible) &&
 		    tc_fill_qdisc(skb, q, q->parent, NETLINK_CB(cb->skb).portid,
 				  cb->nlh->nlmsg_seq, NLM_F_MULTI,
-				  RTM_NEWQDISC, NULL) <= 0)
+				  RTM_NEWQDISC) <= 0)
 			goto done;
 		q_idx++;
 	}
@@ -1885,8 +1781,8 @@ static int tc_dump_qdisc(struct sk_buff *skb, struct netlink_callback *cb)
 
 		dev_queue = dev_ingress_queue(dev);
 		if (dev_queue &&
-		    tc_dump_qdisc_root(rtnl_dereference(dev_queue->qdisc_sleeping),
-				       skb, cb, &q_idx, s_q_idx, false,
+		    tc_dump_qdisc_root(dev_queue->qdisc_sleeping, skb, cb,
+				       &q_idx, s_q_idx, false,
 				       tca[TCA_DUMP_INVISIBLE]) < 0)
 			goto done;
 
@@ -1908,8 +1804,8 @@ done:
  ************************************************/
 
 static int tc_fill_tclass(struct sk_buff *skb, struct Qdisc *q,
-			  unsigned long cl, u32 portid, u32 seq, u16 flags,
-			  int event, struct netlink_ext_ack *extack)
+			  unsigned long cl,
+			  u32 portid, u32 seq, u16 flags, int event)
 {
 	struct tcmsg *tcm;
 	struct nlmsghdr  *nlh;
@@ -1944,12 +1840,7 @@ static int tc_fill_tclass(struct sk_buff *skb, struct Qdisc *q,
 	if (gnet_stats_finish_copy(&d) < 0)
 		goto nla_put_failure;
 
-	if (extack && extack->_msg &&
-	    nla_put_string(skb, TCA_EXT_WARN_MSG, extack->_msg))
-		goto out_nlmsg_trim;
-
 	nlh->nlmsg_len = skb_tail_pointer(skb) - b;
-
 	return skb->len;
 
 out_nlmsg_trim:
@@ -1960,30 +1851,7 @@ nla_put_failure:
 
 static int tclass_notify(struct net *net, struct sk_buff *oskb,
 			 struct nlmsghdr *n, struct Qdisc *q,
-			 unsigned long cl, int event, struct netlink_ext_ack *extack)
-{
-	struct sk_buff *skb;
-	u32 portid = oskb ? NETLINK_CB(oskb).portid : 0;
-
-	if (!rtnl_notify_needed(net, n->nlmsg_flags, RTNLGRP_TC))
-		return 0;
-
-	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
-	if (!skb)
-		return -ENOBUFS;
-
-	if (tc_fill_tclass(skb, q, cl, portid, n->nlmsg_seq, 0, event, extack) < 0) {
-		kfree_skb(skb);
-		return -EINVAL;
-	}
-
-	return rtnetlink_send(skb, net, portid, RTNLGRP_TC,
-			      n->nlmsg_flags & NLM_F_ECHO);
-}
-
-static int tclass_get_notify(struct net *net, struct sk_buff *oskb,
-			     struct nlmsghdr *n, struct Qdisc *q,
-			     unsigned long cl, struct netlink_ext_ack *extack)
+			 unsigned long cl, int event)
 {
 	struct sk_buff *skb;
 	u32 portid = oskb ? NETLINK_CB(oskb).portid : 0;
@@ -1992,8 +1860,7 @@ static int tclass_get_notify(struct net *net, struct sk_buff *oskb,
 	if (!skb)
 		return -ENOBUFS;
 
-	if (tc_fill_tclass(skb, q, cl, portid, n->nlmsg_seq, 0, RTM_NEWTCLASS,
-			   extack) < 0) {
+	if (tc_fill_tclass(skb, q, cl, portid, n->nlmsg_seq, 0, event) < 0) {
 		kfree_skb(skb);
 		return -EINVAL;
 	}
@@ -2015,18 +1882,14 @@ static int tclass_del_notify(struct net *net,
 	if (!cops->delete)
 		return -EOPNOTSUPP;
 
-	if (rtnl_notify_needed(net, n->nlmsg_flags, RTNLGRP_TC)) {
-		skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
-		if (!skb)
-			return -ENOBUFS;
+	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!skb)
+		return -ENOBUFS;
 
-		if (tc_fill_tclass(skb, q, cl, portid, n->nlmsg_seq, 0,
-				   RTM_DELTCLASS, extack) < 0) {
-			kfree_skb(skb);
-			return -EINVAL;
-		}
-	} else {
-		skb = NULL;
+	if (tc_fill_tclass(skb, q, cl, portid, n->nlmsg_seq, 0,
+			   RTM_DELTCLASS) < 0) {
+		kfree_skb(skb);
+		return -EINVAL;
 	}
 
 	err = cops->delete(q, cl, extack);
@@ -2035,8 +1898,8 @@ static int tclass_del_notify(struct net *net,
 		return err;
 	}
 
-	err = rtnetlink_maybe_send(skb, net, portid, RTNLGRP_TC,
-				   n->nlmsg_flags & NLM_F_ECHO);
+	err = rtnetlink_send(skb, net, portid, RTNLGRP_TC,
+			     n->nlmsg_flags & NLM_F_ECHO);
 	return err;
 }
 
@@ -2231,7 +2094,7 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n,
 			tc_bind_tclass(q, portid, clid, 0);
 			goto out;
 		case RTM_GETTCLASS:
-			err = tclass_get_notify(net, skb, n, q, cl, extack);
+			err = tclass_notify(net, skb, n, q, cl, RTM_NEWTCLASS);
 			goto out;
 		default:
 			err = -EINVAL;
@@ -2244,18 +2107,12 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n,
 		return -EOPNOTSUPP;
 	}
 
-	/* Prevent creation of traffic classes with classid TC_H_ROOT */
-	if (clid == TC_H_ROOT) {
-		NL_SET_ERR_MSG(extack, "Cannot create traffic class with classid TC_H_ROOT");
-		return -EINVAL;
-	}
-
 	new_cl = cl;
 	err = -EOPNOTSUPP;
 	if (cops->change)
 		err = cops->change(q, clid, portid, tca, &new_cl, extack);
 	if (err == 0) {
-		tclass_notify(net, skb, n, q, new_cl, RTM_NEWTCLASS, extack);
+		tclass_notify(net, skb, n, q, new_cl, RTM_NEWTCLASS);
 		/* We just create a new class, need to do reverse binding. */
 		if (cl != new_cl)
 			tc_bind_tclass(q, portid, clid, new_cl);
@@ -2277,7 +2134,7 @@ static int qdisc_class_dump(struct Qdisc *q, unsigned long cl,
 
 	return tc_fill_tclass(a->skb, q, cl, NETLINK_CB(a->cb->skb).portid,
 			      a->cb->nlh->nlmsg_seq, NLM_F_MULTI,
-			      RTM_NEWTCLASS, NULL);
+			      RTM_NEWTCLASS);
 }
 
 static int tc_dump_tclass_qdisc(struct Qdisc *q, struct sk_buff *skb,
@@ -2363,8 +2220,8 @@ static int tc_dump_tclass(struct sk_buff *skb, struct netlink_callback *cb)
 
 	dev_queue = dev_ingress_queue(dev);
 	if (dev_queue &&
-	    tc_dump_tclass_root(rtnl_dereference(dev_queue->qdisc_sleeping),
-				skb, tcm, cb, &t, s_t, false) < 0)
+	    tc_dump_tclass_root(dev_queue->qdisc_sleeping, skb, tcm, cb,
+				&t, s_t, false) < 0)
 		goto done;
 
 done:
@@ -2416,10 +2273,6 @@ static struct pernet_operations psched_net_ops = {
 	.exit = psched_net_exit,
 };
 
-#if IS_ENABLED(CONFIG_MITIGATION_RETPOLINE)
-DEFINE_STATIC_KEY_FALSE(tc_skip_wrapper);
-#endif
-
 static int __init pktsched_init(void)
 {
 	int err;
@@ -2446,8 +2299,6 @@ static int __init pktsched_init(void)
 	rtnl_register(PF_UNSPEC, RTM_DELTCLASS, tc_ctl_tclass, NULL, 0);
 	rtnl_register(PF_UNSPEC, RTM_GETTCLASS, tc_ctl_tclass, tc_dump_tclass,
 		      0);
-
-	tc_wrapper_init();
 
 	return 0;
 }

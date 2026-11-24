@@ -1,10 +1,10 @@
 #ifndef __JSMN_H_
 #define __JSMN_H_
 
-#ifdef __KERNEL__
-#include <linux/types.h>
-#else
+#ifndef __KERNEL__
 #include <stddef.h>
+#else
+#include <linux/types.h>
 #endif
 
 #ifdef __cplusplus

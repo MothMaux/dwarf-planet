@@ -19,8 +19,7 @@
 #include "record.h"
 #include "tests.h"
 #include "util/mmap.h"
-#include "util/sample.h"
-#include "pmus.h"
+#include "pmu.h"
 
 static int spin_sleep(void)
 {
@@ -258,7 +257,7 @@ static int compar(const void *a, const void *b)
 	const struct event_node *nodeb = b;
 	s64 cmp = nodea->event_time - nodeb->event_time;
 
-	return cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
+	return cmp;
 }
 
 static int process_events(struct evlist *evlist,
@@ -351,7 +350,7 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 		goto out_err;
 	}
 
-	cpus = perf_cpu_map__new_online_cpus();
+	cpus = perf_cpu_map__new(NULL);
 	if (!cpus) {
 		pr_debug("perf_cpu_map__new failed!\n");
 		goto out_err;
@@ -375,7 +374,17 @@ static int test__switch_tracking(struct test_suite *test __maybe_unused, int sub
 	cpu_clocks_evsel = evlist__last(evlist);
 
 	/* Second event */
-	err = parse_event(evlist, cycles);
+	if (perf_pmu__has_hybrid()) {
+		cycles = "cpu_core/cycles/u";
+		err = parse_event(evlist, cycles);
+		if (err) {
+			cycles = "cpu_atom/cycles/u";
+			pr_debug("Trying %s\n", cycles);
+			err = parse_event(evlist, cycles);
+		}
+	} else {
+		err = parse_event(evlist, cycles);
+	}
 	if (err) {
 		pr_debug("Failed to parse event %s\n", cycles);
 		goto out_err;

@@ -5,7 +5,7 @@
  * Copyright 2022 Analog Devices Inc.
  */
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/clk.h>
@@ -20,7 +20,7 @@
 #include <linux/property.h>
 #include <linux/pwm.h>
 #include <linux/spi/spi.h>
-#include <linux/spi/legacy-spi-engine.h>
+#include <linux/spi/spi-engine.h>
 #include <linux/regulator/consumer.h>
 
 #include <linux/iio/buffer.h>
@@ -450,6 +450,7 @@ static int ad_pulsar_set_samp_freq(struct ad_pulsar_adc *adc, int freq)
 
 	cnv_state = (struct pwm_state){
 		.duty_cycle = ref_clk_period_ns,
+		.phase = ref_clk_period_ns,
 		.enabled = true,
 	};
 
@@ -458,7 +459,7 @@ static int ad_pulsar_set_samp_freq(struct ad_pulsar_adc *adc, int freq)
 	if (rem)
 		cnv_state.period += 1;
 
-	ret = pwm_apply_might_sleep(adc->cnv, &cnv_state);
+	ret = pwm_apply_state(adc->cnv, &cnv_state);
 	if (ret)
 		return ret;
 
@@ -622,19 +623,20 @@ static int ad_pulsar_buffer(struct iio_dev *indio_dev,
 				  adc->info->num_channels);
 
 	last = find_last_bit(indio_dev->active_scan_mask,
-			     iio_get_masklength(indio_dev));
+			     indio_dev->masklength);
 
 	first = find_first_bit(indio_dev->active_scan_mask,
-			       iio_get_masklength(indio_dev));
+			       indio_dev->masklength);
 	if (num_en_ch > 1) {
 		second = find_next_bit(indio_dev->active_scan_mask,
-				       iio_get_masklength(indio_dev),
+				       indio_dev->masklength,
 				       first + 1);
 	}
 
 	spi_message_init(msg);
 
-	iio_for_each_active_channel(indio_dev, ch) {
+	for_each_set_bit(ch, indio_dev->active_scan_mask,
+			 indio_dev->masklength) {
 		active_ch[i] = ch;
 		i++;
 	}
@@ -693,12 +695,12 @@ static int ad_pulsar_buffer_preenable(struct iio_dev *indio_dev)
 	if (ret)
 		return ret;
 
-	spi_bus_lock(adc->spi->controller);
-	ret = legacy_spi_engine_offload_load_msg(adc->spi, &msg);
+	spi_bus_lock(adc->spi->master);
+	ret = spi_engine_offload_load_msg(adc->spi, &msg);
 	if (ret)
 		return ret;
 
-	legacy_spi_engine_offload_enable(adc->spi, true);
+	spi_engine_offload_enable(adc->spi, true);
 
 	return 0;
 }
@@ -708,8 +710,8 @@ static int ad_pulsar_buffer_postdisable(struct iio_dev *indio_dev)
 	struct ad_pulsar_adc *adc = iio_priv(indio_dev);
 	int ret;
 
-	legacy_spi_engine_offload_enable(adc->spi, false);
-	spi_bus_unlock(adc->spi->controller);
+	spi_engine_offload_enable(adc->spi, false);
+	spi_bus_unlock(adc->spi->master);
 
 	ret = ad_pulsar_reg_write(adc, AD7682_REG_CONFIG, AD7682_DISABLE_SEQ);
 	if (ret)
@@ -930,7 +932,8 @@ static int ad_pulsar_probe(struct spi_device *spi)
 	indio_dev->setup_ops = &ad_pulsar_buffer_ops;
 
 	ret = devm_iio_dmaengine_buffer_setup(indio_dev->dev.parent,
-					      indio_dev, "rx");
+					      indio_dev, "rx",
+					      IIO_BUFFER_DIRECTION_IN);
 	if (ret)
 		return ret;
 

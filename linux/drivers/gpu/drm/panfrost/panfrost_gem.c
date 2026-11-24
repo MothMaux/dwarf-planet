@@ -192,35 +192,7 @@ static int panfrost_gem_pin(struct drm_gem_object *obj)
 	if (bo->is_heap)
 		return -EINVAL;
 
-	return drm_gem_shmem_pin_locked(&bo->base);
-}
-
-static enum drm_gem_object_status panfrost_gem_status(struct drm_gem_object *obj)
-{
-	struct panfrost_gem_object *bo = to_panfrost_bo(obj);
-	enum drm_gem_object_status res = 0;
-
-	if (bo->base.base.import_attach || bo->base.pages)
-		res |= DRM_GEM_OBJECT_RESIDENT;
-
-	if (bo->base.madv == PANFROST_MADV_DONTNEED)
-		res |= DRM_GEM_OBJECT_PURGEABLE;
-
-	return res;
-}
-
-static size_t panfrost_gem_rss(struct drm_gem_object *obj)
-{
-	struct panfrost_gem_object *bo = to_panfrost_bo(obj);
-
-	if (bo->is_heap) {
-		return bo->heap_rss_size;
-	} else if (bo->base.pages) {
-		WARN_ON(bo->heap_rss_size);
-		return bo->base.base.size;
-	}
-
-	return 0;
+	return drm_gem_shmem_pin(&bo->base);
 }
 
 static const struct drm_gem_object_funcs panfrost_gem_funcs = {
@@ -234,8 +206,6 @@ static const struct drm_gem_object_funcs panfrost_gem_funcs = {
 	.vmap = drm_gem_shmem_object_vmap,
 	.vunmap = drm_gem_shmem_object_vunmap,
 	.mmap = drm_gem_shmem_object_mmap,
-	.status = panfrost_gem_status,
-	.rss = panfrost_gem_rss,
 	.vm_ops = &drm_gem_shmem_vm_ops,
 };
 
@@ -265,8 +235,12 @@ struct drm_gem_object *panfrost_gem_create_object(struct drm_device *dev, size_t
 }
 
 struct panfrost_gem_object *
-panfrost_gem_create(struct drm_device *dev, size_t size, u32 flags)
+panfrost_gem_create_with_handle(struct drm_file *file_priv,
+				struct drm_device *dev, size_t size,
+				u32 flags,
+				uint32_t *handle)
 {
+	int ret;
 	struct drm_gem_shmem_object *shmem;
 	struct panfrost_gem_object *bo;
 
@@ -281,6 +255,16 @@ panfrost_gem_create(struct drm_device *dev, size_t size, u32 flags)
 	bo = to_panfrost_bo(&shmem->base);
 	bo->noexec = !!(flags & PANFROST_BO_NOEXEC);
 	bo->is_heap = !!(flags & PANFROST_BO_HEAP);
+
+	/*
+	 * Allocate an id of idr table where the obj is registered
+	 * and handle has the id what user can see.
+	 */
+	ret = drm_gem_handle_create(file_priv, &shmem->base, handle);
+	/* drop reference from allocate - handle holds it now. */
+	drm_gem_object_put(&shmem->base);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return bo;
 }

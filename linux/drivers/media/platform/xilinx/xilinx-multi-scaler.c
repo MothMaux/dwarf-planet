@@ -1743,7 +1743,7 @@ static int enum_fmt(struct xm2m_msc_dev *xm2msc, struct v4l2_fmtdesc *f)
 
 	/* Format found */
 	fmt = &formats[i];
-	strscpy((char *)f->description, (char *)fmt->name,
+	strlcpy((char *)f->description, (char *)fmt->name,
 		sizeof(f->description));
 	f->pixelformat = fmt->fourcc;
 
@@ -2466,13 +2466,14 @@ reg_dev_err:
 	return ret;
 }
 
-static void xm2m_msc_remove(struct platform_device *pdev)
+static int xm2m_msc_remove(struct platform_device *pdev)
 {
 	struct xm2m_msc_dev *xm2msc = platform_get_drvdata(pdev);
 
 	xm2msc_unreg_video_n_m2m(xm2msc);
 	v4l2_device_unregister(&xm2msc->v4l2_dev);
 	clk_disable_unprepare(xm2msc->clk);
+	return 0;
 }
 
 static const struct of_device_id xm2m_msc_of_id_table[] = {
@@ -2494,5 +2495,5 @@ static struct platform_driver xm2m_msc_driver = {
 module_platform_driver(xm2m_msc_driver);
 
 MODULE_DESCRIPTION("Xilinx M2M Multi-Scaler Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("xlnx_m2m_multiscaler_dev");

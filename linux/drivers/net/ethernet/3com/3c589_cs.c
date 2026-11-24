@@ -195,7 +195,6 @@ static int tc589_probe(struct pcmcia_device *link)
 {
 	struct el3_private *lp;
 	struct net_device *dev;
-	int ret;
 
 	dev_dbg(&link->dev, "3c589_attach()\n");
 
@@ -219,15 +218,7 @@ static int tc589_probe(struct pcmcia_device *link)
 
 	dev->ethtool_ops = &netdev_ethtool_ops;
 
-	ret = tc589_config(link);
-	if (ret)
-		goto err_free_netdev;
-
-	return 0;
-
-err_free_netdev:
-	free_netdev(dev);
-	return ret;
+	return tc589_config(link);
 }
 
 static void tc589_detach(struct pcmcia_device *link)
@@ -502,7 +493,7 @@ static int el3_config(struct net_device *dev, struct ifmap *map)
 {
 	if ((map->port != (u_char)(-1)) && (map->port != dev->if_port)) {
 		if (map->port <= 3) {
-			WRITE_ONCE(dev->if_port, map->port);
+			dev->if_port = map->port;
 			netdev_info(dev, "switched to %s port\n", if_names[dev->if_port]);
 			tc589_set_xcvr(dev, dev->if_port);
 		} else {

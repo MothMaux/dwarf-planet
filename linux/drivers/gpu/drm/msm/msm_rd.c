@@ -83,10 +83,15 @@ struct msm_rd_state {
 
 	bool open;
 
+	/* current submit to read out: */
+	struct msm_gem_submit *submit;
+
 	/* fifo access is synchronized on the producer side by
-	 * write_lock.  And read_lock synchronizes the reads
+	 * gpu->lock held by submit code (otherwise we could
+	 * end up w/ cmds logged in different order than they
+	 * were executed).  And read_lock synchronizes the reads
 	 */
-	struct mutex read_lock, write_lock;
+	struct mutex read_lock;
 
 	wait_queue_head_t fifo_event;
 	struct circ_buf fifo;
@@ -227,6 +232,7 @@ static const struct file_operations rd_debugfs_fops = {
 	.owner = THIS_MODULE,
 	.open = rd_open,
 	.read = rd_read,
+	.llseek = no_llseek,
 	.release = rd_release,
 };
 
@@ -237,7 +243,6 @@ static void rd_cleanup(struct msm_rd_state *rd)
 		return;
 
 	mutex_destroy(&rd->read_lock);
-	mutex_destroy(&rd->write_lock);
 	kfree(rd);
 }
 
@@ -253,7 +258,6 @@ static struct msm_rd_state *rd_init(struct drm_minor *minor, const char *name)
 	rd->fifo.buf = rd->buf;
 
 	mutex_init(&rd->read_lock);
-	mutex_init(&rd->write_lock);
 
 	init_waitqueue_head(&rd->fifo_event);
 
@@ -268,9 +272,6 @@ int msm_rd_debugfs_init(struct drm_minor *minor)
 	struct msm_drm_private *priv = minor->dev->dev_private;
 	struct msm_rd_state *rd;
 	int ret;
-
-	if (!priv->gpu_pdev)
-		return 0;
 
 	/* only create on first minor: */
 	if (priv->rd)
@@ -312,7 +313,7 @@ static void snapshot_buf(struct msm_rd_state *rd,
 		struct msm_gem_submit *submit, int idx,
 		uint64_t iova, uint32_t size, bool full)
 {
-	struct drm_gem_object *obj = submit->bos[idx].obj;
+	struct msm_gem_object *obj = submit->bos[idx].obj;
 	unsigned offset = 0;
 	const char *buf;
 
@@ -320,7 +321,7 @@ static void snapshot_buf(struct msm_rd_state *rd,
 		offset = iova - submit->bos[idx].iova;
 	} else {
 		iova = submit->bos[idx].iova;
-		size = obj->size;
+		size = obj->base.size;
 	}
 
 	/*
@@ -337,15 +338,19 @@ static void snapshot_buf(struct msm_rd_state *rd,
 	if (!(submit->bos[idx].flags & MSM_SUBMIT_BO_READ))
 		return;
 
-	buf = msm_gem_get_vaddr_active(obj);
+	msm_gem_lock(&obj->base);
+	buf = msm_gem_get_vaddr_active(&obj->base);
 	if (IS_ERR(buf))
-		return;
+		goto out_unlock;
 
 	buf += offset;
 
 	rd_write_section(rd, RD_BUFFER_CONTENTS, buf, size);
 
-	msm_gem_put_vaddr_locked(obj);
+	msm_gem_put_vaddr_locked(&obj->base);
+
+out_unlock:
+	msm_gem_unlock(&obj->base);
 }
 
 /* called under gpu->lock */
@@ -359,7 +364,10 @@ void msm_rd_dump_submit(struct msm_rd_state *rd, struct msm_gem_submit *submit,
 	if (!rd->open)
 		return;
 
-	mutex_lock(&rd->write_lock);
+	/* writing into fifo is serialized by caller, and
+	 * rd->read_lock is used to serialize the reads
+	 */
+	WARN_ON(!mutex_is_locked(&submit->gpu->lock));
 
 	if (fmt) {
 		va_list args;
@@ -416,7 +424,5 @@ void msm_rd_dump_submit(struct msm_rd_state *rd, struct msm_gem_submit *submit,
 			break;
 		}
 	}
-
-	mutex_unlock(&rd->write_lock);
 }
 #endif

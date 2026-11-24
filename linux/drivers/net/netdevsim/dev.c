@@ -184,10 +184,13 @@ static ssize_t nsim_dev_trap_fa_cookie_write(struct file *file,
 	cookie_len = (count - 1) / 2;
 	if ((count - 1) % 2)
 		return -EINVAL;
+	buf = kmalloc(count, GFP_KERNEL | __GFP_NOWARN);
+	if (!buf)
+		return -ENOMEM;
 
-	buf = memdup_user(data, count);
-	if (IS_ERR(buf))
-		return PTR_ERR(buf);
+	ret = simple_write_to_buffer(buf, count, ppos, data, count);
+	if (ret < 0)
+		goto free_buf;
 
 	fa_cookie = kmalloc(sizeof(*fa_cookie) + cookie_len,
 			    GFP_KERNEL | __GFP_NOWARN);
@@ -524,13 +527,13 @@ static void nsim_devlink_set_params_init_values(struct nsim_dev *nsim_dev,
 	union devlink_param_value value;
 
 	value.vu32 = nsim_dev->max_macs;
-	devl_param_driverinit_value_set(devlink,
-					DEVLINK_PARAM_GENERIC_ID_MAX_MACS,
-					value);
+	devlink_param_driverinit_value_set(devlink,
+					   DEVLINK_PARAM_GENERIC_ID_MAX_MACS,
+					   value);
 	value.vbool = nsim_dev->test1;
-	devl_param_driverinit_value_set(devlink,
-					NSIM_DEVLINK_PARAM_ID_TEST1,
-					value);
+	devlink_param_driverinit_value_set(devlink,
+					   NSIM_DEVLINK_PARAM_ID_TEST1,
+					   value);
 }
 
 static void nsim_devlink_param_load_driverinit_values(struct devlink *devlink)
@@ -539,14 +542,14 @@ static void nsim_devlink_param_load_driverinit_values(struct devlink *devlink)
 	union devlink_param_value saved_value;
 	int err;
 
-	err = devl_param_driverinit_value_get(devlink,
-					      DEVLINK_PARAM_GENERIC_ID_MAX_MACS,
-					      &saved_value);
+	err = devlink_param_driverinit_value_get(devlink,
+						 DEVLINK_PARAM_GENERIC_ID_MAX_MACS,
+						 &saved_value);
 	if (!err)
 		nsim_dev->max_macs = saved_value.vu32;
-	err = devl_param_driverinit_value_get(devlink,
-					      NSIM_DEVLINK_PARAM_ID_TEST1,
-					      &saved_value);
+	err = devlink_param_driverinit_value_get(devlink,
+						 NSIM_DEVLINK_PARAM_ID_TEST1,
+						 &saved_value);
 	if (!err)
 		nsim_dev->test1 = saved_value.vbool;
 }
@@ -835,26 +838,24 @@ static void nsim_dev_trap_report_work(struct work_struct *work)
 				      trap_report_dw.work);
 	nsim_dev = nsim_trap_data->nsim_dev;
 
-	if (!devl_trylock(priv_to_devlink(nsim_dev))) {
-		queue_delayed_work(system_unbound_wq,
-				   &nsim_dev->trap_data->trap_report_dw, 1);
-		return;
-	}
-
 	/* For each running port and enabled packet trap, generate a UDP
 	 * packet with a random 5-tuple and report it.
 	 */
+	if (!devl_trylock(priv_to_devlink(nsim_dev))) {
+		schedule_delayed_work(&nsim_dev->trap_data->trap_report_dw, 0);
+		return;
+	}
+
 	list_for_each_entry(nsim_dev_port, &nsim_dev->port_list, list) {
 		if (!netif_running(nsim_dev_port->ns->netdev))
 			continue;
 
 		nsim_dev_trap_report(nsim_dev_port);
-		cond_resched();
 	}
 	devl_unlock(priv_to_devlink(nsim_dev));
-	queue_delayed_work(system_unbound_wq,
-			   &nsim_dev->trap_data->trap_report_dw,
-			   msecs_to_jiffies(NSIM_TRAP_REPORT_INTERVAL_MS));
+
+	schedule_delayed_work(&nsim_dev->trap_data->trap_report_dw,
+			      msecs_to_jiffies(NSIM_TRAP_REPORT_INTERVAL_MS));
 }
 
 static int nsim_dev_traps_init(struct devlink *devlink)
@@ -909,9 +910,8 @@ static int nsim_dev_traps_init(struct devlink *devlink)
 
 	INIT_DELAYED_WORK(&nsim_dev->trap_data->trap_report_dw,
 			  nsim_dev_trap_report_work);
-	queue_delayed_work(system_unbound_wq,
-			   &nsim_dev->trap_data->trap_report_dw,
-			   msecs_to_jiffies(NSIM_TRAP_REPORT_INTERVAL_MS));
+	schedule_delayed_work(&nsim_dev->trap_data->trap_report_dw,
+			      msecs_to_jiffies(NSIM_TRAP_REPORT_INTERVAL_MS));
 
 	return 0;
 
@@ -994,6 +994,9 @@ static int nsim_dev_info_get(struct devlink *devlink,
 {
 	int err;
 
+	err = devlink_info_driver_name_put(req, DRV_NAME);
+	if (err)
+		return err;
 	err = devlink_info_version_stored_put_ext(req, "fw.mgmt", "10.20.30",
 						  DEVLINK_INFO_VERSION_TYPE_COMPONENT);
 	if (err)
@@ -1398,11 +1401,12 @@ static int __nsim_dev_port_add(struct nsim_dev *nsim_dev, enum nsim_dev_port_typ
 
 	if (nsim_dev_port_is_vf(nsim_dev_port)) {
 		err = devl_rate_leaf_create(&nsim_dev_port->devlink_port,
-					    nsim_dev_port, NULL);
+					    nsim_dev_port);
 		if (err)
 			goto err_nsim_destroy;
 	}
 
+	devlink_port_type_eth_set(devlink_port, nsim_dev_port->ns->netdev);
 	list_add(&nsim_dev_port->list, &nsim_dev->port_list);
 
 	return 0;
@@ -1425,6 +1429,7 @@ static void __nsim_dev_port_del(struct nsim_dev_port *nsim_dev_port)
 	list_del(&nsim_dev_port->list);
 	if (nsim_dev_port_is_vf(nsim_dev_port))
 		devl_rate_leaf_destroy(&nsim_dev_port->devlink_port);
+	devlink_port_type_clear(devlink_port);
 	nsim_destroy(nsim_dev_port->ns);
 	nsim_dev_port_debugfs_exit(nsim_dev_port);
 	devl_port_unregister(devlink_port);
@@ -1545,7 +1550,6 @@ int nsim_drv_probe(struct nsim_bus_dev *nsim_bus_dev)
 	nsim_dev->max_macs = NSIM_DEV_MAX_MACS_DEFAULT;
 	nsim_dev->test1 = NSIM_DEV_TEST1_DEFAULT;
 	spin_lock_init(&nsim_dev->fa_cookie_lock);
-	mutex_init(&nsim_dev->progs_list_lock);
 
 	dev_set_drvdata(&nsim_bus_dev->dev, nsim_dev);
 
@@ -1557,18 +1561,14 @@ int nsim_drv_probe(struct nsim_bus_dev *nsim_bus_dev)
 		goto err_devlink_unlock;
 	}
 
-	err = devl_register(devlink);
+	err = nsim_dev_resources_register(devlink);
 	if (err)
 		goto err_vfc_free;
 
-	err = nsim_dev_resources_register(devlink);
+	err = devlink_params_register(devlink, nsim_devlink_params,
+				      ARRAY_SIZE(nsim_devlink_params));
 	if (err)
 		goto err_dl_unregister;
-
-	err = devl_params_register(devlink, nsim_devlink_params,
-				   ARRAY_SIZE(nsim_devlink_params));
-	if (err)
-		goto err_resource_unregister;
 	nsim_devlink_set_params_init_values(nsim_dev, devlink);
 
 	err = nsim_dev_dummy_region_init(nsim_dev, devlink);
@@ -1610,7 +1610,9 @@ int nsim_drv_probe(struct nsim_bus_dev *nsim_bus_dev)
 		goto err_hwstats_exit;
 
 	nsim_dev->esw_mode = DEVLINK_ESWITCH_MODE_LEGACY;
+	devlink_set_features(devlink, DEVLINK_F_RELOAD);
 	devl_unlock(devlink);
+	devlink_register(devlink);
 	return 0;
 
 err_hwstats_exit:
@@ -1630,12 +1632,10 @@ err_traps_exit:
 err_dummy_region_exit:
 	nsim_dev_dummy_region_exit(nsim_dev);
 err_params_unregister:
-	devl_params_unregister(devlink, nsim_devlink_params,
-			       ARRAY_SIZE(nsim_devlink_params));
-err_resource_unregister:
-	devl_resources_unregister(devlink);
+	devlink_params_unregister(devlink, nsim_devlink_params,
+				  ARRAY_SIZE(nsim_devlink_params));
 err_dl_unregister:
-	devl_unregister(devlink);
+	devl_resources_unregister(devlink);
 err_vfc_free:
 	kfree(nsim_dev->vfconfigs);
 err_devlink_unlock:
@@ -1673,18 +1673,17 @@ void nsim_drv_remove(struct nsim_bus_dev *nsim_bus_dev)
 	struct nsim_dev *nsim_dev = dev_get_drvdata(&nsim_bus_dev->dev);
 	struct devlink *devlink = priv_to_devlink(nsim_dev);
 
+	devlink_unregister(devlink);
 	devl_lock(devlink);
 	nsim_dev_reload_destroy(nsim_dev);
 
 	nsim_bpf_dev_exit(nsim_dev);
 	nsim_dev_debugfs_exit(nsim_dev);
-	devl_params_unregister(devlink, nsim_devlink_params,
-			       ARRAY_SIZE(nsim_devlink_params));
+	devlink_params_unregister(devlink, nsim_devlink_params,
+				  ARRAY_SIZE(nsim_devlink_params));
 	devl_resources_unregister(devlink);
-	devl_unregister(devlink);
 	kfree(nsim_dev->vfconfigs);
 	kfree(nsim_dev->fa_cookie);
-	mutex_destroy(&nsim_dev->progs_list_lock);
 	devl_unlock(devlink);
 	devlink_free(devlink);
 	dev_set_drvdata(&nsim_bus_dev->dev, NULL);

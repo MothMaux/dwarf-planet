@@ -1,10 +1,13 @@
 [
     {
         "BriefDescription": "ASSISTS.PAGE_FAULT",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc1",
         "EventName": "ASSISTS.PAGE_FAULT",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x8"
     },
     {
@@ -12,7 +15,9 @@
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xb7",
         "EventName": "EXE.AMX_BUSY",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "SampleAfterValue": "2000003",
+        "Speculative": "1",
         "UMask": "0x2"
     },
     {
@@ -22,6 +27,7 @@
         "EventName": "OCR.DEMAND_CODE_RD.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x10004",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -32,6 +38,7 @@
         "EventName": "OCR.DEMAND_CODE_RD.DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x73C000004",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -42,6 +49,7 @@
         "EventName": "OCR.DEMAND_CODE_RD.LOCAL_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x104000004",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -52,6 +60,7 @@
         "EventName": "OCR.DEMAND_CODE_RD.SNC_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x708000004",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -62,6 +71,7 @@
         "EventName": "OCR.DEMAND_DATA_RD.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x10001",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -72,6 +82,7 @@
         "EventName": "OCR.DEMAND_DATA_RD.DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x73C000001",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -82,26 +93,7 @@
         "EventName": "OCR.DEMAND_DATA_RD.LOCAL_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x104000001",
-        "SampleAfterValue": "100003",
-        "UMask": "0x1"
-    },
-    {
-        "BriefDescription": "Counts demand data reads that were supplied by PMM attached to this socket, whether or not in Sub NUMA Cluster(SNC) Mode.  In SNC Mode counts PMM accesses that are controlled by the close or distant SNC Cluster.",
-        "Counter": "0,1,2,3",
-        "EventCode": "0x2A,0x2B",
-        "EventName": "OCR.DEMAND_DATA_RD.LOCAL_SOCKET_PMM",
-        "MSRIndex": "0x1a6,0x1a7",
-        "MSRValue": "0x700C00001",
-        "SampleAfterValue": "100003",
-        "UMask": "0x1"
-    },
-    {
-        "BriefDescription": "Counts demand data reads that were supplied by PMM.",
-        "Counter": "0,1,2,3",
-        "EventCode": "0x2A,0x2B",
-        "EventName": "OCR.DEMAND_DATA_RD.PMM",
-        "MSRIndex": "0x1a6,0x1a7",
-        "MSRValue": "0x703C00001",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -112,6 +104,7 @@
         "EventName": "OCR.DEMAND_DATA_RD.REMOTE_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x730000001",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -122,6 +115,7 @@
         "EventName": "OCR.DEMAND_DATA_RD.REMOTE_PMM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x703000001",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -132,6 +126,7 @@
         "EventName": "OCR.DEMAND_DATA_RD.SNC_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x708000001",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -142,6 +137,7 @@
         "EventName": "OCR.DEMAND_RFO.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3F3FFC0002",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -152,6 +148,7 @@
         "EventName": "OCR.DEMAND_RFO.DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x73C000002",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -162,6 +159,7 @@
         "EventName": "OCR.DEMAND_RFO.LOCAL_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x104000002",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -172,6 +170,7 @@
         "EventName": "OCR.DEMAND_RFO.SNC_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x708000002",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -182,6 +181,7 @@
         "EventName": "OCR.HWPF_L1D.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x10400",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -192,6 +192,7 @@
         "EventName": "OCR.HWPF_L2.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x10070",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -202,6 +203,7 @@
         "EventName": "OCR.HWPF_L3.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x12380",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -212,6 +214,7 @@
         "EventName": "OCR.HWPF_L3.REMOTE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x90002380",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -222,6 +225,7 @@
         "EventName": "OCR.MODIFIED_WRITE.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x10808",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -232,6 +236,7 @@
         "EventName": "OCR.READS_TO_CORE.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3F3FFC4477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -242,6 +247,7 @@
         "EventName": "OCR.READS_TO_CORE.DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x73C004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -252,6 +258,7 @@
         "EventName": "OCR.READS_TO_CORE.LOCAL_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x104004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -262,6 +269,7 @@
         "EventName": "OCR.READS_TO_CORE.LOCAL_SOCKET_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x70C004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -272,6 +280,7 @@
         "EventName": "OCR.READS_TO_CORE.LOCAL_SOCKET_PMM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x700C04477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -282,6 +291,7 @@
         "EventName": "OCR.READS_TO_CORE.REMOTE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3F33004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -292,6 +302,7 @@
         "EventName": "OCR.READS_TO_CORE.REMOTE_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x730004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -302,6 +313,7 @@
         "EventName": "OCR.READS_TO_CORE.REMOTE_MEMORY",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x733004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -312,6 +324,7 @@
         "EventName": "OCR.READS_TO_CORE.REMOTE_PMM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x703004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -322,6 +335,7 @@
         "EventName": "OCR.READS_TO_CORE.SNC_DRAM",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x708004477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -332,6 +346,7 @@
         "EventName": "OCR.STREAMING_WR.ANY_RESPONSE",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x10800",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -342,67 +357,72 @@
         "EventName": "OCR.WRITE_ESTIMATE.MEMORY",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0xFBFF80822",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Cycles when Reservation Station (RS) is empty for the thread.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xa5",
         "EventName": "RS.EMPTY",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts cycles during which the reservation station (RS) is empty for this logical processor. This is usually caused when the front-end pipeline runs into starvation periods (e.g. branch mispredictions or i-cache misses)",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x7"
     },
     {
         "BriefDescription": "Counts end of periods where the Reservation Station (RS) was empty.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "CounterMask": "1",
         "EdgeDetect": "1",
         "EventCode": "0xa5",
         "EventName": "RS.EMPTY_COUNT",
         "Invert": "1",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts end of periods where the Reservation Station (RS) was empty. Could be useful to closely sample on front-end latency issues (see the FRONTEND_RETIRED event of designated precise events)",
         "SampleAfterValue": "100003",
+        "Speculative": "1",
         "UMask": "0x7"
     },
     {
-        "BriefDescription": "Cycles when Reservation Station (RS) is empty due to a resource in the back-end",
-        "Counter": "0,1,2,3,4,5,6,7",
-        "EventCode": "0xa5",
-        "EventName": "RS.EMPTY_RESOURCE",
-        "SampleAfterValue": "1000003",
-        "UMask": "0x1"
-    },
-    {
         "BriefDescription": "This event is deprecated. Refer to new event RS.EMPTY_COUNT",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "CounterMask": "1",
-        "Deprecated": "1",
         "EdgeDetect": "1",
         "EventCode": "0xa5",
         "EventName": "RS_EMPTY.COUNT",
         "Invert": "1",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "SampleAfterValue": "100003",
+        "Speculative": "1",
         "UMask": "0x7"
     },
     {
         "BriefDescription": "This event is deprecated. Refer to new event RS.EMPTY",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
-        "Deprecated": "1",
         "EventCode": "0xa5",
         "EventName": "RS_EMPTY.CYCLES",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x7"
     },
     {
-        "BriefDescription": "Cycles the uncore cannot take further requests",
+        "BriefDescription": "XQ.FULL_CYCLES",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "CounterMask": "1",
         "EventCode": "0x2d",
         "EventName": "XQ.FULL_CYCLES",
-        "PublicDescription": "number of cycles when the thread is active and the uncore cannot take any further requests (for example prefetches, loads or stores initiated by the Core that miss the L2 cache).",
+        "PEBScounters": "0,1,2,3",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x1"
     }
 ]

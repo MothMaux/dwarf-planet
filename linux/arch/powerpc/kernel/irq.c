@@ -206,15 +206,11 @@ static __always_inline void call_do_softirq(const void *sp)
 	asm volatile (
 		 PPC_STLU "	%%r1, %[offset](%[sp])	;"
 		"mr		%%r1, %[sp]		;"
-#ifdef CONFIG_PPC_KERNEL_PCREL
-		"bl		%[callee]@notoc		;"
-#else
 		"bl		%[callee]		;"
-#endif
 		 PPC_LL "	%%r1, 0(%%r1)		;"
 		 : // Outputs
 		 : // Inputs
-		   [sp] "b" (sp), [offset] "i" (THREAD_SIZE - STACK_FRAME_MIN_SIZE),
+		   [sp] "b" (sp), [offset] "i" (THREAD_SIZE - STACK_FRAME_OVERHEAD),
 		   [callee] "i" (__do_softirq)
 		 : // Clobbers
 		   "lr", "xer", "ctr", "memory", "cr0", "cr1", "cr5", "cr6",
@@ -242,7 +238,7 @@ static void __do_irq(struct pt_regs *regs, unsigned long oldsp)
 	irq = static_call(ppc_get_irq)();
 
 	/* We can hard enable interrupts now to allow perf interrupts */
-	if (should_hard_irq_enable(regs))
+	if (should_hard_irq_enable())
 		do_hard_irq_enable();
 
 	/* And finally process it */
@@ -263,16 +259,12 @@ static __always_inline void call_do_irq(struct pt_regs *regs, void *sp)
 		 PPC_STLU "	%%r1, %[offset](%[sp])	;"
 		"mr		%%r4, %%r1		;"
 		"mr		%%r1, %[sp]		;"
-#ifdef CONFIG_PPC_KERNEL_PCREL
-		"bl		%[callee]@notoc		;"
-#else
 		"bl		%[callee]		;"
-#endif
 		 PPC_LL "	%%r1, 0(%%r1)		;"
 		 : // Outputs
 		   "+r" (r3)
 		 : // Inputs
-		   [sp] "b" (sp), [offset] "i" (THREAD_SIZE - STACK_FRAME_MIN_SIZE),
+		   [sp] "b" (sp), [offset] "i" (THREAD_SIZE - STACK_FRAME_OVERHEAD),
 		   [callee] "i" (__do_irq)
 		 : // Clobbers
 		   "lr", "xer", "ctr", "memory", "cr0", "cr1", "cr5", "cr6",
@@ -284,14 +276,15 @@ static __always_inline void call_do_irq(struct pt_regs *regs, void *sp)
 void __do_IRQ(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
-	void *cursp, *irqsp;
+	void *cursp, *irqsp, *sirqsp;
 
 	/* Switch to the irq stack to handle this */
 	cursp = (void *)(current_stack_pointer & ~(THREAD_SIZE - 1));
 	irqsp = hardirq_ctx[raw_smp_processor_id()];
+	sirqsp = softirq_ctx[raw_smp_processor_id()];
 
 	/* Already there ? If not switch stack and call */
-	if (unlikely(cursp == irqsp))
+	if (unlikely(cursp == irqsp || cursp == sirqsp))
 		__do_irq(regs, current_stack_pointer);
 	else
 		call_do_irq(regs, irqsp);
@@ -333,7 +326,7 @@ void __init init_IRQ(void)
 		static_call_update(ppc_get_irq, ppc_md.get_irq);
 }
 
-#ifdef CONFIG_BOOKE
+#ifdef CONFIG_BOOKE_OR_40x
 void   *critirq_ctx[NR_CPUS] __read_mostly;
 void    *dbgirq_ctx[NR_CPUS] __read_mostly;
 void *mcheckirq_ctx[NR_CPUS] __read_mostly;

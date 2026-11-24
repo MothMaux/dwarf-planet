@@ -1003,12 +1003,12 @@ remove:
 	return err;
 }
 
-static void compal_remove(struct platform_device *pdev)
+static int compal_remove(struct platform_device *pdev)
 {
 	struct compal_data *data;
 
 	if (!extra_features)
-		return;
+		return 0;
 
 	pr_info("Unloading: resetting fan control to motherboard\n");
 	pwm_disable_control();
@@ -1017,6 +1017,8 @@ static void compal_remove(struct platform_device *pdev)
 	power_supply_unregister(data->psy);
 
 	sysfs_remove_group(&pdev->dev.kobj, &compal_platform_attr_group);
+
+	return 0;
 }
 
 static struct platform_driver compal_driver = {
@@ -1024,7 +1026,7 @@ static struct platform_driver compal_driver = {
 		.name = DRIVER_NAME,
 	},
 	.probe	= compal_probe,
-	.remove_new = compal_remove,
+	.remove	= compal_remove,
 };
 
 static int __init compal_init(void)
@@ -1107,7 +1109,7 @@ module_init(compal_init);
 module_exit(compal_cleanup);
 
 MODULE_AUTHOR("Cezary Jackiewicz");
-MODULE_AUTHOR("Roald Frederickx <roald.frederickx@gmail.com>");
+MODULE_AUTHOR("Roald Frederickx (roald.frederickx@gmail.com)");
 MODULE_DESCRIPTION("Compal Laptop Support");
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");

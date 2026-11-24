@@ -7,6 +7,6 @@
  */
 
 /* aligned to 4 */
-#define __NR_syscalls 464
+#define __NR_syscalls 452
 
 #endif /* _ASM_ARM_UNISTD_NR_H */

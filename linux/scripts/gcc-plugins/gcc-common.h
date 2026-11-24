@@ -62,18 +62,21 @@
 #include "pass_manager.h"
 #include "predict.h"
 #include "ipa-utils.h"
+
+#if BUILDING_GCC_VERSION >= 8000
 #include "stringpool.h"
+#endif
+
 #include "attribs.h"
 #include "varasm.h"
 #include "stor-layout.h"
 #include "internal-fn.h"
-#include "gimple.h"
 #include "gimple-expr.h"
-#include "gimple-iterator.h"
 #include "gimple-fold.h"
 #include "context.h"
 #include "tree-ssa-alias.h"
 #include "tree-ssa.h"
+#include "stringpool.h"
 #if BUILDING_GCC_VERSION >= 7000
 #include "tree-vrp.h"
 #endif
@@ -82,8 +85,10 @@
 #include "tree-eh.h"
 #include "stmt.h"
 #include "gimplify.h"
+#include "gimple.h"
 #include "tree-phinodes.h"
 #include "tree-cfg.h"
+#include "gimple-iterator.h"
 #include "gimple-ssa.h"
 #include "ssa-iterators.h"
 
@@ -123,38 +128,6 @@ static inline tree build_const_char_string(int len, const char *str)
 	return cstr;
 }
 
-static inline void __add_type_attr(tree type, const char *attr, tree args)
-{
-	tree oldattr;
-
-	if (type == NULL_TREE)
-		return;
-	oldattr = lookup_attribute(attr, TYPE_ATTRIBUTES(type));
-	if (oldattr != NULL_TREE) {
-		gcc_assert(TREE_VALUE(oldattr) == args || TREE_VALUE(TREE_VALUE(oldattr)) == TREE_VALUE(args));
-		return;
-	}
-
-	TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
-	TYPE_ATTRIBUTES(type) = tree_cons(get_identifier(attr), args, TYPE_ATTRIBUTES(type));
-}
-
-static inline void add_type_attr(tree type, const char *attr, tree args)
-{
-	tree main_variant = TYPE_MAIN_VARIANT(type);
-
-	__add_type_attr(TYPE_CANONICAL(type), attr, args);
-	__add_type_attr(TYPE_CANONICAL(main_variant), attr, args);
-	__add_type_attr(main_variant, attr, args);
-
-	for (type = TYPE_NEXT_VARIANT(main_variant); type; type = TYPE_NEXT_VARIANT(type)) {
-		if (!lookup_attribute(attr, TYPE_ATTRIBUTES(type)))
-			TYPE_ATTRIBUTES(type) = TYPE_ATTRIBUTES(main_variant);
-
-		__add_type_attr(TYPE_CANONICAL(type), attr, args);
-	}
-}
-
 #define PASS_INFO(NAME, REF, ID, POS)		\
 struct register_pass_info NAME##_pass_info = {	\
 	.pass = make_##NAME##_pass(),		\
@@ -191,17 +164,10 @@ inline bool is_a_helper<const gassign *>::test(const_gimple gs)
 }
 #endif
 
-#if BUILDING_GCC_VERSION < 16000
 #define TODO_verify_ssa TODO_verify_il
 #define TODO_verify_flow TODO_verify_il
 #define TODO_verify_stmts TODO_verify_il
 #define TODO_verify_rtl_sharing TODO_verify_il
-#else
-#define TODO_verify_ssa 0
-#define TODO_verify_flow 0
-#define TODO_verify_stmts 0
-#define TODO_verify_rtl_sharing 0
-#endif
 
 #define INSN_DELETED_P(insn) (insn)->deleted()
 
@@ -472,10 +438,6 @@ static inline void debug_gimple_stmt(const_gimple s)
 #if BUILDING_GCC_VERSION < 7000
 #define SET_DECL_ALIGN(decl, align)	DECL_ALIGN(decl) = (align)
 #define SET_DECL_MODE(decl, mode)	DECL_MODE(decl) = (mode)
-#endif
-
-#if BUILDING_GCC_VERSION >= 14000
-#define last_stmt(x)			last_nondebug_stmt(x)
 #endif
 
 #endif

@@ -92,6 +92,12 @@ static int octeon_console_debug_enabled(u32 console)
 /* time to wait for possible in-flight requests in milliseconds */
 #define WAIT_INFLIGHT_REQUEST	msecs_to_jiffies(1000)
 
+struct oct_link_status_resp {
+	u64 rh;
+	struct oct_link_info link_info;
+	u64 status;
+};
+
 struct oct_timestamp_resp {
 	u64 rh;
 	u64 timestamp;
@@ -185,7 +191,8 @@ static void octeon_droq_bh(struct tasklet_struct *t)
 
 static int lio_wait_for_oq_pkts(struct octeon_device *oct)
 {
-	struct octeon_device_priv *oct_priv = oct->priv;
+	struct octeon_device_priv *oct_priv =
+		(struct octeon_device_priv *)oct->priv;
 	int retry = 100, pkt_cnt = 0, pending_pkts = 0;
 	int i;
 
@@ -943,7 +950,8 @@ static void octeon_destroy_resources(struct octeon_device *oct)
 {
 	int i, refcount;
 	struct msix_entry *msix_entries;
-	struct octeon_device_priv *oct_priv = oct->priv;
+	struct octeon_device_priv *oct_priv =
+		(struct octeon_device_priv *)oct->priv;
 
 	struct handshake *hs;
 
@@ -1121,6 +1129,7 @@ static void octeon_destroy_resources(struct octeon_device *oct)
 
 		fallthrough;
 	case OCT_DEV_PCI_ENABLE_DONE:
+		pci_clear_master(oct->pci_dev);
 		/* Disable the device, releasing the PCI INT */
 		pci_disable_device(oct->pci_dev);
 
@@ -1203,7 +1212,8 @@ static int send_rx_ctrl_cmd(struct lio *lio, int start_stop)
 static void liquidio_destroy_nic_device(struct octeon_device *oct, int ifidx)
 {
 	struct net_device *netdev = oct->props[ifidx].netdev;
-	struct octeon_device_priv *oct_priv = oct->priv;
+	struct octeon_device_priv *oct_priv =
+		(struct octeon_device_priv *)oct->priv;
 	struct napi_struct *napi, *n;
 	struct lio *lio;
 
@@ -1502,17 +1512,14 @@ static void free_netsgbuf_with_resp(void *buf)
 }
 
 /**
- * liquidio_ptp_adjfine - Adjust ptp frequency
+ * liquidio_ptp_adjfreq - Adjust ptp frequency
  * @ptp: PTP clock info
- * @scaled_ppm: how much to adjust by, in scaled parts-per-million
- *
- * Scaled parts per million is ppm with a 16-bit binary fractional field.
+ * @ppb: how much to adjust by, in parts-per-billion
  */
-static int liquidio_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
+static int liquidio_ptp_adjfreq(struct ptp_clock_info *ptp, s32 ppb)
 {
 	struct lio *lio = container_of(ptp, struct lio, ptp_info);
 	struct octeon_device *oct = (struct octeon_device *)lio->oct_dev;
-	s32 ppb = scaled_ppm_to_ppb(scaled_ppm);
 	u64 comp, delta;
 	unsigned long flags;
 	bool neg_adj = false;
@@ -1636,7 +1643,7 @@ static void oct_ptp_open(struct net_device *netdev)
 	lio->ptp_info.n_ext_ts = 0;
 	lio->ptp_info.n_per_out = 0;
 	lio->ptp_info.pps = 0;
-	lio->ptp_info.adjfine = liquidio_ptp_adjfine;
+	lio->ptp_info.adjfreq = liquidio_ptp_adjfreq;
 	lio->ptp_info.adjtime = liquidio_ptp_adjtime;
 	lio->ptp_info.gettime64 = liquidio_ptp_gettime;
 	lio->ptp_info.settime64 = liquidio_ptp_settime;
@@ -1683,7 +1690,7 @@ static int load_firmware(struct octeon_device *oct)
 
 	if (fw_type_is_auto()) {
 		tmp_fw_type = LIO_FW_NAME_TYPE_NIC;
-		strscpy_pad(fw_type, tmp_fw_type, sizeof(fw_type));
+		strncpy(fw_type, tmp_fw_type, sizeof(fw_type));
 	} else {
 		tmp_fw_type = fw_type;
 	}
@@ -1765,7 +1772,8 @@ static int liquidio_open(struct net_device *netdev)
 {
 	struct lio *lio = GET_LIO(netdev);
 	struct octeon_device *oct = lio->oct_dev;
-	struct octeon_device_priv *oct_priv = oct->priv;
+	struct octeon_device_priv *oct_priv =
+		(struct octeon_device_priv *)oct->priv;
 	struct napi_struct *napi, *n;
 	int ret = 0;
 
@@ -1845,7 +1853,8 @@ static int liquidio_stop(struct net_device *netdev)
 {
 	struct lio *lio = GET_LIO(netdev);
 	struct octeon_device *oct = lio->oct_dev;
-	struct octeon_device_priv *oct_priv = oct->priv;
+	struct octeon_device_priv *oct_priv =
+		(struct octeon_device_priv *)oct->priv;
 	struct napi_struct *napi, *n;
 	int ret = 0;
 
@@ -3513,23 +3522,6 @@ static int setup_nic_devices(struct octeon_device *octeon_dev)
 		 */
 		netdev->netdev_ops = &lionetdevops;
 
-		lio = GET_LIO(netdev);
-
-		memset(lio, 0, sizeof(struct lio));
-
-		lio->ifidx = ifidx_or_pfnum;
-
-		props = &octeon_dev->props[i];
-		props->gmxport = resp->cfg_info.linfo.gmxport;
-		props->netdev = netdev;
-
-		/* Point to the  properties for octeon device to which this
-		 * interface belongs.
-		 */
-		lio->oct_dev = octeon_dev;
-		lio->octprops = props;
-		lio->netdev = netdev;
-
 		retval = netif_set_real_num_rx_queues(netdev, num_oqueues);
 		if (retval) {
 			dev_err(&octeon_dev->pci_dev->dev,
@@ -3545,6 +3537,16 @@ static int setup_nic_devices(struct octeon_device *octeon_dev)
 			WRITE_ONCE(sc->caller_is_done, true);
 			goto setup_nic_dev_free;
 		}
+
+		lio = GET_LIO(netdev);
+
+		memset(lio, 0, sizeof(struct lio));
+
+		lio->ifidx = ifidx_or_pfnum;
+
+		props = &octeon_dev->props[i];
+		props->gmxport = resp->cfg_info.linfo.gmxport;
+		props->netdev = netdev;
 
 		lio->linfo.num_rxpciq = num_oqueues;
 		lio->linfo.num_txpciq = num_iqueues;
@@ -3610,6 +3612,13 @@ static int setup_nic_devices(struct octeon_device *octeon_dev)
 		/* MTU range: 68 - 16000 */
 		netdev->min_mtu = LIO_MIN_MTU_SIZE;
 		netdev->max_mtu = LIO_MAX_MTU_SIZE;
+
+		/* Point to the  properties for octeon device to which this
+		 * interface belongs.
+		 */
+		lio->oct_dev = octeon_dev;
+		lio->octprops = props;
+		lio->netdev = netdev;
 
 		dev_dbg(&octeon_dev->pci_dev->dev,
 			"if%d gmx: %d hw_addr: 0x%llx\n", i,
@@ -3758,7 +3767,6 @@ static int setup_nic_devices(struct octeon_device *octeon_dev)
 	if (!devlink) {
 		device_unlock(&octeon_dev->pci_dev->dev);
 		dev_err(&octeon_dev->pci_dev->dev, "devlink alloc failed\n");
-		i--;
 		goto setup_nic_dev_free;
 	}
 
@@ -3774,11 +3782,11 @@ static int setup_nic_devices(struct octeon_device *octeon_dev)
 
 setup_nic_dev_free:
 
-	do {
+	while (i--) {
 		dev_err(&octeon_dev->pci_dev->dev,
 			"NIC ifidx:%d Setup failed\n", i);
 		liquidio_destroy_nic_device(octeon_dev, i);
-	} while (i--);
+	}
 
 setup_nic_dev_done:
 
@@ -4047,7 +4055,8 @@ static int octeon_device_init(struct octeon_device *octeon_dev)
 	char bootcmd[] = "\n";
 	char *dbg_enb = NULL;
 	enum lio_fw_state fw_state;
-	struct octeon_device_priv *oct_priv = octeon_dev->priv;
+	struct octeon_device_priv *oct_priv =
+		(struct octeon_device_priv *)octeon_dev->priv;
 	atomic_set(&octeon_dev->status, OCT_DEV_BEGIN_STATE);
 
 	/* Enable access to the octeon device and make its DMA capability

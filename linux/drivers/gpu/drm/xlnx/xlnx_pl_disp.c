@@ -21,11 +21,9 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dmaengine.h>
-#include <linux/dma-mapping.h>
 #include <linux/dma/xilinx_frmbuf.h>
 #include <linux/of.h>
 #include <linux/of_dma.h>
-#include <linux/of_reserved_mem.h>
 #include <linux/platform_device.h>
 #include <video/videomode.h>
 #include "xlnx_bridge.h"
@@ -33,7 +31,7 @@
 #include "xlnx_drv.h"
 
 #define XLNX_PL_DISP_MAX_NUM_PLANES	3
-#define XLNX_PL_DISP_VFMT_SIZE		5
+#define XLNX_PL_DISP_VFMT_SIZE		4
 /*
  * Overview
  * --------
@@ -612,8 +610,7 @@ static int xlnx_pl_disp_probe(struct platform_device *pdev)
 		goto err_dma;
 	}
 
-	xlnx_pl_disp->fmt = fourcc_code(vformat[0], vformat[1],
-					vformat[2], vformat[3]);
+	strncpy((char *)&xlnx_pl_disp->fmt, vformat, XLNX_PL_DISP_VFMT_SIZE);
 	info = drm_format_info(xlnx_pl_disp->fmt);
 	if (!info) {
 		dev_err(dev, "Invalid video format in dts\n");
@@ -632,16 +629,6 @@ static int xlnx_pl_disp_probe(struct platform_device *pdev)
 		}
 	} else {
 		dev_info(dev, "vtc bridge property not present\n");
-	}
-
-	ret = of_reserved_mem_device_init(&pdev->dev);
-	if (ret)
-		dev_dbg(&pdev->dev, "of_reserved_mem_device_init: %d\n", ret);
-
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (ret) {
-		dev_err(&pdev->dev, "dma_set_mask_and_coherent: %d\n", ret);
-		goto err_dma;
 	}
 
 	xlnx_pl_disp->dev = dev;
@@ -665,13 +652,12 @@ static int xlnx_pl_disp_probe(struct platform_device *pdev)
 err_component:
 	component_del(dev, &xlnx_pl_disp_component_ops);
 err_dma:
-	of_reserved_mem_device_release(&pdev->dev);
 	dma_release_channel(xlnx_pl_disp->chan->dma_chan);
 
 	return ret;
 }
 
-static void xlnx_pl_disp_remove(struct platform_device *pdev)
+static int xlnx_pl_disp_remove(struct platform_device *pdev)
 {
 	struct xlnx_pl_disp *xlnx_pl_disp = platform_get_drvdata(pdev);
 	struct xlnx_dma_chan *xlnx_dma_chan = xlnx_pl_disp->chan;
@@ -684,7 +670,8 @@ static void xlnx_pl_disp_remove(struct platform_device *pdev)
 	/* Make sure the channel is terminated before release */
 	dmaengine_terminate_sync(xlnx_dma_chan->dma_chan);
 	dma_release_channel(xlnx_dma_chan->dma_chan);
-	of_reserved_mem_device_release(&pdev->dev);
+
+	return 0;
 }
 
 static const struct of_device_id xlnx_pl_disp_of_match[] = {
@@ -706,4 +693,4 @@ module_platform_driver(xlnx_pl_disp_driver);
 
 MODULE_AUTHOR("Saurabh Sengar");
 MODULE_DESCRIPTION("Xilinx DRM Display Driver for PL IPs");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

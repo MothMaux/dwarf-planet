@@ -21,7 +21,7 @@ static int adau1372_i2c_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id adau1372_i2c_ids[] = {
-	{ "adau1372" },
+	{ "adau1372", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adau1372_i2c_ids);
@@ -30,7 +30,7 @@ static struct i2c_driver adau1372_i2c_driver = {
 	.driver = {
 		.name = "adau1372",
 	},
-	.probe = adau1372_i2c_probe,
+	.probe_new = adau1372_i2c_probe,
 	.id_table = adau1372_i2c_ids,
 };
 module_i2c_driver(adau1372_i2c_driver);

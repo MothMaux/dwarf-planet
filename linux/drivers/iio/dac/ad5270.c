@@ -11,7 +11,6 @@
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
 #include <linux/delay.h>
-#include <linux/mutex.h>
 
 #define AD5270_CMD(x)    (((x) & 0x03F) << 10)
 #define AD5270_DATA(x)   (((x) & 0x3FF) <<  0)
@@ -78,8 +77,6 @@ typedef int (*ad5270_read_func)(struct ad5270_state *st,
 struct ad5270_state {
 	struct device *dev;
 	const struct ad5270_chip_info *chip_info;
-	/* protect shared data */
-	struct mutex lock;
 	bool otp0_enabled;
 	bool shutdown;
 	bool rperform;
@@ -122,21 +119,21 @@ static int ad5270_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		mutex_lock(&st->lock);
+		mutex_lock(&indio_dev->mlock);
 		ret = st->write(st, AD5270_CMD_RDAC_RD, 0, NO_SHIFT);
-		mutex_unlock(&st->lock);
+		mutex_unlock(&indio_dev->mlock);
 		if (ret)
 			return ret;
-		mutex_lock(&st->lock);
+		mutex_lock(&indio_dev->mlock);
 		*val = st->read(st, chan->scan_type.shift);
 		if (st->chip_info->features & AD5270_F_SDO_TRISTATE) {
 			ret = ad5270_sdo_tristate(st);
 			if (ret) {
-				mutex_unlock(&st->lock);
+				mutex_unlock(&indio_dev->mlock);
 				return ret;
 			}
 		}
-		mutex_unlock(&st->lock);
+		mutex_unlock(&indio_dev->mlock);
 		return IIO_VAL_INT;
 	default:
 		break;
@@ -151,7 +148,7 @@ static int ad5270_write_raw(struct iio_dev *indio_dev,
 	struct ad5270_state *st = iio_priv(indio_dev);
 	int ret = -EINVAL;
 
-	mutex_lock(&st->lock);
+	mutex_lock(&indio_dev->mlock);
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
 		ret = st->write(st, AD5270_CMD_CTRL_WR,
@@ -173,7 +170,7 @@ static int ad5270_write_raw(struct iio_dev *indio_dev,
 	default:
 		break;
 	}
-	mutex_unlock(&st->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return ret;
 }
@@ -187,7 +184,7 @@ static ssize_t ad5270_show(struct device *dev,
 	struct ad5270_state *st = iio_priv(indio_dev);
 	int addr, val, ret = 0;
 
-	mutex_lock(&st->lock);
+	mutex_lock(&indio_dev->mlock);
 	switch ((u32)this_attr->address) {
 	case OTP0:
 		ret = st->write(st, AD5270_CMD_50TP_ADDR_RD, 0, NO_SHIFT);
@@ -232,7 +229,7 @@ static ssize_t ad5270_show(struct device *dev,
 	default:
 		ret = -EINVAL;
 	}
-	mutex_unlock(&st->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return ret;
 }
@@ -248,7 +245,7 @@ static ssize_t ad5270_store(struct device *dev,
 	long readin;
 	int reg, ret = 0;
 
-	mutex_lock(&st->lock);
+	mutex_lock(&indio_dev->mlock);
 	switch ((u32)this_attr->address) {
 	case OTP0:
 		if (!st->otp0_enabled) {
@@ -323,7 +320,7 @@ static ssize_t ad5270_store(struct device *dev,
 	default:
 		ret = -EINVAL;
 	}
-	mutex_unlock(&st->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return ret ? ret : len;
 }
@@ -446,7 +443,6 @@ static int ad5270_probe(struct device *dev, enum ad5270_type chip_type,
 	st->write = write;
 	st->chip_info = &chip_info_tbl[chip_type];
 	ad5270_info.attrs = &ad5270_attribute_group[chip_type];
-	mutex_init(&st->lock);
 
 	indio_dev->dev.parent = dev;
 	indio_dev->name = name;
@@ -576,10 +572,9 @@ static int ad5270_i2c_write(struct ad5270_state *st, unsigned int cmd,
 	return (ret < 0 ? ret : (ret != sizeof(msg)) ? -EIO : 0);
 }
 
-static int ad5270_i2c_probe(struct i2c_client *i2c)
+static int ad5270_i2c_probe(struct i2c_client *i2c,
+	const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
-
 	return ad5270_probe(&i2c->dev, id->driver_data, id->name,
 		ad5270_i2c_read, ad5270_i2c_write);
 }

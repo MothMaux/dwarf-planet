@@ -13,6 +13,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
+#include <linux/of_gpio.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/time.h>
@@ -1075,9 +1076,6 @@ static int max98390_i2c_probe(struct i2c_client *i2c)
 
 	reset_gpio = devm_gpiod_get_optional(&i2c->dev,
 					     "reset", GPIOD_OUT_HIGH);
-	if (IS_ERR(reset_gpio))
-		return dev_err_probe(&i2c->dev, PTR_ERR(reset_gpio),
-				     "Failed to get reset gpio\n");
 
 	/* Power on device */
 	if (reset_gpio) {
@@ -1106,7 +1104,7 @@ static int max98390_i2c_probe(struct i2c_client *i2c)
 }
 
 static const struct i2c_device_id max98390_i2c_id[] = {
-	{ "max98390"},
+	{ "max98390", 0},
 	{},
 };
 
@@ -1135,7 +1133,7 @@ static struct i2c_driver max98390_i2c_driver = {
 		.acpi_match_table = ACPI_PTR(max98390_acpi_match),
 		.pm = &max98390_pm,
 	},
-	.probe = max98390_i2c_probe,
+	.probe_new = max98390_i2c_probe,
 	.id_table = max98390_i2c_id,
 };
 

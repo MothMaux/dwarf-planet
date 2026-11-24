@@ -457,15 +457,15 @@ static void virtio_gpio_free_vqs(struct virtio_device *vdev)
 static int virtio_gpio_alloc_vqs(struct virtio_gpio *vgpio,
 				 struct virtio_device *vdev)
 {
-	struct virtqueue_info vqs_info[] = {
-		{ "requestq", virtio_gpio_request_vq },
-		{ "eventq", virtio_gpio_event_vq },
+	const char * const names[] = { "requestq", "eventq" };
+	vq_callback_t *cbs[] = {
+		virtio_gpio_request_vq,
+		virtio_gpio_event_vq,
 	};
 	struct virtqueue *vqs[2] = { NULL, NULL };
 	int ret;
 
-	ret = virtio_find_vqs(vdev, vgpio->irq_lines ? 2 : 1, vqs,
-			      vqs_info, NULL);
+	ret = virtio_find_vqs(vdev, vgpio->irq_lines ? 2 : 1, vqs, cbs, names, NULL);
 	if (ret) {
 		dev_err(&vdev->dev, "failed to find vqs: %d\n", ret);
 		return ret;
@@ -539,6 +539,7 @@ static const char **virtio_gpio_get_names(struct virtio_gpio *vgpio,
 
 static int virtio_gpio_probe(struct virtio_device *vdev)
 {
+	struct virtio_gpio_config config;
 	struct device *dev = &vdev->dev;
 	struct virtio_gpio *vgpio;
 	u32 gpio_names_size;
@@ -550,11 +551,9 @@ static int virtio_gpio_probe(struct virtio_device *vdev)
 		return -ENOMEM;
 
 	/* Read configuration */
-	gpio_names_size =
-		virtio_cread32(vdev, offsetof(struct virtio_gpio_config,
-					      gpio_names_size));
-	ngpio =  virtio_cread16(vdev, offsetof(struct virtio_gpio_config,
-					       ngpio));
+	virtio_cread_bytes(vdev, 0, &config, sizeof(config));
+	gpio_names_size = le32_to_cpu(config.gpio_names_size);
+	ngpio = le16_to_cpu(config.ngpio);
 	if (!ngpio) {
 		dev_err(dev, "Number of GPIOs can't be zero\n");
 		return -EINVAL;
@@ -654,6 +653,7 @@ static struct virtio_driver virtio_gpio_driver = {
 	.remove			= virtio_gpio_remove,
 	.driver			= {
 		.name		= KBUILD_MODNAME,
+		.owner		= THIS_MODULE,
 	},
 };
 module_virtio_driver(virtio_gpio_driver);

@@ -7,8 +7,7 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: Analog Devices ADF4371/ADF4372 Wideband Synthesizers
 
 maintainers:
-  - Marcelo Schmitt <marcelo.schmitt@analog.com>
-  - Nuno Sá <nuno.sa@analog.com>
+  - Popa Stefan <stefan.popa@analog.com>
 
 description: |
   Analog Devices ADF4371/ADF4372 SPI Wideband Synthesizers
@@ -48,14 +47,12 @@ properties:
       - minimum: 1
 
   adi,spi-3wire-enable:
-    $ref: /schemas/types.yaml#/definitions/flag
     description:
       This attribute needs to be set in case the 4-wire SPI controller is
       used, and the 4 to 3 wire conversion is done with some external logic
       in between.
 
   adi,muxout-level-1v8-enable:
-    $ref: /schemas/types.yaml#/definitions/flag
     description:
       When set the output level of the mux out pin is set to 1.8V.
       (default is 3.3V)
@@ -112,7 +109,7 @@ properties:
     const: 1
 
 patternProperties:
-  "^channel@[0-3]$":
+  "^channel@[01]$":
     type: object
     description: Represents the external channels which are connected to the device.
 
@@ -124,19 +121,19 @@ patternProperties:
         maxItems: 1
 
       adi,output-enable:
-        $ref: /schemas/types.yaml#/definitions/flag
         description: |
           If this property is specified, the output channel will be enabled.
           If left empty, the driver will initialize the defaults (RF8x, channel 0
           will be the only one enabled).
+        maxItems: 1
 
       adi,power-up-frequency:
-        $ref: /schemas/types.yaml#/definitions/uint64
         description: |
           Set the frequency after power up for the channel. If this property is
           specified, it has to be in sync with the power up frequency set on the
           other channels. This limitation is due to the fact that all the channel
           frequencies are derived from the VCO fundamental frequency.
+        maxItems: 1
 
     required:
       - reg
@@ -154,43 +151,45 @@ unevaluatedProperties: false
 
 examples:
   - |
-    spi {
+    spi0 {
         #address-cells = <1>;
         #size-cells = <0>;
 
         frequency@0 {
-            compatible = "adi,adf4371";
-            reg = <0>;
-            spi-max-frequency = <1000000>;
-            clocks = <&adf4371_clkin>;
-            clock-names = "clkin";
-
-            #address-cells = <1>;
-            #size-cells = <0>;
-            #clock-cells = <1>;
-
-            channel@0 {
+                compatible = "adi,adf4371";
                 reg = <0>;
-                adi,output-enable;
-                adi,power-up-frequency = /bits/ 64 <8000000000>;
-            };
 
-            channel@1 {
-                reg = <1>;
-                adi,output-enable;
-            };
+                #address-cells = <1>;
+                #size-cells = <0>;
+                #clock-cells = <1>;
 
-            channel@2 {
-                reg = <2>;
-                adi,output-enable;
-                adi,power-up-frequency = /bits/ 64 <16000000000>;
-            };
+                spi-max-frequency = <1000000>;
+                clocks = <&adf4371_clkin>;
+                clock-names = "clkin";
+                clock-scales = <1 10>;
 
-            channel@3 {
-                reg = <3>;
-                adi,output-enable;
-                adi,power-up-frequency = /bits/ 64 <32000000000>;
-            };
+                channel@0 {
+                        reg = <0>;
+                        adi,output-enable;
+                        adi,power-up-frequency = /bits/ 64 <8000000000>;
+                };
+
+                channel@1 {
+                        reg = <1>;
+                        adi,output-enable;
+                };
+
+                channel@2 {
+                        reg = <2>;
+                        adi,output-enable;
+                        adi,power-up-frequency = /bits/ 64 <16000000000>;
+                };
+
+                channel@3 {
+                        reg = <3>;
+                        adi,output-enable;
+                        adi,power-up-frequency = /bits/ 64 <32000000000>;
+                };
         };
     };
 ...

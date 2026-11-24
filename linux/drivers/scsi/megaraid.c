@@ -219,7 +219,7 @@ mega_query_adapter(adapter_t *adapter)
 	raw_mbox[3] = ENQ3_GET_SOLICITED_FULL;	/* i.e. 0x02 */
 
 	/* Issue a blocking command to the card */
-	if (issue_scb_block(adapter, raw_mbox)) {
+	if ((retval = issue_scb_block(adapter, raw_mbox))) {
 		/* the adapter does not support 40ld */
 
 		mraid_ext_inquiry	*ext_inq;
@@ -1441,7 +1441,6 @@ mega_cmd_done(adapter_t *adapter, u8 completed[], int nstatus, int status)
 		 */
 		if (cmdid == CMDID_INT_CMDS) {
 			scb = &adapter->int_scb;
-			cmd = scb->cmd;
 
 			list_del_init(&scb->list);
 			scb->state = SCB_FREE;
@@ -1898,7 +1897,7 @@ megaraid_reset(struct scsi_cmnd *cmd)
 
 	spin_lock_irq(&adapter->lock);
 
-	rval =  megaraid_abort_and_reset(adapter, NULL, SCB_RESET);
+	rval =  megaraid_abort_and_reset(adapter, cmd, SCB_RESET);
 
 	/*
 	 * This is required here to complete any completed requests
@@ -1925,13 +1924,10 @@ megaraid_abort_and_reset(adapter_t *adapter, struct scsi_cmnd *cmd, int aor)
 	struct list_head	*pos, *next;
 	scb_t			*scb;
 
-	if (aor == SCB_ABORT)
-		dev_warn(&adapter->dev->dev,
-			 "ABORTING cmd=%x <c=%d t=%d l=%d>\n",
-			 cmd->cmnd[0], cmd->device->channel,
-			 cmd->device->id, (u32)cmd->device->lun);
-	else
-		dev_warn(&adapter->dev->dev, "RESETTING\n");
+	dev_warn(&adapter->dev->dev, "%s cmd=%x <c=%d t=%d l=%d>\n",
+	     (aor == SCB_ABORT)? "ABORTING":"RESET",
+	     cmd->cmnd[0], cmd->device->channel,
+	     cmd->device->id, (u32)cmd->device->lun);
 
 	if(list_empty(&adapter->pending_list))
 		return FAILED;
@@ -1940,7 +1936,7 @@ megaraid_abort_and_reset(adapter_t *adapter, struct scsi_cmnd *cmd, int aor)
 
 		scb = list_entry(pos, scb_t, list);
 
-		if (!cmd || scb->cmd == cmd) { /* Found command */
+		if (scb->cmd == cmd) { /* Found command */
 
 			scb->state |= aor;
 
@@ -1959,23 +1955,31 @@ megaraid_abort_and_reset(adapter_t *adapter, struct scsi_cmnd *cmd, int aor)
 
 				return FAILED;
 			}
-			/*
-			 * Not yet issued! Remove from the pending
-			 * list
-			 */
-			dev_warn(&adapter->dev->dev,
-				 "%s-[%x], driver owner\n",
-				 (cmd) ? "ABORTING":"RESET",
-				 scb->idx);
-			mega_free_scb(adapter, scb);
+			else {
 
-			if (cmd) {
-				cmd->result = (DID_ABORT << 16);
+				/*
+				 * Not yet issued! Remove from the pending
+				 * list
+				 */
+				dev_warn(&adapter->dev->dev,
+					"%s-[%x], driver owner\n",
+					(aor==SCB_ABORT) ? "ABORTING":"RESET",
+					scb->idx);
+
+				mega_free_scb(adapter, scb);
+
+				if( aor == SCB_ABORT ) {
+					cmd->result = (DID_ABORT << 16);
+				}
+				else {
+					cmd->result = (DID_RESET << 16);
+				}
+
 				list_add_tail(SCSI_LIST(cmd),
-					      &adapter->completed_list);
-			}
+						&adapter->completed_list);
 
-			return SUCCESS;
+				return SUCCESS;
+			}
 		}
 	}
 
@@ -4096,7 +4100,7 @@ mega_internal_command(adapter_t *adapter, megacmd_t *mc, mega_passthru *pthru)
 	return rval;
 }
 
-static const struct scsi_host_template megaraid_template = {
+static struct scsi_host_template megaraid_template = {
 	.module				= THIS_MODULE,
 	.name				= "MegaRAID",
 	.proc_name			= "megaraid_legacy",
@@ -4109,6 +4113,8 @@ static const struct scsi_host_template megaraid_template = {
 	.sg_tablesize			= MAX_SGLIST,
 	.cmd_per_lun			= DEF_CMD_PER_LUN,
 	.eh_abort_handler		= megaraid_abort,
+	.eh_device_reset_handler	= megaraid_reset,
+	.eh_bus_reset_handler		= megaraid_reset,
 	.eh_host_reset_handler		= megaraid_reset,
 	.no_write_same			= 1,
 	.cmd_size			= sizeof(struct megaraid_cmd_priv),

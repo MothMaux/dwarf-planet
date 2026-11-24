@@ -1418,18 +1418,20 @@ clk_err:
 	return ret;
 }
 
-static void xlnxsync_remove(struct platform_device *pdev)
+static int xlnxsync_remove(struct platform_device *pdev)
 {
 	struct xlnxsync_device *xlnxsync = platform_get_drvdata(pdev);
 
 	if (!xlnxsync || !xlnxsync_class)
-		return;
+		return -EIO;
 
 	cdev_del(&xlnxsync->chdev);
 	clk_disable_unprepare(xlnxsync->c_clk);
 	clk_disable_unprepare(xlnxsync->p_clk);
 	clk_disable_unprepare(xlnxsync->axi_clk);
 	ida_simple_remove(&xs_ida, xlnxsync->minor);
+
+	return 0;
 }
 
 static const struct of_device_id xlnxsync_of_match[] = {
@@ -1451,7 +1453,7 @@ static int __init xlnxsync_init_mod(void)
 {
 	int err;
 
-	xlnxsync_class = class_create(XLNXSYNC_DRIVER_NAME);
+	xlnxsync_class = class_create(THIS_MODULE, XLNXSYNC_DRIVER_NAME);
 	if (IS_ERR(xlnxsync_class)) {
 		pr_err("%s : Unable to create xlnxsync class", __func__);
 		return PTR_ERR(xlnxsync_class);
@@ -1488,6 +1490,5 @@ module_exit(xlnxsync_cleanup_mod);
 
 MODULE_AUTHOR("Vishal Sagar");
 MODULE_DESCRIPTION("Xilinx Synchronizer IP Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_VERSION(XLNXSYNC_DRIVER_VERSION);
-MODULE_IMPORT_NS(DMA_BUF);

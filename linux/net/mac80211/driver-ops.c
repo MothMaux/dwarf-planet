@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2015 Intel Deutschland GmbH
- * Copyright (C) 2022-2024 Intel Corporation
+ * Copyright (C) 2022 Intel Corporation
  */
 #include <net/mac80211.h>
 #include "ieee80211_i.h"
 #include "trace.h"
 #include "driver-ops.h"
-#include "debugfs_sta.h"
-#include "debugfs_netdev.h"
 
 int drv_start(struct ieee80211_local *local)
 {
 	int ret;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (WARN_ON(local->started))
 		return -EALREADY;
@@ -33,16 +30,15 @@ int drv_start(struct ieee80211_local *local)
 	return ret;
 }
 
-void drv_stop(struct ieee80211_local *local, bool suspend)
+void drv_stop(struct ieee80211_local *local)
 {
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (WARN_ON(!local->started))
 		return;
 
-	trace_drv_stop(local, suspend);
-	local->ops->stop(&local->hw, suspend);
+	trace_drv_stop(local);
+	local->ops->stop(&local->hw);
 	trace_drv_return_void(local);
 
 	/* sync away all work on the tasklet before clearing started */
@@ -60,7 +56,6 @@ int drv_add_interface(struct ieee80211_local *local,
 	int ret;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (WARN_ON(sdata->vif.type == NL80211_IFTYPE_AP_VLAN ||
 		    (sdata->vif.type == NL80211_IFTYPE_MONITOR &&
@@ -72,18 +67,10 @@ int drv_add_interface(struct ieee80211_local *local,
 	ret = local->ops->add_interface(&local->hw, &sdata->vif);
 	trace_drv_return_int(local, ret);
 
-	if (ret)
-		return ret;
-
-	if (!(sdata->flags & IEEE80211_SDATA_IN_DRIVER)) {
+	if (ret == 0)
 		sdata->flags |= IEEE80211_SDATA_IN_DRIVER;
 
-		drv_vif_add_debugfs(local, sdata);
-		/* initially vif is not MLD */
-		ieee80211_link_debugfs_drv_add(&sdata->deflink);
-	}
-
-	return 0;
+	return ret;
 }
 
 int drv_change_interface(struct ieee80211_local *local,
@@ -93,7 +80,6 @@ int drv_change_interface(struct ieee80211_local *local,
 	int ret;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return -EIO;
@@ -108,24 +94,13 @@ void drv_remove_interface(struct ieee80211_local *local,
 			  struct ieee80211_sub_if_data *sdata)
 {
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return;
 
-	sdata->flags &= ~IEEE80211_SDATA_IN_DRIVER;
-
-	/*
-	 * Remove driver debugfs entries.
-	 * The virtual monitor interface doesn't get a debugfs
-	 * entry, so it's exempt here.
-	 */
-	if (sdata != rcu_access_pointer(local->monitor_sdata))
-		ieee80211_debugfs_recreate_netdev(sdata,
-						  sdata->vif.valid_links);
-
 	trace_drv_remove_interface(local, sdata);
 	local->ops->remove_interface(&local->hw, &sdata->vif);
+	sdata->flags &= ~IEEE80211_SDATA_IN_DRIVER;
 	trace_drv_return_void(local);
 }
 
@@ -139,7 +114,6 @@ int drv_sta_state(struct ieee80211_local *local,
 	int ret = 0;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	sdata = get_bss_sdata(sdata);
 	if (!check_sdata_in_driver(sdata))
@@ -173,7 +147,6 @@ int drv_sta_set_txpwr(struct ieee80211_local *local,
 	int ret = -EOPNOTSUPP;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	sdata = get_bss_sdata(sdata);
 	if (!check_sdata_in_driver(sdata))
@@ -215,12 +188,12 @@ int drv_conf_tx(struct ieee80211_local *local,
 	int ret = -EOPNOTSUPP;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return -EIO;
 
-	if (!ieee80211_vif_link_active(&sdata->vif, link->link_id))
+	if (sdata->vif.active_links &&
+	    !(sdata->vif.active_links & BIT(link->link_id)))
 		return 0;
 
 	if (params->cw_min == 0 || params->cw_min > params->cw_max) {
@@ -248,7 +221,6 @@ u64 drv_get_tsf(struct ieee80211_local *local,
 	u64 ret = -1ULL;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return ret;
@@ -265,7 +237,6 @@ void drv_set_tsf(struct ieee80211_local *local,
 		 u64 tsf)
 {
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return;
@@ -281,7 +252,6 @@ void drv_offset_tsf(struct ieee80211_local *local,
 		    s64 offset)
 {
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return;
@@ -296,7 +266,6 @@ void drv_reset_tsf(struct ieee80211_local *local,
 		   struct ieee80211_sub_if_data *sdata)
 {
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return;
@@ -314,25 +283,12 @@ int drv_assign_vif_chanctx(struct ieee80211_local *local,
 {
 	int ret = 0;
 
-	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
-
-	/*
-	 * We should perhaps push emulate chanctx down and only
-	 * make it call ->config() when the chanctx is actually
-	 * assigned here (and unassigned below), but that's yet
-	 * another change to all drivers to add assign/unassign
-	 * emulation callbacks. Maybe later.
-	 */
-	if (sdata->vif.type == NL80211_IFTYPE_MONITOR &&
-	    local->emulate_chanctx &&
-	    !ieee80211_hw_check(&local->hw, WANT_MONITOR_VIF))
-		return 0;
-
+	drv_verify_link_exists(sdata, link_conf);
 	if (!check_sdata_in_driver(sdata))
 		return -EIO;
 
-	if (!ieee80211_vif_link_active(&sdata->vif, link_conf->link_id))
+	if (sdata->vif.active_links &&
+	    !(sdata->vif.active_links & BIT(link_conf->link_id)))
 		return 0;
 
 	trace_drv_assign_vif_chanctx(local, sdata, link_conf, ctx);
@@ -354,17 +310,13 @@ void drv_unassign_vif_chanctx(struct ieee80211_local *local,
 			      struct ieee80211_chanctx *ctx)
 {
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
-	if (sdata->vif.type == NL80211_IFTYPE_MONITOR &&
-	    local->emulate_chanctx &&
-	    !ieee80211_hw_check(&local->hw, WANT_MONITOR_VIF))
-		return;
-
+	drv_verify_link_exists(sdata, link_conf);
 	if (!check_sdata_in_driver(sdata))
 		return;
 
-	if (!ieee80211_vif_link_active(&sdata->vif, link_conf->link_id))
+	if (sdata->vif.active_links &&
+	    !(sdata->vif.active_links & BIT(link_conf->link_id)))
 		return;
 
 	trace_drv_unassign_vif_chanctx(local, sdata, link_conf, ctx);
@@ -386,7 +338,6 @@ int drv_switch_vif_chanctx(struct ieee80211_local *local,
 	int i;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!local->ops->switch_vif_chanctx)
 		return -EOPNOTSUPP;
@@ -439,7 +390,6 @@ int drv_ampdu_action(struct ieee80211_local *local,
 	int ret = -EOPNOTSUPP;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	sdata = get_bss_sdata(sdata);
 	if (!check_sdata_in_driver(sdata))
@@ -461,7 +411,6 @@ void drv_link_info_changed(struct ieee80211_local *local,
 			   int link_id, u64 changed)
 {
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (WARN_ON_ONCE(changed & (BSS_CHANGED_BEACON |
 				    BSS_CHANGED_BEACON_ENABLED) &&
@@ -481,7 +430,8 @@ void drv_link_info_changed(struct ieee80211_local *local,
 	if (!check_sdata_in_driver(sdata))
 		return;
 
-	if (!ieee80211_vif_link_active(&sdata->vif, link_id))
+	if (sdata->vif.active_links &&
+	    !(sdata->vif.active_links & BIT(link_id)))
 		return;
 
 	trace_drv_link_info_changed(local, sdata, info, changed);
@@ -503,7 +453,6 @@ int drv_set_key(struct ieee80211_local *local,
 	int ret;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	sdata = get_bss_sdata(sdata);
 	if (!check_sdata_in_driver(sdata))
@@ -524,14 +473,9 @@ int drv_change_vif_links(struct ieee80211_local *local,
 			 u16 old_links, u16 new_links,
 			 struct ieee80211_bss_conf *old[IEEE80211_MLD_MAX_NUM_LINKS])
 {
-	struct ieee80211_link_data *link;
-	unsigned long links_to_add;
-	unsigned long links_to_rem;
-	unsigned int link_id;
 	int ret = -EOPNOTSUPP;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return -EIO;
@@ -539,34 +483,13 @@ int drv_change_vif_links(struct ieee80211_local *local,
 	if (old_links == new_links)
 		return 0;
 
-	links_to_add = ~old_links & new_links;
-	links_to_rem = old_links & ~new_links;
-
-	for_each_set_bit(link_id, &links_to_rem, IEEE80211_MLD_MAX_NUM_LINKS) {
-		link = rcu_access_pointer(sdata->link[link_id]);
-
-		ieee80211_link_debugfs_drv_remove(link);
-	}
-
 	trace_drv_change_vif_links(local, sdata, old_links, new_links);
 	if (local->ops->change_vif_links)
 		ret = local->ops->change_vif_links(&local->hw, &sdata->vif,
 						   old_links, new_links, old);
 	trace_drv_return_int(local, ret);
 
-	if (ret)
-		return ret;
-
-	if (!local->in_reconfig && !local->resuming) {
-		for_each_set_bit(link_id, &links_to_add,
-				 IEEE80211_MLD_MAX_NUM_LINKS) {
-			link = rcu_access_pointer(sdata->link[link_id]);
-
-			ieee80211_link_debugfs_drv_add(link);
-		}
-	}
-
-	return 0;
+	return ret;
 }
 
 int drv_change_sta_links(struct ieee80211_local *local,
@@ -574,15 +497,9 @@ int drv_change_sta_links(struct ieee80211_local *local,
 			 struct ieee80211_sta *sta,
 			 u16 old_links, u16 new_links)
 {
-	struct sta_info *info = container_of(sta, struct sta_info, sta);
-	struct link_sta_info *link_sta;
-	unsigned long links_to_add;
-	unsigned long links_to_rem;
-	unsigned int link_id;
 	int ret = -EOPNOTSUPP;
 
 	might_sleep();
-	lockdep_assert_wiphy(local->hw.wiphy);
 
 	if (!check_sdata_in_driver(sdata))
 		return -EIO;
@@ -593,34 +510,11 @@ int drv_change_sta_links(struct ieee80211_local *local,
 	if (old_links == new_links)
 		return 0;
 
-	links_to_add = ~old_links & new_links;
-	links_to_rem = old_links & ~new_links;
-
-	for_each_set_bit(link_id, &links_to_rem, IEEE80211_MLD_MAX_NUM_LINKS) {
-		link_sta = rcu_dereference_protected(info->link[link_id],
-						     lockdep_is_held(&local->hw.wiphy->mtx));
-
-		ieee80211_link_sta_debugfs_drv_remove(link_sta);
-	}
-
 	trace_drv_change_sta_links(local, sdata, sta, old_links, new_links);
 	if (local->ops->change_sta_links)
 		ret = local->ops->change_sta_links(&local->hw, &sdata->vif, sta,
 						   old_links, new_links);
 	trace_drv_return_int(local, ret);
 
-	if (ret)
-		return ret;
-
-	/* during reconfig don't add it to debugfs again */
-	if (local->in_reconfig || local->resuming)
-		return 0;
-
-	for_each_set_bit(link_id, &links_to_add, IEEE80211_MLD_MAX_NUM_LINKS) {
-		link_sta = rcu_dereference_protected(info->link[link_id],
-						     lockdep_is_held(&local->hw.wiphy->mtx));
-		ieee80211_link_sta_debugfs_drv_add(link_sta);
-	}
-
-	return 0;
+	return ret;
 }

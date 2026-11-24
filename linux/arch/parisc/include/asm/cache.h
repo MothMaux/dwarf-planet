@@ -20,16 +20,7 @@
 
 #define SMP_CACHE_BYTES L1_CACHE_BYTES
 
-#ifdef CONFIG_PA20
-#define ARCH_DMA_MINALIGN	128
-#else
-#define ARCH_DMA_MINALIGN	32
-#endif
-#define ARCH_KMALLOC_MINALIGN	16	/* ldcw requires 16-byte alignment */
-
-#define arch_slab_minalign()	((unsigned)dcache_stride)
-#define cache_line_size()	dcache_stride
-#define dma_get_cache_alignment cache_line_size
+#define ARCH_DMA_MINALIGN	L1_CACHE_BYTES
 
 #define __read_mostly __section(".data..read_mostly")
 
@@ -46,7 +37,6 @@ extern int split_tlb;
 extern int dcache_stride;
 extern int icache_stride;
 extern struct pdc_cache_info cache_info;
-extern struct pdc_btlb_info btlb_info;
 void parisc_setup_cache_timing(void);
 
 #define pdtlb(sr, addr)	asm volatile("pdtlb 0(%%sr%0,%1)" \

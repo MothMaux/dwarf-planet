@@ -238,7 +238,7 @@ static int ipoib_change_mtu(struct net_device *dev, int new_mtu)
 			ipoib_warn(priv, "mtu > %d will cause multicast packet drops.\n",
 				   priv->mcast_mtu);
 
-		WRITE_ONCE(dev->mtu, new_mtu);
+		dev->mtu = new_mtu;
 		return 0;
 	}
 
@@ -265,7 +265,7 @@ static int ipoib_change_mtu(struct net_device *dev, int new_mtu)
 		if (carrier_status)
 			netif_carrier_on(dev);
 	} else {
-		WRITE_ONCE(dev->mtu, new_mtu);
+		dev->mtu = new_mtu;
 	}
 
 	return ret;
@@ -317,27 +317,27 @@ static bool ipoib_is_dev_match_addr_rcu(const struct sockaddr *addr,
 }
 
 /*
- * Find the L2 master net_device on top of the given net_device.
+ * Find the master net_device on top of the given net_device.
  * @dev: base IPoIB net_device
  *
- * Returns the L2 master net_device with reference held if the L2 master
- * exists (such as bond netdevice), or returns same netdev with reference
- * held when master does not exist or when L3 master (such as VRF netdev).
+ * Returns the master net_device with a reference held, or the same net_device
+ * if no master exists.
  */
 static struct net_device *ipoib_get_master_net_dev(struct net_device *dev)
 {
 	struct net_device *master;
 
 	rcu_read_lock();
-
 	master = netdev_master_upper_dev_get_rcu(dev);
-	if (!master || netif_is_l3_master(master))
-		master = dev;
-
-	dev_hold(master);
+	if (master)
+		dev_hold(master);
 	rcu_read_unlock();
 
-	return master;
+	if (master)
+		return master;
+
+	dev_hold(dev);
+	return dev;
 }
 
 struct ipoib_walk_data {
@@ -486,7 +486,7 @@ static struct net_device *ipoib_get_net_dev_by_params(
 	if (ret)
 		return NULL;
 
-	/* See if we can find a unique device matching the pkey and GID */
+	/* See if we can find a unique device matching the L2 parameters */
 	matches = __ipoib_get_net_dev_by_params(dev_list, port, pkey_index,
 						gid, NULL, &net_dev);
 
@@ -499,7 +499,7 @@ static struct net_device *ipoib_get_net_dev_by_params(
 
 	dev_put(net_dev);
 
-	/* Couldn't find a unique device with pkey and GID only. Use L3
+	/* Couldn't find a unique device with L2 parameters only. Use L3
 	 * address to uniquely match the net device */
 	matches = __ipoib_get_net_dev_by_params(dev_list, port, pkey_index,
 						gid, addr, &net_dev);
@@ -742,7 +742,7 @@ void ipoib_flush_paths(struct net_device *dev)
 
 static void path_rec_completion(int status,
 				struct sa_path_rec *pathrec,
-				unsigned int num_prs, void *path_ptr)
+				int num_prs, void *path_ptr)
 {
 	struct ipoib_path *path = path_ptr;
 	struct net_device *dev = path->dev;
@@ -1200,34 +1200,7 @@ static void ipoib_timeout(struct net_device *dev, unsigned int txqueue)
 		   netif_queue_stopped(dev), priv->tx_head, priv->tx_tail,
 		   priv->global_tx_head, priv->global_tx_tail);
 
-
-	schedule_work(&priv->tx_timeout_work);
-}
-
-void ipoib_ib_tx_timeout_work(struct work_struct *work)
-{
-	struct ipoib_dev_priv *priv = container_of(work,
-						   struct ipoib_dev_priv,
-						   tx_timeout_work);
-	int err;
-
-	rtnl_lock();
-
-	if (!test_bit(IPOIB_FLAG_ADMIN_UP, &priv->flags))
-		goto unlock;
-
-	ipoib_stop(priv->dev);
-	err = ipoib_open(priv->dev);
-	if (err) {
-		ipoib_warn(priv, "ipoib_open failed recovering from a tx_timeout, err(%d).\n",
-				err);
-		goto unlock;
-	}
-
-	netif_tx_wake_all_queues(priv->dev);
-unlock:
-	rtnl_unlock();
-
+	/* XXX reset QP, etc. */
 }
 
 static int ipoib_hard_header(struct sk_buff *skb,
@@ -1272,10 +1245,10 @@ static int ipoib_get_iflink(const struct net_device *dev)
 
 	/* parent interface */
 	if (!test_bit(IPOIB_FLAG_SUBINTERFACE, &priv->flags))
-		return READ_ONCE(dev->ifindex);
+		return dev->ifindex;
 
 	/* child/vlan interface */
-	return READ_ONCE(priv->parent->ifindex);
+	return priv->parent->ifindex;
 }
 
 static u32 ipoib_addr_hash(struct ipoib_neigh_hash *htbl, u8 *daddr)
@@ -2032,7 +2005,8 @@ static void ipoib_ndo_uninit(struct net_device *dev)
 		priv->wq = NULL;
 	}
 
-	dev_put(priv->parent);
+	if (priv->parent)
+		dev_put(priv->parent);
 }
 
 static int ipoib_set_vf_link_state(struct net_device *dev, int vf, int link_state)
@@ -2139,7 +2113,7 @@ void ipoib_setup_common(struct net_device *dev)
 
 	ipoib_set_ethtool_ops(dev);
 
-	dev->watchdog_timeo	 = 10 * HZ;
+	dev->watchdog_timeo	 = HZ;
 
 	dev->flags		|= IFF_BROADCAST | IFF_MULTICAST;
 
@@ -2177,12 +2151,10 @@ static void ipoib_build_priv(struct net_device *dev)
 
 	INIT_DELAYED_WORK(&priv->mcast_task,   ipoib_mcast_join_task);
 	INIT_WORK(&priv->carrier_on_task, ipoib_mcast_carrier_on_task);
-	INIT_WORK(&priv->reschedule_napi_work, ipoib_napi_schedule_work);
 	INIT_WORK(&priv->flush_light,   ipoib_ib_dev_flush_light);
 	INIT_WORK(&priv->flush_normal,   ipoib_ib_dev_flush_normal);
 	INIT_WORK(&priv->flush_heavy,   ipoib_ib_dev_flush_heavy);
 	INIT_WORK(&priv->restart_task, ipoib_mcast_restart_task);
-	INIT_WORK(&priv->tx_timeout_work, ipoib_ib_tx_timeout_work);
 	INIT_DELAYED_WORK(&priv->ah_reap_task, ipoib_reap_ah);
 	INIT_DELAYED_WORK(&priv->neigh_reap_task, ipoib_reap_neigh);
 }
@@ -2228,14 +2200,6 @@ int ipoib_intf_init(struct ib_device *hca, u32 port, const char *name,
 		rn->attach_mcast = ipoib_mcast_attach;
 		rn->detach_mcast = ipoib_mcast_detach;
 		rn->hca = hca;
-
-		rc = netif_set_real_num_tx_queues(dev, 1);
-		if (rc)
-			goto out;
-
-		rc = netif_set_real_num_rx_queues(dev, 1);
-		if (rc)
-			goto out;
 	}
 
 	priv->rn_ops = dev->netdev_ops;

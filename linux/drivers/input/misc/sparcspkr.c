@@ -9,8 +9,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/input.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
+#include <linux/of_device.h>
 #include <linux/slab.h>
 
 #include <asm/io.h>
@@ -75,14 +74,9 @@ static int bbc_spkr_event(struct input_dev *dev, unsigned int type, unsigned int
 		return -1;
 
 	switch (code) {
-	case SND_BELL:
-		if (value)
-			value = 1000;
-		break;
-	case SND_TONE:
-		break;
-	default:
-		return -1;
+		case SND_BELL: if (value) value = 1000;
+		case SND_TONE: break;
+		default: return -1;
 	}
 
 	if (value > 20 && value < 32767)
@@ -118,14 +112,9 @@ static int grover_spkr_event(struct input_dev *dev, unsigned int type, unsigned 
 		return -1;
 
 	switch (code) {
-	case SND_BELL:
-		if (value)
-			value = 1000;
-		break;
-	case SND_TONE:
-		break;
-	default:
-		return -1;
+		case SND_BELL: if (value) value = 1000;
+		case SND_TONE: break;
+		default: return -1;
 	}
 
 	if (value > 20 && value < 32767)
@@ -241,7 +230,7 @@ out_err:
 	return err;
 }
 
-static void bbc_remove(struct platform_device *op)
+static int bbc_remove(struct platform_device *op)
 {
 	struct sparcspkr_state *state = platform_get_drvdata(op);
 	struct input_dev *input_dev = state->input_dev;
@@ -255,6 +244,8 @@ static void bbc_remove(struct platform_device *op)
 	of_iounmap(&op->resource[0], info->regs, 6);
 
 	kfree(state);
+
+	return 0;
 }
 
 static const struct of_device_id bbc_beep_match[] = {
@@ -272,7 +263,7 @@ static struct platform_driver bbc_beep_driver = {
 		.of_match_table = bbc_beep_match,
 	},
 	.probe		= bbc_beep_probe,
-	.remove_new	= bbc_remove,
+	.remove		= bbc_remove,
 	.shutdown	= sparcspkr_shutdown,
 };
 
@@ -318,7 +309,7 @@ out_err:
 	return err;
 }
 
-static void grover_remove(struct platform_device *op)
+static int grover_remove(struct platform_device *op)
 {
 	struct sparcspkr_state *state = platform_get_drvdata(op);
 	struct grover_beep_info *info = &state->u.grover;
@@ -333,6 +324,8 @@ static void grover_remove(struct platform_device *op)
 	of_iounmap(&op->resource[2], info->freq_regs, 2);
 
 	kfree(state);
+
+	return 0;
 }
 
 static const struct of_device_id grover_beep_match[] = {
@@ -350,7 +343,7 @@ static struct platform_driver grover_beep_driver = {
 		.of_match_table = grover_beep_match,
 	},
 	.probe		= grover_beep_probe,
-	.remove_new	= grover_remove,
+	.remove		= grover_remove,
 	.shutdown	= sparcspkr_shutdown,
 };
 

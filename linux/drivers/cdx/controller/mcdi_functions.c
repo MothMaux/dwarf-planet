@@ -49,7 +49,7 @@ int cdx_mcdi_get_dev_config(struct cdx_mcdi *cdx,
 			    u8 bus_num, u8 dev_num,
 			    struct cdx_dev_params *dev_params)
 {
-	MCDI_DECLARE_BUF(outbuf, MC_CMD_CDX_BUS_GET_DEVICE_CONFIG_OUT_V2_LEN);
+	MCDI_DECLARE_BUF(outbuf, MC_CMD_CDX_BUS_GET_DEVICE_CONFIG_OUT_LEN);
 	MCDI_DECLARE_BUF(inbuf, MC_CMD_CDX_BUS_GET_DEVICE_CONFIG_IN_LEN);
 	struct resource *res = &dev_params->res[0];
 	size_t outlen;
@@ -64,7 +64,7 @@ int cdx_mcdi_get_dev_config(struct cdx_mcdi *cdx,
 	if (ret)
 		return ret;
 
-	if (outlen != MC_CMD_CDX_BUS_GET_DEVICE_CONFIG_OUT_V2_LEN)
+	if (outlen != MC_CMD_CDX_BUS_GET_DEVICE_CONFIG_OUT_LEN)
 		return -EIO;
 
 	dev_params->bus_num = bus_num;
@@ -72,9 +72,6 @@ int cdx_mcdi_get_dev_config(struct cdx_mcdi *cdx,
 
 	req_id = MCDI_DWORD(outbuf, CDX_BUS_GET_DEVICE_CONFIG_OUT_REQUESTER_ID);
 	dev_params->req_id = req_id;
-
-	dev_params->msi_dev_id = MCDI_DWORD(outbuf,
-					    CDX_BUS_GET_DEVICE_CONFIG_OUT_V2_REQUESTER_DEVICE_ID);
 
 	dev_params->res_count = 0;
 	if (MCDI_QWORD(outbuf, CDX_BUS_GET_DEVICE_CONFIG_OUT_MMIO_REGION0_SIZE) != 0) {
@@ -215,23 +212,22 @@ static int cdx_mcdi_ctrl_flag_get(struct cdx_mcdi *cdx, u8 bus_num,
 }
 
 static int cdx_mcdi_ctrl_flag_set(struct cdx_mcdi *cdx, u8 bus_num,
-				  u8 dev_num, bool enable, int bit_pos)
+				  u8 dev_num, bool enable, int lbn)
 {
 	MCDI_DECLARE_BUF(inbuf, MC_CMD_CDX_DEVICE_CONTROL_SET_IN_LEN);
+	int ret, en;
 	u32 flags;
-	int ret;
 
 	/*
-	 * Get flags and then set/reset bit at bit_pos according to
+	 * Get flags and then set/reset BUS_MASTER_BIT according to
 	 * the input params.
 	 */
 	ret = cdx_mcdi_ctrl_flag_get(cdx, bus_num, dev_num, &flags);
 	if (ret)
 		return ret;
 
-	flags = flags & (u32)(~(BIT(bit_pos)));
-	if (enable)
-		flags |= (1 << bit_pos);
+	en = enable ? 1 : 0;
+	flags = (flags & (u32)(~(BIT(lbn)))) | (en << lbn);
 
 	MCDI_SET_DWORD(inbuf, CDX_DEVICE_CONTROL_SET_IN_BUS, bus_num);
 	MCDI_SET_DWORD(inbuf, CDX_DEVICE_CONTROL_SET_IN_DEVICE, dev_num);

@@ -16,7 +16,9 @@
 #include <unistd.h>
 #include <assert.h>
 #include <stdarg.h>
+#ifdef __GNU_LIBRARY__
 #include <getopt.h>
+#endif				/* __GNU_LIBRARY__ */
 
 #include "genksyms.h"
 /*----------------------------------------------------------------------*/
@@ -239,7 +241,6 @@ static struct symbol *__add_symbol(const char *name, enum symbol_type type,
 						"unchanged\n");
 				}
 				sym->is_declared = 1;
-				free_list(defn, NULL);
 				return sym;
 			} else if (!sym->is_declared) {
 				if (sym->is_override && flag_preserve) {
@@ -248,7 +249,6 @@ static struct symbol *__add_symbol(const char *name, enum symbol_type type,
 					print_type_name(type, name);
 					fprintf(stderr, " modversion change\n");
 					sym->is_declared = 1;
-					free_list(defn, NULL);
 					return sym;
 				} else {
 					status = is_unknown_symbol(sym) ?
@@ -256,7 +256,6 @@ static struct symbol *__add_symbol(const char *name, enum symbol_type type,
 				}
 			} else {
 				error_with_pos("redefinition of %s", name);
-				free_list(defn, NULL);
 				return sym;
 			}
 			break;
@@ -272,15 +271,11 @@ static struct symbol *__add_symbol(const char *name, enum symbol_type type,
 				break;
 			}
 		}
-
-		free_list(sym->defn, NULL);
-		free(sym->name);
-		free(sym);
 		--nsyms;
 	}
 
 	sym = xmalloc(sizeof(*sym));
-	sym->name = xstrdup(name);
+	sym->name = name;
 	sym->type = type;
 	sym->defn = defn;
 	sym->expansion_trail = NULL;
@@ -487,7 +482,7 @@ static void read_reference(FILE *f)
 			defn = def;
 			def = read_node(f);
 		}
-		subsym = add_reference_symbol(sym->string, sym->tag,
+		subsym = add_reference_symbol(xstrdup(sym->string), sym->tag,
 					      defn, is_extern);
 		subsym->is_override = is_override;
 		free_node(sym);
@@ -723,6 +718,8 @@ void error_with_pos(const char *fmt, ...)
 static void genksyms_usage(void)
 {
 	fputs("Usage:\n" "genksyms [-adDTwqhVR] > /path/to/.tmp_obj.ver\n" "\n"
+#ifdef __GNU_LIBRARY__
+	      "  -s, --symbol-prefix   Select symbol prefix\n"
 	      "  -d, --debug           Increment the debug level (repeatable)\n"
 	      "  -D, --dump            Dump expanded symbol defs (for debugging only)\n"
 	      "  -r, --reference file  Read reference symbols from a file\n"
@@ -732,6 +729,18 @@ static void genksyms_usage(void)
 	      "  -q, --quiet           Disable warnings (default)\n"
 	      "  -h, --help            Print this message\n"
 	      "  -V, --version         Print the release version\n"
+#else				/* __GNU_LIBRARY__ */
+	      "  -s                    Select symbol prefix\n"
+	      "  -d                    Increment the debug level (repeatable)\n"
+	      "  -D                    Dump expanded symbol defs (for debugging only)\n"
+	      "  -r file               Read reference symbols from a file\n"
+	      "  -T file               Dump expanded types into file\n"
+	      "  -p                    Preserve reference modversions or fail\n"
+	      "  -w                    Enable warnings\n"
+	      "  -q                    Disable warnings (default)\n"
+	      "  -h                    Print this message\n"
+	      "  -V                    Print the release version\n"
+#endif				/* __GNU_LIBRARY__ */
 	      , stderr);
 }
 
@@ -740,6 +749,7 @@ int main(int argc, char **argv)
 	FILE *dumpfile = NULL, *ref_file = NULL;
 	int o;
 
+#ifdef __GNU_LIBRARY__
 	struct option long_opts[] = {
 		{"debug", 0, 0, 'd'},
 		{"warnings", 0, 0, 'w'},
@@ -753,8 +763,11 @@ int main(int argc, char **argv)
 		{0, 0, 0, 0}
 	};
 
-	while ((o = getopt_long(argc, argv, "dwqVDr:T:ph",
+	while ((o = getopt_long(argc, argv, "s:dwqVDr:T:ph",
 				&long_opts[0], NULL)) != EOF)
+#else				/* __GNU_LIBRARY__ */
+	while ((o = getopt(argc, argv, "s:dwqVDr:T:ph")) != EOF)
+#endif				/* __GNU_LIBRARY__ */
 		switch (o) {
 		case 'd':
 			flag_debug++;

@@ -16,7 +16,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_debugfs.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
@@ -138,7 +138,7 @@ static int tilcdc_irq_install(struct drm_device *dev, unsigned int irq)
 	if (ret)
 		return ret;
 
-	priv->irq_enabled = true;
+	priv->irq_enabled = false;
 
 	return 0;
 }
@@ -175,12 +175,14 @@ static void tilcdc_fini(struct drm_device *dev)
 		drm_dev_unregister(dev);
 
 	drm_kms_helper_poll_fini(dev);
-	drm_atomic_helper_shutdown(dev);
 	tilcdc_irq_uninstall(dev);
 	drm_mode_config_cleanup(dev);
 
 	if (priv->clk)
 		clk_put(priv->clk);
+
+	if (priv->mmio)
+		iounmap(priv->mmio);
 
 	if (priv->wq)
 		destroy_workqueue(priv->wq);
@@ -198,6 +200,7 @@ static int tilcdc_init(const struct drm_driver *ddrv, struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct device_node *node = dev->of_node;
 	struct tilcdc_drm_private *priv;
+	struct resource *res;
 	u32 bpp = 0;
 	int ret;
 
@@ -222,10 +225,17 @@ static int tilcdc_init(const struct drm_driver *ddrv, struct device *dev)
 		goto init_failed;
 	}
 
-	priv->mmio = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(priv->mmio)) {
-		dev_err(dev, "failed to request / ioremap\n");
-		ret = PTR_ERR(priv->mmio);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		dev_err(dev, "failed to get memory resource\n");
+		ret = -EINVAL;
+		goto init_failed;
+	}
+
+	priv->mmio = ioremap(res->start, resource_size(res));
+	if (!priv->mmio) {
+		dev_err(dev, "failed to ioremap\n");
+		ret = -ENOMEM;
 		goto init_failed;
 	}
 
@@ -374,12 +384,11 @@ static int tilcdc_init(const struct drm_driver *ddrv, struct device *dev)
 		goto init_failed;
 	priv->is_registered = true;
 
-	drm_fbdev_dma_setup(ddev, bpp);
+	drm_fbdev_generic_setup(ddev, bpp);
 	return 0;
 
 init_failed:
 	tilcdc_fini(ddev);
-	platform_set_drvdata(pdev, NULL);
 
 	return ret;
 }
@@ -487,6 +496,7 @@ static const struct drm_driver tilcdc_driver = {
  * Power management:
  */
 
+#ifdef CONFIG_PM_SLEEP
 static int tilcdc_pm_suspend(struct device *dev)
 {
 	struct drm_device *ddev = dev_get_drvdata(dev);
@@ -508,9 +518,11 @@ static int tilcdc_pm_resume(struct device *dev)
 	pinctrl_pm_select_default_state(dev);
 	return  drm_mode_config_helper_resume(ddev);
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(tilcdc_pm_ops,
-				tilcdc_pm_suspend, tilcdc_pm_resume);
+static const struct dev_pm_ops tilcdc_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(tilcdc_pm_suspend, tilcdc_pm_resume)
+};
 
 /*
  * Platform driver:
@@ -528,8 +540,7 @@ static void tilcdc_unbind(struct device *dev)
 	if (!ddev->dev_private)
 		return;
 
-	tilcdc_fini(ddev);
-	dev_set_drvdata(dev, NULL);
+	tilcdc_fini(dev_get_drvdata(dev));
 }
 
 static const struct component_master_ops tilcdc_comp_ops = {
@@ -559,23 +570,19 @@ static int tilcdc_pdev_probe(struct platform_device *pdev)
 						       match);
 }
 
-static void tilcdc_pdev_remove(struct platform_device *pdev)
+static int tilcdc_pdev_remove(struct platform_device *pdev)
 {
 	int ret;
 
 	ret = tilcdc_get_external_components(&pdev->dev, NULL);
 	if (ret < 0)
-		dev_err(&pdev->dev, "tilcdc_get_external_components() failed (%pe)\n",
-			ERR_PTR(ret));
+		return ret;
 	else if (ret == 0)
 		tilcdc_fini(platform_get_drvdata(pdev));
 	else
 		component_master_del(&pdev->dev, &tilcdc_comp_ops);
-}
 
-static void tilcdc_pdev_shutdown(struct platform_device *pdev)
-{
-	drm_atomic_helper_shutdown(platform_get_drvdata(pdev));
+	return 0;
 }
 
 static const struct of_device_id tilcdc_of_match[] = {
@@ -587,11 +594,10 @@ MODULE_DEVICE_TABLE(of, tilcdc_of_match);
 
 static struct platform_driver tilcdc_platform_driver = {
 	.probe      = tilcdc_pdev_probe,
-	.remove_new = tilcdc_pdev_remove,
-	.shutdown   = tilcdc_pdev_shutdown,
+	.remove     = tilcdc_pdev_remove,
 	.driver     = {
 		.name   = "tilcdc",
-		.pm     = pm_sleep_ptr(&tilcdc_pm_ops),
+		.pm     = &tilcdc_pm_ops,
 		.of_match_table = tilcdc_of_match,
 	},
 };

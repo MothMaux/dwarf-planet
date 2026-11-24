@@ -29,7 +29,7 @@
 #include <net/calipso.h>
 #include <linux/atomic.h>
 #include <linux/bug.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include <linux/crc-ccitt.h>
 
 /* Maximium size of the calipso option including
@@ -657,8 +657,11 @@ static int calipso_map_cat_ntoh(const struct calipso_doi *doi_def,
 					  net_clen_bits,
 					  spot + 1,
 					  1);
-		if (spot < 0)
+		if (spot < 0) {
+			if (spot == -2)
+				return -EFAULT;
 			return 0;
+		}
 
 		ret_val = netlbl_catmap_setbit(&secattr->attr.mls.cat,
 					       spot,
@@ -1072,13 +1075,8 @@ static int calipso_sock_getattr(struct sock *sk,
 	struct ipv6_opt_hdr *hop;
 	int opt_len, len, ret_val = -ENOMSG, offset;
 	unsigned char *opt;
-	struct ipv6_pinfo *pinfo = inet6_sk(sk);
-	struct ipv6_txoptions *txopts;
+	struct ipv6_txoptions *txopts = txopt_get(inet6_sk(sk));
 
-	if (!pinfo)
-		return -EAFNOSUPPORT;
-
-	txopts = txopt_get(pinfo);
 	if (!txopts || !txopts->hopopt)
 		goto done;
 
@@ -1130,13 +1128,8 @@ static int calipso_sock_setattr(struct sock *sk,
 {
 	int ret_val;
 	struct ipv6_opt_hdr *old, *new;
-	struct ipv6_pinfo *pinfo = inet6_sk(sk);
-	struct ipv6_txoptions *txopts;
+	struct ipv6_txoptions *txopts = txopt_get(inet6_sk(sk));
 
-	if (!pinfo)
-		return -EAFNOSUPPORT;
-
-	txopts = txopt_get(pinfo);
 	old = NULL;
 	if (txopts)
 		old = txopts->hopopt;
@@ -1163,13 +1156,8 @@ static int calipso_sock_setattr(struct sock *sk,
 static void calipso_sock_delattr(struct sock *sk)
 {
 	struct ipv6_opt_hdr *new_hop;
-	struct ipv6_pinfo *pinfo = inet6_sk(sk);
-	struct ipv6_txoptions *txopts;
+	struct ipv6_txoptions *txopts = txopt_get(inet6_sk(sk));
 
-	if (!pinfo)
-		return;
-
-	txopts = txopt_get(pinfo);
 	if (!txopts || !txopts->hopopt)
 		goto done;
 
@@ -1206,10 +1194,6 @@ static int calipso_req_setattr(struct request_sock *req,
 	struct inet_request_sock *req_inet = inet_rsk(req);
 	struct ipv6_opt_hdr *old, *new;
 	struct sock *sk = sk_to_full_sk(req_to_sk(req));
-
-	/* sk is NULL for SYN+ACK w/ SYN Cookie */
-	if (!sk)
-		return -ENOMEM;
 
 	if (req_inet->ipv6_opt && req_inet->ipv6_opt->hopopt)
 		old = req_inet->ipv6_opt->hopopt;
@@ -1250,10 +1234,6 @@ static void calipso_req_delattr(struct request_sock *req)
 	struct ipv6_opt_hdr *new;
 	struct ipv6_txoptions *txopts;
 	struct sock *sk = sk_to_full_sk(req_to_sk(req));
-
-	/* sk is NULL for SYN+ACK w/ SYN Cookie */
-	if (!sk)
-		return;
 
 	if (!req_inet->ipv6_opt || !req_inet->ipv6_opt->hopopt)
 		return;
@@ -1342,8 +1322,7 @@ static int calipso_skbuff_setattr(struct sk_buff *skb,
 	/* At this point new_end aligns to 4n, so (new_end & 4) pads to 8n */
 	pad = ((new_end & 4) + (end & 7)) & 7;
 	len_delta = new_end - (int)end + pad;
-	ret_val = skb_cow(skb,
-			  skb_headroom(skb) + (len_delta > 0 ? len_delta : 0));
+	ret_val = skb_cow(skb, skb_headroom(skb) + len_delta);
 	if (ret_val < 0)
 		return ret_val;
 

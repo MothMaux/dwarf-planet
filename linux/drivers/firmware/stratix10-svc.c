@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2017-2018, Intel Corporation
- * Copyright (C) 2025, Altera Corporation
  */
 
 #include <linux/completion.h>
@@ -38,7 +37,6 @@
 #define SVC_NUM_CHANNEL				3
 #define FPGA_CONFIG_DATA_CLAIM_TIMEOUT_MS	200
 #define FPGA_CONFIG_STATUS_TIMEOUT_SEC		30
-#define BYTE_TO_WORD_SIZE              4
 
 /* stratix10 service layer clients */
 #define STRATIX10_RSU				"stratix10-rsu"
@@ -53,7 +51,6 @@ struct stratix10_svc_chan;
 /**
  * struct stratix10_svc - svc private data
  * @stratix10_svc_rsu: pointer to stratix10 RSU device
- * @intel_svc_fcs: pointer to the FCS device
  */
 struct stratix10_svc {
 	struct platform_device *stratix10_svc_rsu;
@@ -136,7 +133,6 @@ struct stratix10_svc_data {
  * @complete_status: state for completion
  * @svc_fifo_lock: protect access to service message data queue
  * @invoke_fn: function to issue secure monitor call or hypervisor call
- * @svc: manages the list of client svc drivers
  *
  * This struct is used to create communication channels for service clients, to
  * handle secure monitor or hypervisor call.
@@ -153,7 +149,6 @@ struct stratix10_svc_controller {
 	struct completion complete_status;
 	spinlock_t svc_fifo_lock;
 	svc_invoke_fn *invoke_fn;
-	struct stratix10_svc *svc;
 };
 
 /**
@@ -177,12 +172,6 @@ static LIST_HEAD(svc_ctrl);
 static LIST_HEAD(svc_data_mem);
 
 /**
- * svc_mem_lock protects access to the svc_data_mem list for
- * concurrent multi-client operations
- */
-static DEFINE_MUTEX(svc_mem_lock);
-
-/**
  * svc_pa_to_va() - translate physical address to virtual address
  * @addr: to be translated physical address
  *
@@ -194,7 +183,6 @@ static void *svc_pa_to_va(unsigned long addr)
 	struct stratix10_svc_data_mem *pmem;
 
 	pr_debug("claim back P-addr=0x%016x\n", (unsigned int)addr);
-	guard(mutex)(&svc_mem_lock);
 	list_for_each_entry(pmem, &svc_data_mem, node)
 		if (pmem->paddr == addr)
 			return pmem->vaddr;
@@ -373,13 +361,6 @@ static void svc_thread_recv_status_ok(struct stratix10_svc_data *p_data,
 		cb_data->kaddr2 = svc_pa_to_va(res.a2);
 		cb_data->kaddr3 = &res.a3;
 		break;
-	case COMMAND_MBOX_SEND_CMD:
-		cb_data->status = BIT(SVC_STATUS_OK);
-		cb_data->kaddr1 = &res.a1;
-		/* SDM return size in u8. Convert size to u32 word */
-		res.a2 = res.a2 * BYTE_TO_WORD_SIZE;
-		cb_data->kaddr2 = &res.a2;
-		break;
 	default:
 		pr_warn("it shouldn't happen\n");
 		break;
@@ -553,15 +534,6 @@ static int svc_normal_to_secure_thread(void *data)
 			a1 = 0;
 			a2 = 0;
 			break;
-		case COMMAND_MBOX_SEND_CMD:
-			a0 = INTEL_SIP_SMC_MBOX_SEND_CMD;
-			a1 = pdata->arg[0];
-			a2 = (unsigned long)pdata->paddr;
-			a3 = (unsigned long)pdata->size / BYTE_TO_WORD_SIZE;
-			a4 = pdata->arg[1];
-			a5 = (unsigned long)pdata->paddr_output;
-			a6 = (unsigned long)pdata->size_output / BYTE_TO_WORD_SIZE;
-			break;
 		default:
 			pr_warn("it shouldn't happen\n");
 			break;
@@ -625,7 +597,6 @@ static int svc_normal_to_secure_thread(void *data)
 			case COMMAND_FCS_DATA_ENCRYPTION:
 			case COMMAND_FCS_DATA_DECRYPTION:
 			case COMMAND_FCS_RANDOM_NUMBER_GEN:
-			case COMMAND_MBOX_SEND_CMD:
 				cbdata->status = BIT(SVC_STATUS_INVALID_PARAM);
 				cbdata->kaddr1 = NULL;
 				cbdata->kaddr2 = NULL;
@@ -784,8 +755,8 @@ svc_create_memory_pool(struct platform_device *pdev,
 	end = rounddown(sh_memory->addr + sh_memory->size, PAGE_SIZE);
 	paddr = begin;
 	size = end - begin;
-	va = devm_memremap(dev, paddr, size, MEMREMAP_WC);
-	if (IS_ERR(va)) {
+	va = memremap(paddr, size, MEMREMAP_WC);
+	if (!va) {
 		dev_err(dev, "fail to remap shared memory\n");
 		return ERR_PTR(-EINVAL);
 	}
@@ -1004,7 +975,6 @@ int stratix10_svc_send(struct stratix10_svc_chan *chan, void *msg)
 			p_data->flag = ct->flags;
 		}
 	} else {
-		guard(mutex)(&svc_mem_lock);
 		list_for_each_entry(p_mem, &svc_data_mem, node)
 			if (p_mem->vaddr == p_msg->payload) {
 				p_data->paddr = p_mem->paddr;
@@ -1087,7 +1057,6 @@ void *stratix10_svc_allocate_memory(struct stratix10_svc_chan *chan,
 	if (!pmem)
 		return ERR_PTR(-ENOMEM);
 
-	guard(mutex)(&svc_mem_lock);
 	va = gen_pool_alloc(genpool, s);
 	if (!va)
 		return ERR_PTR(-ENOMEM);
@@ -1116,7 +1085,6 @@ EXPORT_SYMBOL_GPL(stratix10_svc_allocate_memory);
 void stratix10_svc_free_memory(struct stratix10_svc_chan *chan, void *kaddr)
 {
 	struct stratix10_svc_data_mem *pmem;
-	guard(mutex)(&svc_mem_lock);
 
 	list_for_each_entry(pmem, &svc_data_mem, node)
 		if (pmem->vaddr == kaddr) {
@@ -1165,22 +1133,18 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 		return ret;
 
 	genpool = svc_create_memory_pool(pdev, sh_memory);
-	if (IS_ERR(genpool))
-		return PTR_ERR(genpool);
+	if (!genpool)
+		return -ENOMEM;
 
 	/* allocate service controller and supporting channel */
 	controller = devm_kzalloc(dev, sizeof(*controller), GFP_KERNEL);
-	if (!controller) {
-		ret = -ENOMEM;
-		goto err_destroy_pool;
-	}
+	if (!controller)
+		return -ENOMEM;
 
 	chans = devm_kmalloc_array(dev, SVC_NUM_CHANNEL,
 				   sizeof(*chans), GFP_KERNEL | __GFP_ZERO);
-	if (!chans) {
-		ret = -ENOMEM;
-		goto err_destroy_pool;
-	}
+	if (!chans)
+		return -ENOMEM;
 
 	controller->dev = dev;
 	controller->num_chans = SVC_NUM_CHANNEL;
@@ -1195,7 +1159,7 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 	ret = kfifo_alloc(&controller->svc_fifo, fifo_size, GFP_KERNEL);
 	if (ret) {
 		dev_err(dev, "failed to allocate FIFO\n");
-		goto err_destroy_pool;
+		return ret;
 	}
 	spin_lock_init(&controller->svc_fifo_lock);
 
@@ -1223,7 +1187,6 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 		ret = -ENOMEM;
 		goto err_free_kfifo;
 	}
-	controller->svc = svc;
 
 	svc->stratix10_svc_rsu = platform_device_alloc(STRATIX10_RSU, 0);
 	if (!svc->stratix10_svc_rsu) {
@@ -1235,47 +1198,36 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 	ret = platform_device_add(svc->stratix10_svc_rsu);
 	if (ret) {
 		platform_device_put(svc->stratix10_svc_rsu);
-		goto err_free_kfifo;
+		return ret;
 	}
 
 	svc->intel_svc_fcs = platform_device_alloc(INTEL_FCS, 1);
 	if (!svc->intel_svc_fcs) {
 		dev_err(dev, "failed to allocate %s device\n", INTEL_FCS);
-		ret = -ENOMEM;
-		goto err_unregister_rsu_dev;
+		return -ENOMEM;
 	}
 
 	ret = platform_device_add(svc->intel_svc_fcs);
 	if (ret) {
 		platform_device_put(svc->intel_svc_fcs);
-		goto err_unregister_rsu_dev;
+		return ret;
 	}
 
-	ret = of_platform_default_populate(dev_of_node(dev), NULL, dev);
-	if (ret)
-		goto err_unregister_fcs_dev;
+	dev_set_drvdata(dev, svc);
 
 	pr_info("Intel Service Layer Driver Initialized\n");
 
 	return 0;
 
-err_unregister_fcs_dev:
-	platform_device_unregister(svc->intel_svc_fcs);
-err_unregister_rsu_dev:
-	platform_device_unregister(svc->stratix10_svc_rsu);
 err_free_kfifo:
 	kfifo_free(&controller->svc_fifo);
-err_destroy_pool:
-	gen_pool_destroy(genpool);
 	return ret;
 }
 
-static void stratix10_svc_drv_remove(struct platform_device *pdev)
+static int stratix10_svc_drv_remove(struct platform_device *pdev)
 {
+	struct stratix10_svc *svc = dev_get_drvdata(&pdev->dev);
 	struct stratix10_svc_controller *ctrl = platform_get_drvdata(pdev);
-	struct stratix10_svc *svc = ctrl->svc;
-
-	of_platform_depopulate(ctrl->dev);
 
 	platform_device_unregister(svc->intel_svc_fcs);
 	platform_device_unregister(svc->stratix10_svc_rsu);
@@ -1288,11 +1240,13 @@ static void stratix10_svc_drv_remove(struct platform_device *pdev)
 	if (ctrl->genpool)
 		gen_pool_destroy(ctrl->genpool);
 	list_del(&ctrl->node);
+
+	return 0;
 }
 
 static struct platform_driver stratix10_svc_driver = {
 	.probe = stratix10_svc_drv_probe,
-	.remove_new = stratix10_svc_drv_remove,
+	.remove = stratix10_svc_drv_remove,
 	.driver = {
 		.name = "stratix10-svc",
 		.of_match_table = stratix10_svc_drv_match,

@@ -106,7 +106,8 @@ static const struct iio_info mc3230_info = {
 	.read_raw	= mc3230_read_raw,
 };
 
-static int mc3230_probe(struct i2c_client *client)
+static int mc3230_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -180,7 +181,7 @@ static int mc3230_resume(struct device *dev)
 static DEFINE_SIMPLE_DEV_PM_OPS(mc3230_pm_ops, mc3230_suspend, mc3230_resume);
 
 static const struct i2c_device_id mc3230_i2c_id[] = {
-	{ "mc3230" },
+	{"mc3230", 0},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, mc3230_i2c_id);

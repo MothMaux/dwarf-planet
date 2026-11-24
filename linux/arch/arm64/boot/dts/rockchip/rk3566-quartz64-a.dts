@@ -8,7 +8,7 @@
 #include "rk3566.dtsi"
 
 / {
-	model = "Pine64 Quartz64 Model A";
+	model = "Pine64 RK3566 Quartz64-A Board";
 	compatible = "pine64,quartz64-a", "rockchip,rk3566";
 
 	aliases {
@@ -31,9 +31,8 @@
 	fan: gpio_fan {
 		compatible = "gpio-fan";
 		gpios = <&gpio0 RK_PD5 GPIO_ACTIVE_HIGH>;
-		gpio-fan,speed-map =
-				<   0 0>,
-				<4500 1>;
+		gpio-fan,speed-map = <0    0
+				      4500 1>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&fan_en_h>;
 		#cooling-cells = <2>;
@@ -367,6 +366,7 @@
 				regulator-boot-on;
 				regulator-min-microvolt = <500000>;
 				regulator-max-microvolt = <1350000>;
+				regulator-init-microvolt = <900000>;
 				regulator-ramp-delay = <6001>;
 				regulator-initial-mode = <0x2>;
 				regulator-name = "vdd_logic";
@@ -381,6 +381,7 @@
 				regulator-boot-on;
 				regulator-min-microvolt = <500000>;
 				regulator-max-microvolt = <1350000>;
+				regulator-init-microvolt = <900000>;
 				regulator-ramp-delay = <6001>;
 				regulator-initial-mode = <0x2>;
 				regulator-name = "vdd_gpu";
@@ -738,7 +739,6 @@
 };
 
 &uart1 {
-	dma-names = "tx", "rx";
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart1m0_xfer &uart1m0_ctsn &uart1m0_rtsn>;
 	status = "okay";

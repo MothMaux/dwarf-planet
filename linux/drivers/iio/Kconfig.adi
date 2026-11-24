@@ -37,11 +37,8 @@ config IIO_ALL_ADI_DRIVERS
 	imply ADXL380_I2C if I2C
 	imply ADXL380_SPI if SPI
 
-	imply AD4000
-	imply AD4062 if I3C
-	imply AD4170_4
+	imply AD400X
 	imply AD4630
-	imply AD4695
 	imply AD4130
 	imply AD4134
 	imply AD6676
@@ -52,14 +49,13 @@ config IIO_ALL_ADI_DRIVERS
 	imply AD7291
 	imply AD7293
 	imply AD7298
-	imply AD7380
+	imply AD738X
 	imply AD7923
 	imply AD7944
 	imply AD7949
 	imply AD7476
 	imply AD7606_IFACE_PARALLEL
 	imply AD7606_IFACE_SPI
-	imply AD7625
 	imply AD7766
 	imply AD7768
 	imply AD7768_1
@@ -100,7 +96,6 @@ config IIO_ALL_ADI_DRIVERS
 	imply AD5421
 	imply AD5624R_SPI if SPI
 	imply AD3552R
-	imply AD3552R_HS
 	imply AD5064
 	imply AD5504
 	imply AD5446
@@ -156,10 +151,8 @@ config IIO_ALL_ADI_DRIVERS
 	imply ADIS16460
 	imply ADIS16475
 	imply ADIS16480
-	imply ADIS16550
 	imply M2K_LOGIC_ANALYZER
 	imply AD5272
-	imply IIO_REGMAP_I3C
 	imply IIO_REGMAP_I2C
 	imply IIO_REGMAP_SPI
 	imply AD2S1200
@@ -169,7 +162,6 @@ config IIO_ALL_ADI_DRIVERS
 	imply ADIS16240
 	imply AD7780
 	imply AD7816
-	imply AD7191
 	imply AD7192
 	imply AD7280
 	imply AD7292
@@ -211,16 +203,3 @@ config IIO_ALL_ADI_DRIVERS
 	imply ADRV9025
 	imply ADL5580
 	imply LTC2664
-	imply AD8460
-	imply MAX77541_ADC
-	imply ADF4030
-	imply ADI_AXI_DAC
-	imply AD3530R
-	imply LTC2309
-	imply AD7091R8
-	imply AD9739A
-	imply MAX22007
-	imply ADF4382
-	imply AXI_AION_TRIG
-	imply AD9088
-

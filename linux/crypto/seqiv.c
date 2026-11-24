@@ -23,7 +23,7 @@ static void seqiv_aead_encrypt_complete2(struct aead_request *req, int err)
 	struct aead_request *subreq = aead_request_ctx(req);
 	struct crypto_aead *geniv;
 
-	if (err == -EINPROGRESS || err == -EBUSY)
+	if (err == -EINPROGRESS)
 		return;
 
 	if (err)
@@ -36,9 +36,10 @@ out:
 	kfree_sensitive(subreq->iv);
 }
 
-static void seqiv_aead_encrypt_complete(void *data, int err)
+static void seqiv_aead_encrypt_complete(struct crypto_async_request *base,
+					int err)
 {
-	struct aead_request *req = data;
+	struct aead_request *req = base->data;
 
 	seqiv_aead_encrypt_complete2(req, err);
 	aead_request_complete(req, err);
@@ -50,7 +51,6 @@ static int seqiv_aead_encrypt(struct aead_request *req)
 	struct aead_geniv_ctx *ctx = crypto_aead_ctx(geniv);
 	struct aead_request *subreq = aead_request_ctx(req);
 	crypto_completion_t compl;
-	bool unaligned_info;
 	void *data;
 	u8 *info;
 	unsigned int ivsize = 8;
@@ -80,9 +80,8 @@ static int seqiv_aead_encrypt(struct aead_request *req)
 			return err;
 	}
 
-	unaligned_info = !IS_ALIGNED((unsigned long)info,
-				     crypto_aead_alignmask(geniv) + 1);
-	if (unlikely(unaligned_info)) {
+	if (unlikely(!IS_ALIGNED((unsigned long)info,
+				 crypto_aead_alignmask(geniv) + 1))) {
 		info = kmemdup(req->iv, ivsize, req->base.flags &
 			       CRYPTO_TFM_REQ_MAY_SLEEP ? GFP_KERNEL :
 			       GFP_ATOMIC);
@@ -102,7 +101,7 @@ static int seqiv_aead_encrypt(struct aead_request *req)
 	scatterwalk_map_and_copy(info, req->dst, req->assoclen, ivsize, 1);
 
 	err = crypto_aead_encrypt(subreq);
-	if (unlikely(unaligned_info))
+	if (unlikely(info != req->iv))
 		seqiv_aead_encrypt_complete2(req, err);
 	return err;
 }

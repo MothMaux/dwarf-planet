@@ -588,12 +588,11 @@ int32_t adi_adrv9001_cals_ExternalPathDelay_Get(adi_adrv9001_Device_t *adrv9001,
 
     ADI_API_RETURN(adrv9001);
 }
-
-static int32_t adi_adrv9001_cals_InternalPathDelay_Get_Validate(adi_adrv9001_Device_t *adrv9001,
-								adi_common_Port_e port,
-								adi_common_ChannelNumber_e channel,
-								uint32_t internalPathDelays_ns[],
-								uint32_t length)
+int32_t adi_adrv9001_cals_InternalPathDelay_Get_Validate(adi_adrv9001_Device_t *adrv9001,
+                                                         adi_common_Port_e port,
+                                                         adi_common_ChannelNumber_e channel,
+                                                         uint32_t internalPathDelays_ns[],
+                                                         uint32_t length)
 {
     static uint8_t MAX_NUM_PROFILE = 6;
     adi_adrv9001_ChannelState_e state = ADI_ADRV9001_CHANNEL_STANDBY;
@@ -668,9 +667,9 @@ int32_t adi_adrv9001_cals_InternalPathDelay_Get(adi_adrv9001_Device_t *adrv9001,
     ADI_API_RETURN(adrv9001);
 }
 
-static int32_t adi_adrv9001_cals_LastInitCal_CarrierFrequency_Get_Validate(adi_adrv9001_Device_t *adrv9001,
-										   uint64_t carrierFrequencies_Hz[],
-										   uint32_t length)
+int32_t adi_adrv9001_cals_LastInitCal_CarrierFrequency_Get_Validate(adi_adrv9001_Device_t *adrv9001,
+                                                                    uint64_t carrierFrequencies_Hz[],
+                                                                    uint32_t length)
 {
     static uint8_t MAX_FREQUENCIES = 4;
     ADI_NULL_PTR_RETURN(&adrv9001->common, carrierFrequencies_Hz);
@@ -718,11 +717,11 @@ int32_t adi_adrv9001_cals_LastInitCal_CarrierFrequency_Get(adi_adrv9001_Device_t
     ADI_API_RETURN(adrv9001);
 }
 
-static int32_t adi_adrv9001_cals_Dynamic_profiles_calibrate_Validate(adi_adrv9001_Device_t *adrv9001,
-									     adi_adrv9001_InitCals_t *initCals,
-									     uint8_t *errorFlag,
-									     adi_adrv9000_DynamicProfile_t dynamicProfile[],
-									     uint32_t length)
+int32_t adi_adrv9001_cals_Dynamic_profiles_calibrate_Validate(adi_adrv9001_Device_t *adrv9001,
+                                                              adi_adrv9001_InitCals_t *initCals,
+                                                              uint8_t *errorFlag,
+                                                              adi_adrv9000_DynamicProfile_t dynamicProfile[],
+                                                              uint32_t length)
 {
     uint8_t chan_index = 0;
     uint8_t port_index = 0;

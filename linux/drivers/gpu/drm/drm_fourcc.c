@@ -37,6 +37,7 @@
  * @depth: bit depth per pixel
  *
  * Computes a drm fourcc pixel format code for the given @bpp/@depth values.
+ * Useful in fbdev emulation code, since that deals in those values.
  */
 uint32_t drm_mode_legacy_fb_format(uint32_t bpp, uint32_t depth)
 {
@@ -140,35 +141,6 @@ uint32_t drm_driver_legacy_fb_format(struct drm_device *dev,
 }
 EXPORT_SYMBOL(drm_driver_legacy_fb_format);
 
-/**
- * drm_driver_color_mode_format - Compute DRM 4CC code from color mode
- * @dev: DRM device
- * @color_mode: command-line color mode
- *
- * Computes a DRM 4CC pixel format code for the given color mode using
- * drm_driver_color_mode(). The color mode is in the format used and the
- * kernel command line. It specifies the number of bits per pixel
- * and color depth in a single value.
- *
- * Useful in fbdev emulation code, since that deals in those values. The
- * helper does not consider YUV or other complicated formats. This means
- * only legacy formats are supported (fmt->depth is a legacy field), but
- * the framebuffer emulation can only deal with such formats, specifically
- * RGB/BGA formats.
- */
-uint32_t drm_driver_color_mode_format(struct drm_device *dev, unsigned int color_mode)
-{
-	switch (color_mode) {
-	case 15:
-		return drm_driver_legacy_fb_format(dev, 16, 15);
-	case 32:
-		return drm_driver_legacy_fb_format(dev, 32, 24);
-	default:
-		return drm_driver_legacy_fb_format(dev, color_mode, color_mode);
-	}
-}
-EXPORT_SYMBOL(drm_driver_color_mode_format);
-
 /*
  * Internal function to query information for a given format. See
  * drm_format_info() for the public API.
@@ -219,10 +191,6 @@ const struct drm_format_info *__drm_format_info(u32 format)
 		{ .format = DRM_FORMAT_BGRA5551,	.depth = 15, .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 1, .vsub = 1, .has_alpha = true },
 		{ .format = DRM_FORMAT_RGB565,		.depth = 16, .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 1, .vsub = 1 },
 		{ .format = DRM_FORMAT_BGR565,		.depth = 16, .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 1, .vsub = 1 },
-#ifdef __BIG_ENDIAN
-		{ .format = DRM_FORMAT_XRGB1555 | DRM_FORMAT_BIG_ENDIAN, .depth = 15, .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 1, .vsub = 1 },
-		{ .format = DRM_FORMAT_RGB565 | DRM_FORMAT_BIG_ENDIAN, .depth = 16, .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 1, .vsub = 1 },
-#endif
 		{ .format = DRM_FORMAT_RGB888,		.depth = 24, .num_planes = 1, .cpp = { 3, 0, 0 }, .hsub = 1, .vsub = 1 },
 		{ .format = DRM_FORMAT_BGR888,		.depth = 24, .num_planes = 1, .cpp = { 3, 0, 0 }, .hsub = 1, .vsub = 1 },
 		{ .format = DRM_FORMAT_XRGB8888,	.depth = 24, .num_planes = 1, .cpp = { 4, 0, 0 }, .hsub = 1, .vsub = 1 },
@@ -268,13 +236,15 @@ const struct drm_format_info *__drm_format_info(u32 format)
 		{ .format = DRM_FORMAT_YVU422,		.depth = 0,  .num_planes = 3, .cpp = { 1, 1, 1 }, .hsub = 2, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_YUV444,		.depth = 0,  .num_planes = 3, .cpp = { 1, 1, 1 }, .hsub = 1, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_YVU444,		.depth = 0,  .num_planes = 3, .cpp = { 1, 1, 1 }, .hsub = 1, .vsub = 1, .is_yuv = true },
-		{ .format = DRM_FORMAT_Y8,		.depth = 8,  .num_planes = 1, .cpp = { 1, 0, 0 }, .hsub = 1, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_NV12,		.depth = 0,  .num_planes = 2, .cpp = { 1, 2, 0 }, .hsub = 2, .vsub = 2, .is_yuv = true },
 		{ .format = DRM_FORMAT_NV21,		.depth = 0,  .num_planes = 2, .cpp = { 1, 2, 0 }, .hsub = 2, .vsub = 2, .is_yuv = true },
 		{ .format = DRM_FORMAT_NV16,		.depth = 0,  .num_planes = 2, .cpp = { 1, 2, 0 }, .hsub = 2, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_NV61,		.depth = 0,  .num_planes = 2, .cpp = { 1, 2, 0 }, .hsub = 2, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_NV24,		.depth = 0,  .num_planes = 2, .cpp = { 1, 2, 0 }, .hsub = 1, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_NV42,		.depth = 0,  .num_planes = 2, .cpp = { 1, 2, 0 }, .hsub = 1, .vsub = 1, .is_yuv = true },
+		{ .format = DRM_FORMAT_XV15,		.depth = 0,  .num_planes = 2, .pixels_per_macropixel = { 3, 3, 0 }, .bytes_per_macropixel = { 4, 8, 0 }, .hsub = 2, .vsub = 2, .is_yuv = true},
+		{ .format = DRM_FORMAT_XV20,		.depth = 0,  .num_planes = 2, .pixels_per_macropixel = { 3, 3, 0 }, .bytes_per_macropixel = { 4, 8, 0 }, .hsub = 2, .vsub = 1, .is_yuv = true},
+		{ .format = DRM_FORMAT_X403,		.depth = 0,  .num_planes = 3, .pixels_per_macropixel = { 3, 3, 3 }, .bytes_per_macropixel = { 4, 4, 4 }, .hsub = 1, .vsub = 1, .is_yuv = true},
 		{ .format = DRM_FORMAT_YUYV,		.depth = 0,  .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 2, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_YVYU,		.depth = 0,  .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 2, .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_UYVY,		.depth = 0,  .num_planes = 1, .cpp = { 2, 0, 0 }, .hsub = 2, .vsub = 1, .is_yuv = true },
@@ -329,22 +299,14 @@ const struct drm_format_info *__drm_format_info(u32 format)
 		  .num_planes = 2, .char_per_block = { 5, 5, 0 },
 		  .block_w = { 4, 2, 0 }, .block_h = { 1, 1, 0 }, .hsub = 2,
 		  .vsub = 2, .is_yuv = true },
-		{ .format = DRM_FORMAT_NV20,		.depth = 0,
-		  .num_planes = 2, .char_per_block = { 5, 5, 0 },
-		  .block_w = { 4, 2, 0 }, .block_h = { 1, 1, 0 }, .hsub = 2,
-		  .vsub = 1, .is_yuv = true },
-		{ .format = DRM_FORMAT_NV30,		.depth = 0,
-		  .num_planes = 2, .char_per_block = { 5, 5, 0 },
-		  .block_w = { 4, 2, 0 }, .block_h = { 1, 1, 0 }, .hsub = 1,
-		  .vsub = 1, .is_yuv = true },
 		{ .format = DRM_FORMAT_Q410,		.depth = 0,
 		  .num_planes = 3, .char_per_block = { 2, 2, 2 },
-		  .block_w = { 1, 1, 1 }, .block_h = { 1, 1, 1 }, .hsub = 1,
-		  .vsub = 1, .is_yuv = true },
+		  .block_w = { 1, 1, 1 }, .block_h = { 1, 1, 1 }, .hsub = 0,
+		  .vsub = 0, .is_yuv = true },
 		{ .format = DRM_FORMAT_Q401,		.depth = 0,
 		  .num_planes = 3, .char_per_block = { 2, 2, 2 },
-		  .block_w = { 1, 1, 1 }, .block_h = { 1, 1, 1 }, .hsub = 1,
-		  .vsub = 1, .is_yuv = true },
+		  .block_w = { 1, 1, 1 }, .block_h = { 1, 1, 1 }, .hsub = 0,
+		  .vsub = 0, .is_yuv = true },
 		{ .format = DRM_FORMAT_P030,            .depth = 0,  .num_planes = 2,
 		  .char_per_block = { 4, 8, 0 }, .block_w = { 3, 3, 0 }, .block_h = { 1, 1, 0 },
 		  .hsub = 2, .vsub = 2, .is_yuv = true},
@@ -353,26 +315,6 @@ const struct drm_format_info *__drm_format_info(u32 format)
 		{ .format = DRM_FORMAT_XVUY2101010,	.depth = 0,  .num_planes = 1, .cpp = { 4, 0, 0 }, .hsub = 1, .vsub = 1 },
 		{ .format = DRM_FORMAT_Y8,		.depth = 0,  .num_planes = 1, .cpp = { 1, 0, 0 }, .hsub = 1, .vsub = 1 },
 		{ .format = DRM_FORMAT_Y10,		.depth = 0,  .num_planes = 1, .pixels_per_macropixel =  { 3, 0, 0 }, .bytes_per_macropixel = { 4, 0, 0 }, .hsub = 1, .vsub = 1 },
-		{ .format = DRM_FORMAT_XV15,		.depth = 0,
-		  .num_planes = 2, .char_per_block = { 4, 8, 0 },
-		  .block_w = { 3, 3, 0 }, .block_h = { 1, 1, 0 }, .hsub = 2,
-		  .vsub = 2, .is_yuv = true },
-		{ .format = DRM_FORMAT_XV20,		.depth = 0,
-		  .num_planes = 2, .char_per_block = { 4, 8, 0 },
-		  .block_w = { 3, 3, 0 }, .block_h = { 1, 1, 0 }, .hsub = 2,
-		  .vsub = 1, .is_yuv = true },
-		{ .format = DRM_FORMAT_Y10_LE32,        .depth = 0,
-		  .num_planes = 1, .char_per_block =  { 4, 0, 0 },
-		  .block_w = { 3, 0, 0 }, .block_h = { 1, 0, 0 }, .hsub = 1,
-		  .vsub = 1, .is_yuv = true },
-		{ .format = DRM_FORMAT_X403,		.depth = 0,
-		  .num_planes = 3, .char_per_block =  { 4, 4, 4 },
-		  .block_w = { 3, 3, 3 }, .block_h = { 1, 1, 1 },
-		  .hsub = 1, .vsub = 1, .is_yuv = true },
-		{ .format = DRM_FORMAT_X423,		.depth = 0,
-		  .num_planes = 3, .char_per_block = { 3, 3, 3 },
-		  .block_w = { 2, 2, 2 }, .block_h = { 1, 1, 1 }, .hsub = 1,
-		  .vsub = 1, .is_yuv = true, },
 	};
 
 	unsigned int i;
@@ -483,13 +425,6 @@ unsigned int drm_format_info_bpp(const struct drm_format_info *info, int plane)
 {
 	if (!info || plane < 0 || plane >= info->num_planes)
 		return 0;
-
-	if (info->char_per_block[plane] * 8 %
-	    (drm_format_info_block_width(info, plane) *
-	     drm_format_info_block_height(info, plane))) {
-		pr_warn("unable to return an integer bpp\n");
-		return 0;
-	}
 
 	return info->char_per_block[plane] * 8 /
 	       (drm_format_info_block_width(info, plane) *

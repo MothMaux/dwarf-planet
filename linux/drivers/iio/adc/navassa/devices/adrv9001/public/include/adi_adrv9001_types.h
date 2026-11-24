@@ -139,17 +139,6 @@ typedef enum adi_adrv9001_FirGain
     ADRV9001_FIR_GAIN_POS_26_DB   = 26   /*!< FIR gain 26 */
 } adi_adrv9001_FirGain_e;
 
-/**
- * \brief Enumerated list of Temperature Read options from internal temperature sensor
- */
-typedef enum adi_adrv9001_TempReadMode
-{
-	ADI_ADRV9001_TEMPERATURE_READ_MAILBOX = 0, /*!< Reads temperature value using Mailbox command, only after ADC completes temperature measurement */
-	ADI_ADRV9001_TEMPERATURE_READ_SPI = 1	   /*!< Instantly reads the Aux ADC temperature sense result from register via direct register access,
-                                                    irrespective of ADC temperature measurement done or not.
-                                                    Hence, the value readback may be an older one */
-} adi_adrv9001_TempReadMode_e;
-
 /*
 *********************************************************************************************************
 *                                             Structure definition
@@ -258,8 +247,6 @@ typedef struct adi_adrv9001_Info
     adi_adrv9001_RxGainTableType_e gainTableType[ADI_ADRV9001_MAX_RX_ONLY]; /*!< type of gain table loaded during ADRV9001 initialization */
 	uint8_t txAttenMode[ADI_ADRV9001_MAX_TXCHANNELS];					/* TX Attenuation Mode*/
 	uint32_t chProfEnMask[ADI_ADRV9001_MAX_NUM_CHANNELS];				/* Mask for enabled channels and profiles in FW format - used for warmboot*/
-    uint8_t	txSsiRefClockEnabled[ADI_ADRV9001_MAX_TXCHANNELS];          /*!< Tx SSI reference clock enabled flag from currently loaded profile */
-	uint8_t crumbSrcOffset;                                             /*!< Crumb source offset for GPIO configuration */
 } adi_adrv9001_Info_t;
 
 /**

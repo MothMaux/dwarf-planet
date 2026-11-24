@@ -13,7 +13,6 @@
 #define dev_fmt(fmt) "AER: " fmt
 
 #include <linux/pci.h>
-#include <linux/pm_runtime.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -86,18 +85,6 @@ static int report_error_detected(struct pci_dev *dev,
 	return 0;
 }
 
-static int pci_pm_runtime_get_sync(struct pci_dev *pdev, void *data)
-{
-	pm_runtime_get_sync(&pdev->dev);
-	return 0;
-}
-
-static int pci_pm_runtime_put(struct pci_dev *pdev, void *data)
-{
-	pm_runtime_put(&pdev->dev);
-	return 0;
-}
-
 static int report_frozen_detected(struct pci_dev *dev, void *data)
 {
 	return report_error_detected(dev, pci_channel_io_frozen, data);
@@ -108,12 +95,6 @@ static int report_normal_detected(struct pci_dev *dev, void *data)
 	return report_error_detected(dev, pci_channel_io_normal, data);
 }
 
-static int report_perm_failure_detected(struct pci_dev *dev, void *data)
-{
-	pci_uevent_ers(dev, PCI_ERS_RESULT_DISCONNECT);
-	return 0;
-}
-
 static int report_mmio_enabled(struct pci_dev *dev, void *data)
 {
 	struct pci_driver *pdrv;
@@ -122,7 +103,9 @@ static int report_mmio_enabled(struct pci_dev *dev, void *data)
 
 	device_lock(&dev->dev);
 	pdrv = dev->driver;
-	if (!pdrv || !pdrv->err_handler || !pdrv->err_handler->mmio_enabled)
+	if (!pdrv ||
+		!pdrv->err_handler ||
+		!pdrv->err_handler->mmio_enabled)
 		goto out;
 
 	err_handler = pdrv->err_handler;
@@ -141,8 +124,9 @@ static int report_slot_reset(struct pci_dev *dev, void *data)
 
 	device_lock(&dev->dev);
 	pdrv = dev->driver;
-	if (!pci_dev_set_io_state(dev, pci_channel_io_normal) ||
-	    !pdrv || !pdrv->err_handler || !pdrv->err_handler->slot_reset)
+	if (!pdrv ||
+		!pdrv->err_handler ||
+		!pdrv->err_handler->slot_reset)
 		goto out;
 
 	err_handler = pdrv->err_handler;
@@ -161,7 +145,9 @@ static int report_resume(struct pci_dev *dev, void *data)
 	device_lock(&dev->dev);
 	pdrv = dev->driver;
 	if (!pci_dev_set_io_state(dev, pci_channel_io_normal) ||
-	    !pdrv || !pdrv->err_handler || !pdrv->err_handler->resume)
+		!pdrv ||
+		!pdrv->err_handler ||
+		!pdrv->err_handler->resume)
 		goto out;
 
 	err_handler = pdrv->err_handler;
@@ -221,8 +207,6 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 	else
 		bridge = pci_upstream_bridge(dev);
 
-	pci_walk_bridge(bridge, pci_pm_runtime_get_sync, NULL);
-
 	pci_dbg(bridge, "broadcast error_detected message\n");
 	if (state == pci_channel_io_frozen) {
 		pci_walk_bridge(bridge, report_frozen_detected, &status);
@@ -267,16 +251,11 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 		pcie_clear_device_status(dev);
 		pci_aer_clear_nonfatal_status(dev);
 	}
-
-	pci_walk_bridge(bridge, pci_pm_runtime_put, NULL);
-
 	pci_info(bridge, "device recovery successful\n");
 	return status;
 
 failed:
-	pci_walk_bridge(bridge, pci_pm_runtime_put, NULL);
-
-	pci_walk_bridge(bridge, report_perm_failure_detected, NULL);
+	pci_uevent_ers(bridge, PCI_ERS_RESULT_DISCONNECT);
 
 	/* TODO: Should kernel panic here? */
 	pci_info(bridge, "device recovery failed\n");

@@ -27,6 +27,8 @@
 extern int remap_area_pages(unsigned long start, unsigned long phys_addr,
 				unsigned long end, unsigned long flags);
 
+extern void iounmap(const volatile void __iomem *addr);
+
 /* Defined in lib/io.c, needed for smc91x driver. */
 extern void __raw_readsw(const void __iomem *addr, void *data, int wordlen);
 extern void __raw_writesw(void __iomem *addr, const void *data, int wordlen);
@@ -57,6 +59,12 @@ static inline void *phys_to_virt(unsigned long address)
 {
 	return __va(address);
 }
+
+/*
+ * convert a physical pointer to a virtual kernel pointer for
+ * /dev/mem access.
+ */
+#define xlate_dev_mem_ptr(p)    __va(p)
 
 /*
  * IO port access primitives.  Hexagon doesn't have special IO access
@@ -162,11 +170,9 @@ static inline void writel(u32 data, volatile void __iomem *addr)
 #define writew_relaxed __raw_writew
 #define writel_relaxed __raw_writel
 
-/*
- * I/O memory mapping functions.
- */
-#define _PAGE_IOREMAP (_PAGE_PRESENT | _PAGE_READ | _PAGE_WRITE | \
-		       (__HEXAGON_C_DEV << 6))
+void __iomem *ioremap(unsigned long phys_addr, unsigned long size);
+#define ioremap_uc(X, Y) ioremap((X), (Y))
+
 
 #define __raw_writel writel
 

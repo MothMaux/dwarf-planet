@@ -48,7 +48,7 @@
  * @list: list entry in a graph entities list
  * @node: the entity's DT node
  * @entity: media entity, from the corresponding V4L2 subdev
- * @asc: subdev asynchronous registration information
+ * @asd: subdev asynchronous registration information
  * @subdev: V4L2 subdev
  * @streaming: status of the V4L2 subdev if streaming or not
  */
@@ -57,7 +57,7 @@ struct xvip_graph_entity {
 	struct device_node *node;
 	struct media_entity *entity;
 
-	struct v4l2_async_connection asc;
+	struct v4l2_async_subdev asd;
 	struct v4l2_subdev *subdev;
 	bool streaming;
 };
@@ -779,9 +779,9 @@ xvip_dma_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 	cap->device_caps = V4L2_CAP_STREAMING | V4L2_CAP_VIDEO_M2M_MPLANE;
 	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
 
-	strscpy(cap->driver, XVIP_M2M_NAME, sizeof(cap->driver));
-	strscpy(cap->card, XVIP_M2M_NAME, sizeof(cap->card));
-	strscpy(cap->bus_info, XVIP_M2M_NAME, sizeof(cap->card));
+	strlcpy(cap->driver, XVIP_M2M_NAME, sizeof(cap->driver));
+	strlcpy(cap->card, XVIP_M2M_NAME, sizeof(cap->card));
+	strlcpy(cap->bus_info, XVIP_M2M_NAME, sizeof(cap->card));
 
 	return 0;
 }
@@ -1691,7 +1691,7 @@ static int xvip_composite_v4l2_init(struct xvip_m2m_dev *xdev)
 	int ret;
 
 	xdev->media_dev.dev = xdev->dev;
-	strscpy(xdev->media_dev.model, "Xilinx Video M2M Composite Device",
+	strlcpy(xdev->media_dev.model, "Xilinx Video M2M Composite Device",
 		sizeof(xdev->media_dev.model));
 	xdev->media_dev.hw_revision = 0;
 
@@ -1873,8 +1873,8 @@ static int xvip_graph_parse_one(struct xvip_m2m_dev *xdev,
 		}
 
 		entity->node = remote;
-		entity->asc.match.type = V4L2_ASYNC_MATCH_TYPE_FWNODE;
-		entity->asc.match.fwnode = of_fwnode_handle(remote);
+		entity->asd.match_type = V4L2_ASYNC_MATCH_FWNODE;
+		entity->asd.match.fwnode = of_fwnode_handle(remote);
 		list_add_tail(&entity->list, &xdev->entities);
 		xdev->num_subdevs++;
 	}
@@ -2035,7 +2035,7 @@ static int xvip_graph_notify_complete(struct v4l2_async_notifier *notifier)
 
 static int xvip_graph_notify_bound(struct v4l2_async_notifier *notifier,
 				   struct v4l2_subdev *subdev,
-				   struct v4l2_async_connection *asc)
+				   struct v4l2_async_subdev *asd)
 {
 	struct xvip_m2m_dev *xdev =
 		container_of(notifier, struct xvip_m2m_dev, notifier);
@@ -2112,12 +2112,15 @@ static int xvip_graph_init(struct xvip_m2m_dev *xdev)
 
 	/* Register the subdevices notifier. */
 	list_for_each_entry(entity, &xdev->entities, list) {
-		entity->asc.notifier = &xdev->notifier;
+		ret = __v4l2_async_nf_add_subdev(&xdev->notifier,
+						 &entity->asd);
+		if (ret)
+			goto done;
 	}
 
 	xdev->notifier.ops = &xvip_graph_notify_ops;
 
-	ret = v4l2_async_nf_register(&xdev->notifier);
+	ret = v4l2_async_nf_register(&xdev->v4l2_dev, &xdev->notifier);
 	if (ret < 0) {
 		dev_err(xdev->dev, "notifier registration failed\n");
 		goto done;
@@ -2153,7 +2156,7 @@ static int xvip_m2m_probe(struct platform_device *pdev)
 
 	xdev->dev = &pdev->dev;
 	INIT_LIST_HEAD(&xdev->entities);
-	v4l2_async_nf_init(&xdev->notifier, &xdev->v4l2_dev);
+	v4l2_async_nf_init(&xdev->notifier);
 
 	ret = xvip_composite_v4l2_init(xdev);
 	if (ret)
@@ -2188,9 +2191,10 @@ error:
 	return ret;
 }
 
-static void xvip_m2m_remove(struct platform_device *pdev)
+static int xvip_m2m_remove(struct platform_device *pdev)
 {
 	xvip_composite_remove(pdev);
+	return 0;
 }
 
 static const struct of_device_id xvip_m2m_of_id_table[] = {
@@ -2212,4 +2216,4 @@ module_platform_driver(xvip_m2m_driver);
 
 MODULE_AUTHOR("Xilinx Inc.");
 MODULE_DESCRIPTION("Xilinx V4L2 mem2mem driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

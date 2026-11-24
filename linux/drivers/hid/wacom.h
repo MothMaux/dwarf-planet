@@ -89,7 +89,7 @@
 #include <linux/usb/input.h>
 #include <linux/power_supply.h>
 #include <linux/timer.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 /*
  * Version Information
@@ -150,7 +150,6 @@ struct wacom_remote {
 		struct input_dev *input;
 		bool registered;
 		struct wacom_battery battery;
-		ktime_t active_time;
 	} remotes[WACOM_MAX_REMOTES];
 };
 
@@ -164,7 +163,6 @@ struct wacom {
 	struct work_struct battery_work;
 	struct work_struct remote_work;
 	struct delayed_work init_work;
-	struct delayed_work aes_battery_work;
 	struct wacom_remote *remote;
 	struct work_struct mode_change_work;
 	struct timer_list idleprox_timer;

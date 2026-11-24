@@ -10,15 +10,18 @@
 #include <linux/mfd/syscon.h>
 #include <linux/of_address.h>
 #include <linux/regmap.h>
+#include <linux/clk/zynq.h>
 #include "common.h"
 
 /* register offsets */
 #define SLCR_UNLOCK_OFFSET		0x8   /* SCLR unlock register */
 #define SLCR_PS_RST_CTRL_OFFSET		0x200 /* PS Software Reset Control */
+#define SLCR_FPGA_RST_CTRL_OFFSET	0x240 /* FPGA Software Reset Control */
 #define SLCR_A9_CPU_RST_CTRL_OFFSET	0x244 /* CPU Software Reset Control */
 #define SLCR_REBOOT_STATUS_OFFSET	0x258 /* PS Reboot Status */
 #define SLCR_PSS_IDCODE			0x530 /* PS IDCODE */
 #define SLCR_L2C_RAM			0xA1C /* L2C_RAM in AR#54190 */
+#define SLCR_LVL_SHFTR_EN_OFFSET	0x900 /* Level Shifters Enable */
 
 #define SLCR_UNLOCK_MAGIC		0xDF0D
 #define SLCR_A9_CPU_CLKSTOP		0x10
@@ -26,7 +29,7 @@
 #define SLCR_PSS_IDCODE_DEVICE_SHIFT	12
 #define SLCR_PSS_IDCODE_DEVICE_MASK	0x1F
 
-static void __iomem *zynq_slcr_base;
+void __iomem *zynq_slcr_base;
 static struct regmap *zynq_slcr_regmap;
 static u16 zynq_rst_code = 0;
 
@@ -124,6 +127,35 @@ static struct notifier_block zynq_slcr_restart_nb = {
 };
 
 /**
+ * zynq_slcr_init_preload_fpga - Disable communication from the PL to PS.
+ */
+void zynq_slcr_init_preload_fpga(void)
+{
+	/* Assert FPGA top level output resets */
+	zynq_slcr_write(0xF, SLCR_FPGA_RST_CTRL_OFFSET);
+
+	/* Disable level shifters */
+	zynq_slcr_write(0, SLCR_LVL_SHFTR_EN_OFFSET);
+
+	/* Enable output level shifters */
+	zynq_slcr_write(0xA, SLCR_LVL_SHFTR_EN_OFFSET);
+}
+EXPORT_SYMBOL(zynq_slcr_init_preload_fpga);
+
+/**
+ * zynq_slcr_init_postload_fpga - Re-enable communication from the PL to PS.
+ */
+void zynq_slcr_init_postload_fpga(void)
+{
+	/* Enable level shifters */
+	zynq_slcr_write(0xf, SLCR_LVL_SHFTR_EN_OFFSET);
+
+	/* Deassert AXI interface resets */
+	zynq_slcr_write(0, SLCR_FPGA_RST_CTRL_OFFSET);
+}
+EXPORT_SYMBOL(zynq_slcr_init_postload_fpga);
+
+/**
  * zynq_slcr_cpu_start - Start cpu
  * @cpu:	cpu number
  */
@@ -154,7 +186,7 @@ void zynq_slcr_cpu_stop(int cpu)
 }
 
 /**
- * zynq_slcr_cpu_state_read - Read cpu state
+ * zynq_slcr_cpu_state - Read/write cpu state
  * @cpu:	cpu number
  *
  * SLCR_REBOOT_STATUS save upper 2 bits (31/30 cpu states for cpu0 and cpu1)
@@ -173,7 +205,7 @@ bool zynq_slcr_cpu_state_read(int cpu)
 }
 
 /**
- * zynq_slcr_cpu_state_write - Write cpu state
+ * zynq_slcr_cpu_state - Read/write cpu state
  * @cpu:	cpu number
  * @die:	cpu state - true if cpu is going to die
  *
@@ -221,7 +253,6 @@ int __init zynq_early_slcr_init(void)
 	zynq_slcr_regmap = syscon_regmap_lookup_by_compatible("xlnx,zynq-slcr");
 	if (IS_ERR(zynq_slcr_regmap)) {
 		pr_err("%s: failed to find zynq-slcr\n", __func__);
-		of_node_put(np);
 		return -ENODEV;
 	}
 

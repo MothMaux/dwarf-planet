@@ -19,6 +19,8 @@
  * Migration is a command line option. When used on non-numa machines will 
  * exit with error. Test is still usefull on non-numa for testing IPIs.
  */
+
+#define _GNU_SOURCE /* for program_invocation_short_name */
 #include <getopt.h>
 #include <pthread.h>
 #include <inttypes.h>
@@ -196,6 +198,7 @@ static void *vcpu_thread(void *arg)
 	struct ucall uc;
 	int old;
 	int r;
+	unsigned int exit_reason;
 
 	r = pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, &old);
 	TEST_ASSERT(r == 0,
@@ -204,8 +207,11 @@ static void *vcpu_thread(void *arg)
 
 	fprintf(stderr, "vCPU thread running vCPU %u\n", vcpu->id);
 	vcpu_run(vcpu);
+	exit_reason = vcpu->run->exit_reason;
 
-	TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
+	TEST_ASSERT(exit_reason == KVM_EXIT_IO,
+		    "vCPU %u exited with unexpected exit reason %u-%s, expected KVM_EXIT_IO",
+		    vcpu->id, exit_reason, exit_reason_str(exit_reason));
 
 	if (get_ucall(vcpu, &uc) == UCALL_ABORT) {
 		TEST_ASSERT(false,
@@ -214,7 +220,7 @@ static void *vcpu_thread(void *arg)
 			    "Halting vCPU halted %lu times, woke %lu times, received %lu IPIs.\n"
 			    "Halter TPR=%#x PPR=%#x LVR=%#x\n"
 			    "Migrations attempted: %lu\n"
-			    "Migrations completed: %lu",
+			    "Migrations completed: %lu\n",
 			    vcpu->id, (const char *)uc.args[0],
 			    params->data->ipis_sent, params->data->hlt_count,
 			    params->data->wake_count,
@@ -286,7 +292,7 @@ void do_migrations(struct test_data_page *data, int run_secs, int delay_usecs,
 	}
 
 	TEST_ASSERT(nodes > 1,
-		    "Did not find at least 2 numa nodes. Can't do migration");
+		    "Did not find at least 2 numa nodes. Can't do migration\n");
 
 	fprintf(stderr, "Migrating amongst %d nodes found\n", nodes);
 
@@ -345,7 +351,7 @@ void do_migrations(struct test_data_page *data, int run_secs, int delay_usecs,
 				    wake_count != data->wake_count,
 				    "IPI, HLT and wake count have not increased "
 				    "in the last %lu seconds. "
-				    "HLTer is likely hung.", interval_secs);
+				    "HLTer is likely hung.\n", interval_secs);
 
 			ipis_sent = data->ipis_sent;
 			hlt_count = data->hlt_count;
@@ -379,7 +385,7 @@ void get_cmdline_args(int argc, char *argv[], int *run_secs,
 				    "-m adds calls to migrate_pages while vCPUs are running."
 				    " Default is no migrations.\n"
 				    "-d <delay microseconds> - delay between migrate_pages() calls."
-				    " Default is %d microseconds.",
+				    " Default is %d microseconds.\n",
 				    DEFAULT_RUN_SECS, DEFAULT_DELAY_USECS);
 		}
 	}
@@ -408,6 +414,8 @@ int main(int argc, char *argv[])
 
 	vm = vm_create_with_one_vcpu(&params[0].vcpu, halter_guest_code);
 
+	vm_init_descriptor_tables(vm);
+	vcpu_init_descriptor_tables(params[0].vcpu);
 	vm_install_exception_handler(vm, IPI_VECTOR, guest_ipi_handler);
 
 	virt_pg_map(vm, APIC_DEFAULT_GPA, APIC_DEFAULT_GPA);

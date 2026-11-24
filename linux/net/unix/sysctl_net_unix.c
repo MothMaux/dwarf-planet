@@ -19,6 +19,7 @@ static struct ctl_table unix_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
 	},
+	{ }
 };
 
 int __net_init unix_sysctl_register(struct net *net)
@@ -35,8 +36,7 @@ int __net_init unix_sysctl_register(struct net *net)
 		table[0].data = &net->unx.sysctl_max_dgram_qlen;
 	}
 
-	net->unx.ctl = register_net_sysctl_sz(net, "net/unix", table,
-					      ARRAY_SIZE(unix_table));
+	net->unx.ctl = register_net_sysctl(net, "net/unix", table);
 	if (net->unx.ctl == NULL)
 		goto err_reg;
 
@@ -51,7 +51,7 @@ err_alloc:
 
 void unix_sysctl_unregister(struct net *net)
 {
-	const struct ctl_table *table;
+	struct ctl_table *table;
 
 	table = net->unx.ctl->ctl_table_arg;
 	unregister_net_sysctl_table(net->unx.ctl);

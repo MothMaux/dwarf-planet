@@ -15,7 +15,6 @@
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
-#include <linux/clk/clkscale.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
@@ -210,7 +209,6 @@ struct ltc6952_state {
 	u32				vco_freq;
 	bool				follower;
 	bool				is_controller;
-	bool				controller_srqmd_en_during_sync;
 	bool				filtv_enable;
 	u32				cp_current;
 	u32				sysct;
@@ -222,8 +220,7 @@ struct ltc6952_state {
 	struct clk			*clks[LTC6952_NUM_CHAN];
 	struct clk_onecell_data		clk_data;
 	struct jesd204_dev		*jdev;
-	struct clk			*clkin; /* LTC6953: CLK_IN, LTC6952: REF_IN */
-	struct clk			*vcoin;
+	struct clk			*clkin;
 };
 
 #define to_output(_hw) container_of(_hw, struct ltc6952_output, hw)
@@ -603,13 +600,6 @@ static void ltc6952_clk_disable_unprepare(void *data)
 	clk_disable_unprepare(clk);
 }
 
-static void ltc6952_clk_del_provider(void *dev)
-{
-	struct spi_device *spi = dev;
-
-	of_clk_del_provider(spi->dev.of_node);
-}
-
 static int ltc6952_setup(struct iio_dev *indio_dev)
 {
 	struct ltc6952_state *st = iio_priv(indio_dev);
@@ -676,10 +666,6 @@ static int ltc6952_setup(struct iio_dev *indio_dev)
 		r *= 2;
 	}
 
-	dev_dbg(&st->spi->dev,
-		"VCO: %luMHz, PFD: %luMHz, REF: %luMHz, N: %lu, R: %lu\n",
-		vco_freq, pfd_freq, ref_freq, n, r);
-
 	/* Program the dividers */
 	ret |= ltc6952_write_mask(indio_dev, LTC6952_REG(0x06),
 				  LTC6952_RD_HIGH_MSK,
@@ -688,9 +674,6 @@ static int ltc6952_setup(struct iio_dev *indio_dev)
 	ret |= ltc6952_write(indio_dev, LTC6952_REG(0x08),
 			     LTC6952_ND_HIGH(n >> 8));
 	ret |= ltc6952_write(indio_dev, LTC6952_REG(0x09), LTC6952_ND_LOW(n));
-
-	ret |= ltc6952_write_mask(indio_dev, LTC6952_REG(0x0B),
-				 LTC6952_CPMID_MSK, LTC6952_CPMID(0));
 	if (ret < 0)
 		goto err_unlock;
 
@@ -794,12 +777,9 @@ follower:
 	st->clk_data.clks = st->clks;
 	st->clk_data.clk_num = LTC6952_NUM_CHAN;
 
-	ret = of_clk_add_provider(st->spi->dev.of_node, of_clk_src_onecell_get,
-				  &st->clk_data);
-	if (ret)
-		return ret;
-
-	return devm_add_action_or_reset(&st->spi->dev, ltc6952_clk_del_provider, st->spi);
+	return of_clk_add_provider(st->spi->dev.of_node,
+				   of_clk_src_onecell_get,
+				   &st->clk_data);
 err_unlock:
 	mutex_unlock(&st->lock);
 	return ret;
@@ -816,8 +796,6 @@ static int ltc6952_parse_dt(struct device *dev,
 		st->follower = of_property_read_bool(np, "adi,follower-mode-enable");
 
 	st->is_controller = !of_property_read_bool(np, "adi,sync-via-ezs-srq-enable");
-	st->controller_srqmd_en_during_sync = of_property_read_bool(np,
-						"adi,controller-srqmd-en-during-sync-en");
 
 	st->filtv_enable = of_property_read_bool(np, "adi,input-buffer-filt-enable");
 
@@ -946,9 +924,7 @@ static int ltc6952_jesd204_clks_sync1(struct jesd204_dev *jdev,
 		return ret;
 
 	ret = ltc6952_write_mask(indio_dev, LTC6952_REG(0x0B),
-				LTC6952_SRQMD_MSK,
-				LTC6952_SRQMD(st->controller_srqmd_en_during_sync ?
-				st->is_controller : 0));
+				LTC6952_SRQMD_MSK, LTC6952_SRQMD(0));
 	if (ret)
 		return ret;
 
@@ -1044,10 +1020,6 @@ static int ltc6952_probe(struct spi_device *spi)
 	if (IS_ERR(st->clkin))
 		return dev_err_probe(&spi->dev, PTR_ERR(st->clkin), "failed to get clkin\n");
 
-	st->vcoin = devm_clk_get_optional(&spi->dev, "vcoin");
-	if (IS_ERR(st->vcoin))
-		return dev_err_probe(&spi->dev, PTR_ERR(st->vcoin), "failed to get vcoin\n");
-
 	st->jdev = devm_jesd204_dev_register(&spi->dev, &ltc6952_jesd204_data);
 	if (IS_ERR(st->jdev))
 		return PTR_ERR(st->jdev);
@@ -1080,28 +1052,6 @@ static int ltc6952_probe(struct spi_device *spi)
 			return ret;
 	}
 
-	if (st->vcoin) {
-		struct clock_scale devclk_clkscale;
-
-		ret = of_clk_get_scale(spi->dev.of_node, "vcoin", &devclk_clkscale);
-		if (ret < 0) {
-			devclk_clkscale.mult = 1;
-			devclk_clkscale.div = 1;
-		}
-
-		ret = clk_set_rate_scaled(st->vcoin, st->vco_freq, &devclk_clkscale);
-		if (ret < 0)
-			return ret;
-
-		ret = clk_prepare_enable(st->vcoin);
-		if (ret < 0)
-			return ret;
-
-		ret = devm_add_action_or_reset(&spi->dev, ltc6952_clk_disable_unprepare, st->vcoin);
-		if (ret)
-			return ret;
-	}
-
 	indio_dev->dev.parent = &spi->dev;
 	indio_dev->name = spi->dev.of_node->name;
 	indio_dev->info = &ltc6952_iio_info;
@@ -1113,9 +1063,11 @@ static int ltc6952_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	ret = devm_iio_device_register(&spi->dev, indio_dev);
-	if (ret < 0)
+	ret = iio_device_register(indio_dev);
+	if (ret < 0) {
+		of_clk_del_provider(spi->dev.of_node);
 		return ret;
+	}
 
 	if (iio_get_debugfs_dentry(indio_dev))
 		debugfs_create_devm_seqfile(&spi->dev, "status",
@@ -1141,7 +1093,16 @@ static int ltc6952_probe(struct spi_device *spi)
 			status & LTC6952_LOCK_MSK ? "Locked" : "Unlocked",
 			st->jdev ? "(jesd204-fsm)" : "");
 
-	return devm_jesd204_fsm_start(&spi->dev, st->jdev, JESD204_LINKS_ALL);
+	return jesd204_fsm_start(st->jdev, JESD204_LINKS_ALL);
+}
+
+static void ltc6952_remove(struct spi_device *spi)
+{
+	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+
+	iio_device_unregister(indio_dev);
+
+	of_clk_del_provider(spi->dev.of_node);
 }
 
 static const struct spi_device_id ltc6952_id[] = {
@@ -1164,6 +1125,7 @@ static struct spi_driver ltc6952_driver = {
 		.of_match_table = ltc6952_of_match,
 	},
 	.probe = ltc6952_probe,
+	.remove = ltc6952_remove,
 	.id_table = ltc6952_id,
 };
 module_spi_driver(ltc6952_driver);

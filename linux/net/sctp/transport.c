@@ -117,8 +117,6 @@ fail:
  */
 void sctp_transport_free(struct sctp_transport *transport)
 {
-	transport->dead = 1;
-
 	/* Try to delete the heartbeat timer.  */
 	if (del_timer(&transport->hb_timer))
 		sctp_transport_put(transport);
@@ -198,8 +196,10 @@ void sctp_transport_reset_hb_timer(struct sctp_transport *transport)
 
 	/* When a data chunk is sent, reset the heartbeat interval.  */
 	expires = jiffies + sctp_transport_timeout(transport);
-	if (!mod_timer(&transport->hb_timer,
-		       expires + get_random_u32_below(transport->rto)))
+	if ((time_before(transport->hb_timer.expires, expires) ||
+	     !timer_pending(&transport->hb_timer)) &&
+	    !mod_timer(&transport->hb_timer,
+		       expires + prandom_u32_max(transport->rto)))
 		sctp_transport_hold(transport);
 }
 
@@ -326,12 +326,9 @@ bool sctp_transport_pl_recv(struct sctp_transport *t)
 		t->pl.probe_size += SCTP_PL_BIG_STEP;
 	} else if (t->pl.state == SCTP_PL_SEARCH) {
 		if (!t->pl.probe_high) {
-			if (t->pl.probe_size < SCTP_MAX_PLPMTU) {
-				t->pl.probe_size = min(t->pl.probe_size + SCTP_PL_BIG_STEP,
-						       SCTP_MAX_PLPMTU);
-				return false;
-			}
-			t->pl.probe_high = SCTP_MAX_PLPMTU;
+			t->pl.probe_size = min(t->pl.probe_size + SCTP_PL_BIG_STEP,
+					       SCTP_MAX_PLPMTU);
+			return false;
 		}
 		t->pl.probe_size += SCTP_PL_MIN_STEP;
 		if (t->pl.probe_size >= t->pl.probe_high) {
@@ -346,7 +343,7 @@ bool sctp_transport_pl_recv(struct sctp_transport *t)
 	} else if (t->pl.state == SCTP_PL_COMPLETE) {
 		/* Raise probe_size again after 30 * interval in Search Complete */
 		t->pl.state = SCTP_PL_SEARCH; /* Search Complete -> Search */
-		t->pl.probe_size = min(t->pl.probe_size + SCTP_PL_MIN_STEP, SCTP_MAX_PLPMTU);
+		t->pl.probe_size += SCTP_PL_MIN_STEP;
 	}
 
 	return t->pl.state == SCTP_PL_COMPLETE;
@@ -495,7 +492,6 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 
 	if (tp->rttvar || tp->srtt) {
 		struct net *net = tp->asoc->base.net;
-		unsigned int rto_beta, rto_alpha;
 		/* 6.3.1 C3) When a new RTT measurement R' is made, set
 		 * RTTVAR <- (1 - RTO.Beta) * RTTVAR + RTO.Beta * |SRTT - R'|
 		 * SRTT <- (1 - RTO.Alpha) * SRTT + RTO.Alpha * R'
@@ -507,14 +503,10 @@ void sctp_transport_update_rto(struct sctp_transport *tp, __u32 rtt)
 		 * For example, assuming the default value of RTO.Alpha of
 		 * 1/8, rto_alpha would be expressed as 3.
 		 */
-		rto_beta = READ_ONCE(net->sctp.rto_beta);
-		if (rto_beta < 32)
-			tp->rttvar = tp->rttvar - (tp->rttvar >> rto_beta)
-				+ (((__u32)abs((__s64)tp->srtt - (__s64)rtt)) >> rto_beta);
-		rto_alpha = READ_ONCE(net->sctp.rto_alpha);
-		if (rto_alpha < 32)
-			tp->srtt = tp->srtt - (tp->srtt >> rto_alpha)
-				+ (rtt >> rto_alpha);
+		tp->rttvar = tp->rttvar - (tp->rttvar >> net->sctp.rto_beta)
+			+ (((__u32)abs((__s64)tp->srtt - (__s64)rtt)) >> net->sctp.rto_beta);
+		tp->srtt = tp->srtt - (tp->srtt >> net->sctp.rto_alpha)
+			+ (rtt >> net->sctp.rto_alpha);
 	} else {
 		/* 6.3.1 C2) When the first RTT measurement R is made, set
 		 * SRTT <- R, RTTVAR <- R/2.

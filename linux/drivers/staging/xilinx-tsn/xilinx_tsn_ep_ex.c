@@ -22,7 +22,6 @@
 #include <linux/of_platform.h>
 #include <linux/of_address.h>
 #include <linux/of_net.h>
-#include <linux/platform_device.h>
 #include <linux/skbuff.h>
 
 #include "xilinx_axienet_tsn.h"
@@ -78,18 +77,13 @@ static const struct net_device_ops ex_ep_netdev_ops = {
 	.ndo_set_mac_address = netdev_set_ex_ep_mac_address,
 };
 
-bool xlnx_is_port_ep_ex_netdev(const struct net_device *ndev)
-{
-	return ndev && (ndev->netdev_ops == &ex_ep_netdev_ops);
-}
-
 static int tsn_ex_ep_probe(struct platform_device *pdev)
 {
 	struct axienet_local *lp;
 	struct net_device *ndev;
 	struct device_node *ep_node;
 	struct axienet_local *ep_lp;
-	u8 mac_addr[ETH_ALEN];
+	const void *mac_addr;
 	int ret = 0;
 	const void *packet_switch;
 
@@ -114,7 +108,7 @@ static int tsn_ex_ep_probe(struct platform_device *pdev)
 	lp->dev = &pdev->dev;
 	lp->options = XAE_OPTION_DEFAULTS;
 	/* Retrieve the MAC address */
-	ret = of_get_mac_address(pdev->dev.of_node, mac_addr);
+	ret = of_get_mac_address(pdev->dev.of_node, (u8 *)mac_addr);
 	if (ret) {
 		dev_err(&pdev->dev, "could not find MAC address\n");
 		goto free_netdev;
@@ -127,34 +121,29 @@ static int tsn_ex_ep_probe(struct platform_device *pdev)
 	ret = register_netdev(lp->ndev);
 	if (ret) {
 		dev_err(lp->dev, "register_netdev() error (%i)\n", ret);
-		goto free_of_node;
+		goto free_netdev;
 	}
 	ep_lp = netdev_priv(lp->master);
 	ep_lp->ex_ep = ndev;
-	if (packet_switch) {
+	if (packet_switch)
 		ep_lp->packet_switch = 1;
-		dev_warn(&pdev->dev,
-			 "packet-switch is deprecated and will be removed.Please use \"xlnx,packet-switch\"instead\n");
-	}
-	of_node_put(ep_node);
 	return ret;
-free_of_node:
-	of_node_put(ep_node);
 free_netdev:
 	free_netdev(ndev);
 
 	return ret;
 }
 
-static void tsn_ex_ep_remove(struct platform_device *pdev)
+static int tsn_ex_ep_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 
 	unregister_netdev(ndev);
 	free_netdev(ndev);
+	return 0;
 }
 
-struct platform_driver tsn_ex_ep_driver = {
+static struct platform_driver tsn_ex_ep_driver = {
 	.probe = tsn_ex_ep_probe,
 	.remove = tsn_ex_ep_remove,
 	.driver = {
@@ -163,6 +152,8 @@ struct platform_driver tsn_ex_ep_driver = {
 	},
 };
 
+module_platform_driver(tsn_ex_ep_driver);
+
 MODULE_DESCRIPTION("Xilinx Axi Ethernet driver");
 MODULE_AUTHOR("Xilinx");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

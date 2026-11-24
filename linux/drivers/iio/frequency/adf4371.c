@@ -13,7 +13,6 @@
 #include <linux/gcd.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/sysfs.h>
 #include <linux/spi/spi.h>
@@ -939,7 +938,7 @@ static int adf4371_clock_enable(struct clk_hw *hw)
 	return adf4371_channel_power_down(st, out->num, false);
 }
 
-static void adf4371_clock_disable(struct clk_hw *hw)
+void adf4371_clock_disable(struct clk_hw *hw)
 {
 	struct adf4371_outputs *out = to_adf4371_outputs(hw);
 	struct iio_dev *indio_dev = out->indio_dev;
@@ -1078,6 +1077,7 @@ static int adf4371_parse_dt(struct adf4371_state *st)
 {
 	unsigned char num_channels;
 	unsigned int channel, tmp;
+	struct fwnode_handle *child;
 	int ret, i;
 
 	if(device_property_read_bool(&st->spi->dev, "adi,spi-3wire-enable"))
@@ -1147,7 +1147,7 @@ static int adf4371_parse_dt(struct adf4371_state *st)
 	if (num_channels > st->chip_info->num_channels)
 		return -EINVAL;
 
-	device_for_each_child_node_scoped(&st->spi->dev, child) {
+	device_for_each_child_node(&st->spi->dev, child) {
 		ret = fwnode_property_read_u32(child, "reg", &channel);
 		if (ret)
 			return ret;

@@ -67,7 +67,7 @@ static int xdpgtquad_reset(struct phy *phy)
 }
 
 static struct phy *xdpgtquadphy_xlate(struct device *dev,
-				      const struct of_phandle_args *args)
+				      struct of_phandle_args *args)
 {
 	struct dpgtquadphy_dev *priv = dev_get_drvdata(dev);
 	struct device_node *gtquadphynode = args->np;
@@ -150,11 +150,13 @@ error_clk:
 	return ret;
 }
 
-static void gt_quad_remove(struct platform_device *pdev)
+static int gt_quad_remove(struct platform_device *pdev)
 {
 	struct dpgtquadphy_dev *gtquad = platform_get_drvdata(pdev);
 
 	clk_disable_unprepare(gtquad->axi_clk);
+
+	return 0;
 }
 
 /* Match table for of_platform binding */

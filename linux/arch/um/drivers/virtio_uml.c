@@ -168,8 +168,7 @@ static void vhost_user_check_reset(struct virtio_uml_device *vu_dev,
 	if (!vu_dev->registered)
 		return;
 
-	vu_dev->registered = 0;
-
+	virtio_break_device(&vu_dev->vdev);
 	schedule_work(&pdata->conn_broken_wk);
 }
 
@@ -413,7 +412,7 @@ static irqreturn_t vu_req_read_message(struct virtio_uml_device *vu_dev,
 		if (msg.msg.header.flags & VHOST_USER_FLAG_NEED_REPLY)
 			vhost_user_reply(vu_dev, &msg.msg, response);
 		irq_rc = IRQ_HANDLED;
-	}
+	};
 	/* mask EAGAIN as we try non-blocking read until socket is empty */
 	vu_dev->recv_rc = (rc == -EAGAIN) ? 0 : rc;
 	return irq_rc;
@@ -1014,8 +1013,8 @@ error_kzalloc:
 }
 
 static int vu_find_vqs(struct virtio_device *vdev, unsigned nvqs,
-		       struct virtqueue *vqs[],
-		       struct virtqueue_info vqs_info[],
+		       struct virtqueue *vqs[], vq_callback_t *callbacks[],
+		       const char * const names[], const bool *ctx,
 		       struct irq_affinity *desc)
 {
 	struct virtio_uml_device *vu_dev = to_virtio_uml_device(vdev);
@@ -1031,15 +1030,13 @@ static int vu_find_vqs(struct virtio_device *vdev, unsigned nvqs,
 		return rc;
 
 	for (i = 0; i < nvqs; ++i) {
-		struct virtqueue_info *vqi = &vqs_info[i];
-
-		if (!vqi->name) {
+		if (!names[i]) {
 			vqs[i] = NULL;
 			continue;
 		}
 
-		vqs[i] = vu_setup_vq(vdev, queue_idx++, vqi->callback,
-				     vqi->name, vqi->ctx);
+		vqs[i] = vu_setup_vq(vdev, queue_idx++, callbacks[i], names[i],
+				     ctx ? ctx[i] : false);
 		if (IS_ERR(vqs[i])) {
 			rc = PTR_ERR(vqs[i]);
 			goto error_setup;
@@ -1139,15 +1136,6 @@ void virtio_uml_set_no_vq_suspend(struct virtio_device *vdev,
 
 static void vu_of_conn_broken(struct work_struct *wk)
 {
-	struct virtio_uml_platform_data *pdata;
-	struct virtio_uml_device *vu_dev;
-
-	pdata = container_of(wk, struct virtio_uml_platform_data, conn_broken_wk);
-
-	vu_dev = platform_get_drvdata(pdata->pdev);
-
-	virtio_break_device(&vu_dev->vdev);
-
 	/*
 	 * We can't remove the device from the devicetree so the only thing we
 	 * can do is warn.
@@ -1231,12 +1219,10 @@ static int virtio_uml_probe(struct platform_device *pdev)
 	device_set_wakeup_capable(&vu_dev->vdev.dev, true);
 
 	rc = register_virtio_device(&vu_dev->vdev);
-	if (rc) {
+	if (rc)
 		put_device(&vu_dev->vdev.dev);
-		return rc;
-	}
 	vu_dev->registered = 1;
-	return 0;
+	return rc;
 
 error_init:
 	os_close_file(vu_dev->sock);
@@ -1245,11 +1231,12 @@ error_free:
 	return rc;
 }
 
-static void virtio_uml_remove(struct platform_device *pdev)
+static int virtio_uml_remove(struct platform_device *pdev)
 {
 	struct virtio_uml_device *vu_dev = platform_get_drvdata(pdev);
 
 	unregister_virtio_device(&vu_dev->vdev);
+	return 0;
 }
 
 /* Command line device list */
@@ -1279,14 +1266,8 @@ static int vu_unregister_cmdline_device(struct device *dev, void *data)
 static void vu_conn_broken(struct work_struct *wk)
 {
 	struct virtio_uml_platform_data *pdata;
-	struct virtio_uml_device *vu_dev;
 
 	pdata = container_of(wk, struct virtio_uml_platform_data, conn_broken_wk);
-
-	vu_dev = platform_get_drvdata(pdata->pdev);
-
-	virtio_break_device(&vu_dev->vdev);
-
 	vu_unregister_cmdline_device(&pdata->pdev->dev, NULL);
 }
 
@@ -1448,7 +1429,7 @@ static int virtio_uml_resume(struct platform_device *pdev)
 
 static struct platform_driver virtio_uml_driver = {
 	.probe = virtio_uml_probe,
-	.remove_new = virtio_uml_remove,
+	.remove = virtio_uml_remove,
 	.driver = {
 		.name = "virtio-uml",
 		.of_match_table = virtio_uml_match,

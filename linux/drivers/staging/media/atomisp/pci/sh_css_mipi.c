@@ -67,12 +67,13 @@ ia_css_mipi_frame_calculate_size(const unsigned int width,
 	unsigned int mem_words = 0;
 	unsigned int width_padded = width;
 
+#if defined(ISP2401)
 	/* The changes will be reverted as soon as RAW
 	 * Buffers are deployed by the 2401 Input System
 	 * in the non-continuous use scenario.
 	 */
-	if (IS_ISP2401)
-		width_padded += (2 * ISP_VEC_NELEMS);
+	width_padded += (2 * ISP_VEC_NELEMS);
+#endif
 
 	IA_CSS_ENTER("padded_width=%d, height=%d, format=%d, hasSOLandEOL=%d, embedded_data_size_words=%d\n",
 		     width_padded, height, format, hasSOLandEOL, embedded_data_size_words);
@@ -174,7 +175,7 @@ ia_css_mipi_frame_calculate_size(const unsigned int width,
 	mem_words = ((embedded_data_size_words + 7) >> 3) +
 	mem_words_for_first_line +
 	(((height + 1) >> 1) - 1) * mem_words_per_odd_line +
-	/* ceil (height/2) - 1 (first line is calculated separately) */
+	/* ceil (height/2) - 1 (first line is calculated separatelly) */
 	(height      >> 1) * mem_words_per_even_line + /* floor(height/2) */
 	mem_words_for_EOF;
 
@@ -184,6 +185,35 @@ ia_css_mipi_frame_calculate_size(const unsigned int width,
 	IA_CSS_LEAVE_ERR(err);
 	return err;
 }
+
+/*
+ * Check if a source port or TPG/PRBS ID is valid
+ */
+
+#if !defined(ISP2401)
+int
+ia_css_mipi_frame_enable_check_on_size(const enum mipi_port_id port,
+				       const unsigned int	size_mem_words)
+{
+	u32 idx;
+
+	int err = -EBUSY;
+
+	OP___assert(port < N_CSI_PORTS);
+	OP___assert(size_mem_words != 0);
+
+	for (idx = 0; idx < IA_CSS_MIPI_SIZE_CHECK_MAX_NOF_ENTRIES_PER_PORT &&
+	     my_css.mipi_sizes_for_check[port][idx] != 0;
+	     idx++) { /* do nothing */
+	}
+	if (idx < IA_CSS_MIPI_SIZE_CHECK_MAX_NOF_ENTRIES_PER_PORT) {
+		my_css.mipi_sizes_for_check[port][idx] = size_mem_words;
+		err = 0;
+	}
+
+	return err;
+}
+#endif
 
 void
 mipi_init(void)
@@ -205,6 +235,7 @@ bool mipi_is_free(void)
 	return true;
 }
 
+#if defined(ISP2401)
 /*
  * @brief Calculate the required MIPI buffer sizes.
  * Based on the stream configuration, calculate the
@@ -311,6 +342,7 @@ static int calculate_mipi_buff_size(struct ia_css_stream_config *stream_cfg,
 	IA_CSS_LEAVE_ERR(err);
 	return err;
 }
+#endif
 
 int
 allocate_mipi_frames(struct ia_css_pipe *pipe,
@@ -322,13 +354,24 @@ allocate_mipi_frames(struct ia_css_pipe *pipe,
 	ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
 			    "allocate_mipi_frames(%p) enter:\n", pipe);
 
-	if (IS_ISP2401 && pipe->stream->config.online) {
+	assert(pipe);
+	assert(pipe->stream);
+	if ((!pipe) || (!pipe->stream)) {
+		ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
+				    "allocate_mipi_frames(%p) exit: pipe or stream is null.\n",
+				    pipe);
+		return -EINVAL;
+	}
+
+#ifdef ISP2401
+	if (pipe->stream->config.online) {
 		ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
 				    "allocate_mipi_frames(%p) exit: no buffers needed for 2401 pipe mode.\n",
 				    pipe);
 		return 0;
 	}
 
+#endif
 	if (pipe->stream->config.mode != IA_CSS_INPUT_MODE_BUFFERED_SENSOR) {
 		ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
 				    "allocate_mipi_frames(%p) exit: no buffers needed for pipe mode.\n",
@@ -343,10 +386,9 @@ allocate_mipi_frames(struct ia_css_pipe *pipe,
 		return -EINVAL;
 	}
 
-	if (IS_ISP2401)
-		err = calculate_mipi_buff_size(&pipe->stream->config,
-					       &my_css.mipi_frame_size[port]);
-
+#ifdef ISP2401
+	err = calculate_mipi_buff_size(&pipe->stream->config,
+				       &my_css.mipi_frame_size[port]);
 	/*
 	 * 2401 system allows multiple streams to use same physical port. This is not
 	 * true for 2400 system. Currently 2401 uses MIPI buffers as a temporary solution.
@@ -354,14 +396,20 @@ allocate_mipi_frames(struct ia_css_pipe *pipe,
 	 * In that case only 2400 related code should remain.
 	 */
 	if (ref_count_mipi_allocation[port] != 0) {
-		if (IS_ISP2401)
-			ref_count_mipi_allocation[port]++;
-
+		ref_count_mipi_allocation[port]++;
 		ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
 				    "allocate_mipi_frames(%p) leave: nothing to do, already allocated for this port (port=%d).\n",
 				    pipe, port);
 		return 0;
 	}
+#else
+	if (ref_count_mipi_allocation[port] != 0) {
+		ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
+				    "allocate_mipi_frames(%p) exit: already allocated for this port (port=%d).\n",
+				    pipe, port);
+		return 0;
+	}
+#endif
 
 	ref_count_mipi_allocation[port]++;
 
@@ -455,14 +503,14 @@ free_mipi_frames(struct ia_css_pipe *pipe)
 		}
 
 		if (ref_count_mipi_allocation[port] > 0) {
-			if (!IS_ISP2401) {
-				assert(ref_count_mipi_allocation[port] == 1);
-				if (ref_count_mipi_allocation[port] != 1) {
-					IA_CSS_ERROR("free_mipi_frames(%p) exit: wrong ref_count (ref_count=%d).",
-						     pipe, ref_count_mipi_allocation[port]);
-					return err;
-				}
+#if !defined(ISP2401)
+			assert(ref_count_mipi_allocation[port] == 1);
+			if (ref_count_mipi_allocation[port] != 1) {
+				IA_CSS_ERROR("free_mipi_frames(%p) exit: wrong ref_count (ref_count=%d).",
+					     pipe, ref_count_mipi_allocation[port]);
+				return err;
 			}
+#endif
 
 			ref_count_mipi_allocation[port]--;
 
@@ -486,10 +534,22 @@ free_mipi_frames(struct ia_css_pipe *pipe)
 				ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
 						    "free_mipi_frames(%p) exit (deallocated).\n", pipe);
 			}
+#if defined(ISP2401)
+			else {
+				/* 2401 system allows multiple streams to use same physical port. This is not
+				 * true for 2400 system. Currently 2401 uses MIPI buffers as a temporary solution.
+				 * TODO AM: Once that is changed (removed) this code should be removed as well.
+				 * In that case only 2400 related code should remain.
+				 */
+				ia_css_debug_dtrace(IA_CSS_DEBUG_TRACE_PRIVATE,
+						    "free_mipi_frames(%p) leave: nothing to do, other streams still use this port (port=%d).\n",
+						    pipe, port);
+			}
+#endif
 		}
 	} else { /* pipe ==NULL */
 		/* AM TEMP: free-ing all mipi buffers just like a legacy code. */
-		for (port = 0; port < N_CSI_PORTS; port++) {
+		for (port = CSI_PORT0_ID; port < N_CSI_PORTS; port++) {
 			unsigned int i;
 
 			for (i = 0; i < my_css.num_mipi_frames[port]; i++) {
@@ -519,6 +579,13 @@ send_mipi_frames(struct ia_css_pipe *pipe)
 
 	IA_CSS_ENTER_PRIVATE("pipe=%p", pipe);
 
+	assert(pipe);
+	assert(pipe->stream);
+	if (!pipe || !pipe->stream) {
+		IA_CSS_ERROR("pipe or stream is null");
+		return -EINVAL;
+	}
+
 	/* multi stream video needs mipi buffers */
 	/* nothing to be done in other cases. */
 	if (pipe->stream->config.mode != IA_CSS_INPUT_MODE_BUFFERED_SENSOR) {
@@ -537,7 +604,7 @@ send_mipi_frames(struct ia_css_pipe *pipe)
 
 	/* Hand-over the SP-internal mipi buffers */
 	for (i = 0; i < my_css.num_mipi_frames[port]; i++) {
-		/* Need to include the offset for port. */
+		/* Need to include the ofset for port. */
 		sh_css_update_host2sp_mipi_frame(port * NUM_MIPI_FRAMES_PER_STREAM + i,
 						 my_css.mipi_frames[port][i]);
 		sh_css_update_host2sp_mipi_metadata(port * NUM_MIPI_FRAMES_PER_STREAM + i,

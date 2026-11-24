@@ -10,7 +10,6 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/of_platform.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
 
@@ -138,7 +137,7 @@ static int xlnx_i2s_card_hw_params(struct snd_pcm_substream *substream,
 	struct pl_card_data *prv;
 
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
 
 	ch = params_channels(params);
 	data_width = params_width(params);
@@ -523,11 +522,12 @@ static int xlnx_snd_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void xlnx_snd_remove(struct platform_device *pdev)
+static int xlnx_snd_remove(struct platform_device *pdev)
 {
 	struct pl_card_data *pdata = dev_get_drvdata(&pdev->dev);
 
 	ida_simple_remove(&xlnx_snd_card_dev, pdata->xlnx_snd_dev_id);
+	return 0;
 }
 
 static struct platform_driver xlnx_snd_driver = {
@@ -542,4 +542,4 @@ module_platform_driver(xlnx_snd_driver);
 
 MODULE_DESCRIPTION("Xilinx FPGA sound card driver");
 MODULE_AUTHOR("Maruthi Srinivas Bayyavarapu");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

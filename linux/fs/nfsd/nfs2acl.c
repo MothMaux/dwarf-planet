@@ -45,7 +45,7 @@ static __be32 nfsacld_proc_getacl(struct svc_rqst *rqstp)
 	inode = d_inode(fh->fh_dentry);
 
 	if (argp->mask & ~NFS_ACL_MASK) {
-		resp->status = nfserr_io;
+		resp->status = nfserr_inval;
 		goto out;
 	}
 	resp->mask = argp->mask;
@@ -55,7 +55,7 @@ static __be32 nfsacld_proc_getacl(struct svc_rqst *rqstp)
 		goto out;
 
 	if (resp->mask & (NFS_ACL|NFS_ACLCNT)) {
-		acl = get_inode_acl(inode, ACL_TYPE_ACCESS);
+		acl = get_acl(inode, ACL_TYPE_ACCESS);
 		if (acl == NULL) {
 			/* Solaris returns the inode's minimum ACL. */
 			acl = posix_acl_from_mode(inode->i_mode, GFP_KERNEL);
@@ -69,7 +69,7 @@ static __be32 nfsacld_proc_getacl(struct svc_rqst *rqstp)
 	if (resp->mask & (NFS_DFACL|NFS_DFACLCNT)) {
 		/* Check how Solaris handles requests for the Default ACL
 		   of a non-directory! */
-		acl = get_inode_acl(inode, ACL_TYPE_DEFAULT);
+		acl = get_acl(inode, ACL_TYPE_DEFAULT);
 		if (IS_ERR(acl)) {
 			resp->status = nfserrno(PTR_ERR(acl));
 			goto fail;
@@ -84,8 +84,6 @@ out:
 fail:
 	posix_acl_release(resp->acl_access);
 	posix_acl_release(resp->acl_default);
-	resp->acl_access = NULL;
-	resp->acl_default = NULL;
 	goto out;
 }
 
@@ -115,11 +113,11 @@ static __be32 nfsacld_proc_setacl(struct svc_rqst *rqstp)
 
 	inode_lock(inode);
 
-	error = set_posix_acl(&nop_mnt_idmap, fh->fh_dentry, ACL_TYPE_ACCESS,
+	error = set_posix_acl(&init_user_ns, inode, ACL_TYPE_ACCESS,
 			      argp->acl_access);
 	if (error)
 		goto out_drop_lock;
-	error = set_posix_acl(&nop_mnt_idmap, fh->fh_dentry, ACL_TYPE_DEFAULT,
+	error = set_posix_acl(&init_user_ns, inode, ACL_TYPE_DEFAULT,
 			      argp->acl_default);
 	if (error)
 		goto out_drop_lock;
@@ -248,6 +246,7 @@ nfsaclsvc_encode_getaclres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 	struct nfsd3_getaclres *resp = rqstp->rq_resp;
 	struct dentry *dentry = resp->fh.fh_dentry;
 	struct inode *inode;
+	int w;
 
 	if (!svcxdr_encode_stat(xdr, resp->status))
 		return false;
@@ -260,6 +259,15 @@ nfsaclsvc_encode_getaclres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		return false;
 	if (xdr_stream_encode_u32(xdr, resp->mask) < 0)
 		return false;
+
+	rqstp->rq_res.page_len = w = nfsacl_size(
+		(resp->mask & NFS_ACL)   ? resp->acl_access  : NULL,
+		(resp->mask & NFS_DFACL) ? resp->acl_default : NULL);
+	while (w > 0) {
+		if (!*(rqstp->rq_next_page++))
+			return true;
+		w -= PAGE_SIZE;
+	}
 
 	if (!nfs_stream_encode_acl(xdr, inode, resp->acl_access,
 				   resp->mask & NFS_ACL, 0))
@@ -309,6 +317,8 @@ static void nfsaclsvc_release_access(struct svc_rqst *rqstp)
 
 	fh_put(&resp->fh);
 }
+
+struct nfsd3_voidargs { int dummy; };
 
 #define ST 1		/* status*/
 #define AT 21		/* attributes */
@@ -377,11 +387,10 @@ static const struct svc_procedure nfsd_acl_procedures2[5] = {
 	},
 };
 
-static DEFINE_PER_CPU_ALIGNED(unsigned long,
-			      nfsd_acl_count2[ARRAY_SIZE(nfsd_acl_procedures2)]);
+static unsigned int nfsd_acl_count2[ARRAY_SIZE(nfsd_acl_procedures2)];
 const struct svc_version nfsd_acl_version2 = {
 	.vs_vers	= 2,
-	.vs_nproc	= ARRAY_SIZE(nfsd_acl_procedures2),
+	.vs_nproc	= 5,
 	.vs_proc	= nfsd_acl_procedures2,
 	.vs_count	= nfsd_acl_count2,
 	.vs_dispatch	= nfsd_dispatch,

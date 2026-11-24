@@ -70,7 +70,7 @@ xsubsetconv_get_pad_format(struct xsubsetconv_state *xsubsetconv,
 
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		format = v4l2_subdev_state_get_format(state, pad);
+		format = v4l2_subdev_get_try_format(&xsubsetconv->subdev, state, pad);
 		break;
 
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
@@ -326,7 +326,7 @@ error:
 	return ret;
 }
 
-static void xsubsetconv_remove(struct platform_device *pdev)
+static int xsubsetconv_remove(struct platform_device *pdev)
 {
 	struct xsubsetconv_state *xsubsetconv = platform_get_drvdata(pdev);
 	struct v4l2_subdev *subdev = &xsubsetconv->subdev;
@@ -334,6 +334,8 @@ static void xsubsetconv_remove(struct platform_device *pdev)
 	v4l2_async_unregister_subdev(subdev);
 	media_entity_cleanup(&subdev->entity);
 	mutex_destroy(&xsubsetconv->lock);
+
+	return 0;
 }
 
 static struct platform_driver xsubsetconv_driver = {
@@ -350,4 +352,4 @@ module_platform_driver(xsubsetconv_driver);
 MODULE_AUTHOR("Anil Kumar M <anil.mamidal@xilinx.com>");
 MODULE_AUTHOR("Karthikeyan T <karthikeyan.thangavel@xilinx.com>");
 MODULE_DESCRIPTION("Xilinx AXI4-Stream Subset Converter Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

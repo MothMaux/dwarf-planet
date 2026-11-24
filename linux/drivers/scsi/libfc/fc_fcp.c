@@ -265,11 +265,6 @@ static int fc_fcp_send_abort(struct fc_fcp_pkt *fsp)
 	if (!fsp->seq_ptr)
 		return -EINVAL;
 
-	if (fsp->state & FC_SRB_ABORT_PENDING) {
-		FC_FCP_DBG(fsp, "abort already pending\n");
-		return -EBUSY;
-	}
-
 	this_cpu_inc(fsp->lp->stats->FcpPktAborts);
 
 	fsp->state |= FC_SRB_ABORT_PENDING;
@@ -1676,7 +1671,7 @@ static void fc_fcp_rec_error(struct fc_fcp_pkt *fsp, struct fc_frame *fp)
 		if (fsp->recov_retry++ < FC_MAX_RECOV_RETRY)
 			fc_fcp_rec(fsp);
 		else
-			fc_fcp_recovery(fsp, FC_TIMED_OUT);
+			fc_fcp_recovery(fsp, FC_ERROR);
 		break;
 	}
 	fc_fcp_unlock_pkt(fsp);
@@ -1695,12 +1690,11 @@ static void fc_fcp_recovery(struct fc_fcp_pkt *fsp, u8 code)
 	fsp->status_code = code;
 	fsp->cdb_status = 0;
 	fsp->io_status = 0;
-	if (!fsp->cmd)
-		/*
-		 * Only abort non-scsi commands; otherwise let the
-		 * scsi command timer fire and scsi-ml escalate.
-		 */
-		fc_fcp_send_abort(fsp);
+	/*
+	 * if this fails then we let the scsi command timer fire and
+	 * scsi-ml escalate.
+	 */
+	fc_fcp_send_abort(fsp);
 }
 
 /**
@@ -2062,9 +2056,9 @@ static void fc_io_compl(struct fc_fcp_pkt *fsp)
 		sc_cmd->result = (DID_PARITY << 16);
 		break;
 	case FC_TIMED_OUT:
-		FC_FCP_DBG(fsp, "Returning DID_TIME_OUT to scsi-ml "
+		FC_FCP_DBG(fsp, "Returning DID_BUS_BUSY to scsi-ml "
 			   "due to FC_TIMED_OUT\n");
-		sc_cmd->result = (DID_TIME_OUT << 16);
+		sc_cmd->result = (DID_BUS_BUSY << 16) | fsp->io_status;
 		break;
 	default:
 		FC_FCP_DBG(fsp, "Returning DID_ERROR to scsi-ml "

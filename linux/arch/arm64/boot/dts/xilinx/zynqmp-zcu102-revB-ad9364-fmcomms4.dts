@@ -1,8 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * dts file for FMCOMMS4 AD9364 on Xilinx ZynqMP ZCU102 RevB
  *
  * Copyright (C) 2016 Analog Devices Inc.
+ *
+ * Licensed under the GPL-2.
  */
 
 #include "zynqmp-zcu102-revB.dts"
@@ -37,20 +38,46 @@
 		#size-cells = <0x1>;
 		ranges = <0 0 0 0xffffffff>;
 
-		rx_dma: dma-controller@80010000 {
+		rx_dma: dma@80010000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x80010000 0x10000>;
 			#dma-cells = <1>;
 			interrupts = <0 109 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&zynqmp_clk 71>;
+
+			adi,channels {
+				#size-cells = <0>;
+				#address-cells = <1>;
+
+				dma-channel@0 {
+					reg = <0>;
+					adi,source-bus-width = <64>;
+					adi,source-bus-type = <2>;
+					adi,destination-bus-width = <64>;
+					adi,destination-bus-type = <0>;
+				};
+			};
 		};
 
-		tx_dma: dma-controller@80020000 {
+		tx_dma: dma@80020000  {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x80020000 0x10000>;
 			#dma-cells = <1>;
 			interrupts = <0 108 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&zynqmp_clk 71>;
+
+			adi,channels {
+				#size-cells = <0>;
+				#address-cells = <1>;
+
+				dma-channel@0 {
+					reg = <0>;
+					adi,source-bus-width = <64>;
+					adi,source-bus-type = <0>;
+					adi,destination-bus-width = <64>;
+					adi,destination-bus-type = <2>;
+				};
+			};
 		};
 
 		cf_ad9361_adc_core_0: cf-ad9361-lpc@80000000 {

@@ -130,6 +130,7 @@ bool sxgbe_eee_init(struct sxgbe_priv_data * const priv)
 		if (phy_init_eee(ndev->phydev, true))
 			return false;
 
+		priv->eee_active = 1;
 		timer_setup(&priv->eee_ctrl_timer, sxgbe_eee_ctrl_timer, 0);
 		priv->eee_ctrl_timer.expires = SXGBE_LPI_TIMER(eee_timer);
 		add_timer(&priv->eee_ctrl_timer);
@@ -1520,10 +1521,8 @@ static int sxgbe_rx(struct sxgbe_priv_data *priv, int limit)
 
 		skb = priv->rxq[qnum]->rx_skbuff[entry];
 
-		if (unlikely(!skb)) {
+		if (unlikely(!skb))
 			netdev_err(priv->dev, "rx descriptor is not consistent\n");
-			break;
-		}
 
 		prefetch(skb->data - NET_IP_ALIGN);
 		priv->rxq[qnum]->rx_skbuff[entry] = NULL;
@@ -1806,7 +1805,7 @@ static int sxgbe_set_features(struct net_device *dev,
  */
 static int sxgbe_change_mtu(struct net_device *dev, int new_mtu)
 {
-	WRITE_ONCE(dev->mtu, new_mtu);
+	dev->mtu = new_mtu;
 
 	if (!netif_running(dev))
 		return 0;
@@ -2204,7 +2203,7 @@ error_free_netdev:
  * Description: this function resets the TX/RX processes, disables the MAC RX/TX
  * changes the link status, releases the DMA descriptor rings.
  */
-void sxgbe_drv_remove(struct net_device *ndev)
+int sxgbe_drv_remove(struct net_device *ndev)
 {
 	struct sxgbe_priv_data *priv = netdev_priv(ndev);
 	u8 queue_num;
@@ -2232,6 +2231,8 @@ void sxgbe_drv_remove(struct net_device *ndev)
 	kfree(priv->hw);
 
 	free_netdev(ndev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM

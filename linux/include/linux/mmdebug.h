@@ -8,12 +8,10 @@
 struct page;
 struct vm_area_struct;
 struct mm_struct;
-struct vma_iterator;
 
-void dump_page(const struct page *page, const char *reason);
+void dump_page(struct page *page, const char *reason);
 void dump_vma(const struct vm_area_struct *vma);
 void dump_mm(const struct mm_struct *mm);
-void vma_iter_dump_tree(const struct vma_iterator *vmi);
 
 #ifdef CONFIG_DEBUG_VM
 #define VM_BUG_ON(cond) BUG_ON(cond)
@@ -46,7 +44,7 @@ void vma_iter_dump_tree(const struct vma_iterator *vmi);
 		}							\
 	} while (0)
 #define VM_WARN_ON_ONCE_PAGE(cond, page)	({			\
-	static bool __section(".data..once") __warned;			\
+	static bool __section(".data.once") __warned;			\
 	int __ret_warn_once = !!(cond);					\
 									\
 	if (unlikely(__ret_warn_once && !__warned)) {			\
@@ -66,22 +64,11 @@ void vma_iter_dump_tree(const struct vma_iterator *vmi);
 	unlikely(__ret_warn);						\
 })
 #define VM_WARN_ON_ONCE_FOLIO(cond, folio)	({			\
-	static bool __section(".data..once") __warned;			\
+	static bool __section(".data.once") __warned;			\
 	int __ret_warn_once = !!(cond);					\
 									\
 	if (unlikely(__ret_warn_once && !__warned)) {			\
 		dump_page(&folio->page, "VM_WARN_ON_ONCE_FOLIO(" __stringify(cond)")");\
-		__warned = true;					\
-		WARN_ON(1);						\
-	}								\
-	unlikely(__ret_warn_once);					\
-})
-#define VM_WARN_ON_ONCE_MM(cond, mm)		({			\
-	static bool __section(".data..once") __warned;			\
-	int __ret_warn_once = !!(cond);					\
-									\
-	if (unlikely(__ret_warn_once && !__warned)) {			\
-		dump_mm(mm);						\
 		__warned = true;					\
 		WARN_ON(1);						\
 	}								\
@@ -103,7 +90,6 @@ void vma_iter_dump_tree(const struct vma_iterator *vmi);
 #define VM_WARN_ON_ONCE_PAGE(cond, page)  BUILD_BUG_ON_INVALID(cond)
 #define VM_WARN_ON_FOLIO(cond, folio)  BUILD_BUG_ON_INVALID(cond)
 #define VM_WARN_ON_ONCE_FOLIO(cond, folio)  BUILD_BUG_ON_INVALID(cond)
-#define VM_WARN_ON_ONCE_MM(cond, mm)  BUILD_BUG_ON_INVALID(cond)
 #define VM_WARN_ONCE(cond, format...) BUILD_BUG_ON_INVALID(cond)
 #define VM_WARN(cond, format...) BUILD_BUG_ON_INVALID(cond)
 #endif

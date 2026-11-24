@@ -143,7 +143,7 @@ static int mwadma_prep_desc(struct mwadma_dev *mwdev, struct mwadma_chan * mwcha
     return 0;
 }
 
-static void mwadma_tx_cb_single_signal(void *data)
+void mwadma_tx_cb_single_signal(void *data)
 {
     struct mwadma_slist *block = data;
     struct mwadma_chan *mwchan = block->qchan;
@@ -159,7 +159,7 @@ static void mwadma_tx_cb_single_signal(void *data)
     sysfs_notify_dirent(mwchan->irq_kn);
 }
 
-static void mwadma_tx_cb_continuous_signal_dataflow(void *data)
+void mwadma_tx_cb_continuous_signal_dataflow(void *data)
 {
     struct mwadma_slist *block = data;
     struct mwadma_chan *mwchan = block->qchan;
@@ -191,7 +191,7 @@ static void mwadma_tx_cb_continuous_signal_dataflow(void *data)
 }
 
 
-static void mwadma_tx_cb_continuous_signal(void *data)
+void mwadma_tx_cb_continuous_signal(void *data)
 {
     struct mwadma_slist *block= data;
     struct mwadma_chan *mwchan = block->qchan;
@@ -205,7 +205,8 @@ static void mwadma_tx_cb_continuous_signal(void *data)
     mwadma_start(mwchan);
 }
 
-static void mwadma_rx_cb_single_signal(void *data)
+
+void mwadma_rx_cb_single_signal(void *data)
 {
     struct mwadma_slist *block = data;
     struct mwadma_chan *mwchan = block->qchan;
@@ -222,7 +223,7 @@ static void mwadma_rx_cb_single_signal(void *data)
     sysfs_notify_dirent(mwchan->irq_kn);
 }
 
-static void mwadma_rx_cb_burst(void *data)
+void mwadma_rx_cb_burst(void *data)
 {
     struct mwadma_slist *block = data;
     struct mwadma_chan *mwchan = block->qchan;
@@ -246,7 +247,7 @@ static void mwadma_rx_cb_burst(void *data)
     }
 }
 
-static void mwadma_rx_cb_continuous_signal(void *data)
+void mwadma_rx_cb_continuous_signal(void *data)
 {
     struct mwadma_slist *block = data;
     struct mwadma_chan *mwchan = block->qchan;
@@ -773,7 +774,7 @@ static vm_fault_t mwadma_mmap_fault(struct vm_fault *vmf)
     struct page *thisPage;
     unsigned long offset;
     offset = (vmf->pgoff - vma->vm_pgoff) << PAGE_SHIFT;
-    thisPage = virt_to_page((void *)(uintptr_t)(MWDEV_TO_MWIP(mwdev)->mem->start + offset));
+    thisPage = virt_to_page(MWDEV_TO_MWIP(mwdev)->mem->start + offset);
     get_page(thisPage);
     vmf->page = thisPage;
     return 0;
@@ -814,7 +815,7 @@ static int mwadma_mmap(struct file *fp, struct vm_area_struct *vma)
     switch(vma->vm_pgoff) {
 		case 0:
 			/* mmap the Memory Mapped I/O's base address */
-			vm_flags_set(vma, VM_IO | VM_DONTDUMP);
+                        vma->vm_flags |= VM_IO | VM_DONTDUMP;
 			vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 			if (remap_pfn_range(vma, vma->vm_start,
 					MWDEV_TO_MWIP(mwdev)->mem->start >> PAGE_SHIFT,
@@ -1081,7 +1082,7 @@ static void mw_stream_chan_release(struct device *dev)
 {
 	struct mwadma_chan* mwchan = STREAMDEV_TO_MWCHAN(dev);
 	dev_dbg(dev, "Freeing scatter channel dma memory\n");
-	if ( (mwchan->scatter !=NULL) && (!list_empty(&mwchan->scatter->list)))
+	if ( (mwchan->scatter !=NULL) && (&mwchan->scatter->list != NULL))
 	{
 		mwadma_free_channel(mwchan->mwdev, mwchan);
 	}
@@ -1167,7 +1168,7 @@ static struct mwadma_chan* __must_check mw_stream_chan_probe(
 	return mwchan;
 }
 
-static void mw_stream_channels_release(void *opaque) {
+void mw_stream_channels_release(void *opaque) {
 	struct mwadma_dev *mwdev = opaque;
 	dev_info(IP2DEVP(mwdev), "Removing sysfs entries...");
 	sysfs_remove_group(&IP2DEVP(mwdev)->kobj, &mwdma_attr_group);

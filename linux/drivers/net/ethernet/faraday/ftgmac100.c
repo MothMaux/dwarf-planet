@@ -24,7 +24,6 @@
 #include <linux/crc32.h>
 #include <linux/if_vlan.h>
 #include <linux/of_net.h>
-#include <linux/phy_fixed.h>
 #include <net/ip.h>
 #include <net/ncsi.h>
 
@@ -50,15 +49,6 @@
 
 #define FTGMAC_100MHZ		100000000
 #define FTGMAC_25MHZ		25000000
-
-/* For NC-SI to register a fixed-link phy device */
-static struct fixed_phy_status ncsi_phy_status = {
-	.link = 1,
-	.speed = SPEED_100,
-	.duplex = DUPLEX_FULL,
-	.pause = 0,
-	.asym_pause = 0
-};
 
 struct ftgmac100 {
 	/* Registers */
@@ -187,20 +177,16 @@ static void ftgmac100_write_mac_addr(struct ftgmac100 *priv, const u8 *mac)
 	iowrite32(laddr, priv->base + FTGMAC100_OFFSET_MAC_LADR);
 }
 
-static int ftgmac100_initial_mac(struct ftgmac100 *priv)
+static void ftgmac100_initial_mac(struct ftgmac100 *priv)
 {
 	u8 mac[ETH_ALEN];
 	unsigned int m;
 	unsigned int l;
-	int err;
 
-	err = of_get_ethdev_address(priv->dev->of_node, priv->netdev);
-	if (err == -EPROBE_DEFER)
-		return err;
-	if (!err) {
+	if (!device_get_ethdev_address(priv->dev, priv->netdev)) {
 		dev_info(priv->dev, "Read MAC address %pM from device tree\n",
 			 priv->netdev->dev_addr);
-		return 0;
+		return;
 	}
 
 	m = ioread32(priv->base + FTGMAC100_OFFSET_MAC_MADR);
@@ -221,8 +207,6 @@ static int ftgmac100_initial_mac(struct ftgmac100 *priv)
 		dev_info(priv->dev, "Generated random MAC address %pM\n",
 			 priv->netdev->dev_addr);
 	}
-
-	return 0;
 }
 
 static int ftgmac100_set_mac_addr(struct net_device *dev, void *p)
@@ -582,7 +566,7 @@ static bool ftgmac100_rx_packet(struct ftgmac100 *priv, int *processed)
 	(*processed)++;
 	return true;
 
-drop:
+ drop:
 	/* Clean rxdes0 (which resets own bit) */
 	rxdes->rxdes0 = cpu_to_le32(status & priv->rxdes0_edorr_mask);
 	priv->rx_pointer = ftgmac100_next_rx_pointer(priv, pointer);
@@ -665,11 +649,6 @@ static bool ftgmac100_tx_complete_packet(struct ftgmac100 *priv)
 	netdev->stats.tx_bytes += skb->len;
 	ftgmac100_free_tx_packet(priv, pointer, skb, txdes, ctl_stat);
 	txdes->txdes0 = cpu_to_le32(ctl_stat & priv->txdes0_edotr_mask);
-
-	/* Ensure the descriptor config is visible before setting the tx
-	 * pointer.
-	 */
-	smp_wmb();
 
 	priv->tx_clean_pointer = ftgmac100_next_tx_pointer(priv, pointer);
 
@@ -824,11 +803,6 @@ static netdev_tx_t ftgmac100_hard_start_xmit(struct sk_buff *skb,
 	dma_wmb();
 	first->txdes0 = cpu_to_le32(f_ctl_stat);
 
-	/* Ensure the descriptor config is visible before setting the tx
-	 * pointer.
-	 */
-	smp_wmb();
-
 	/* Update next TX pointer */
 	priv->tx_pointer = pointer;
 
@@ -849,7 +823,7 @@ static netdev_tx_t ftgmac100_hard_start_xmit(struct sk_buff *skb,
 
 	return NETDEV_TX_OK;
 
-dma_err:
+ dma_err:
 	if (net_ratelimit())
 		netdev_err(netdev, "map tx fragment failed\n");
 
@@ -871,7 +845,7 @@ dma_err:
 	 * last fragment, so we know ftgmac100_free_tx_packet()
 	 * hasn't freed the skb yet.
 	 */
-drop:
+ drop:
 	/* Drop the packet */
 	dev_kfree_skb_any(skb);
 	netdev->stats.tx_dropped++;
@@ -1364,7 +1338,7 @@ static void ftgmac100_reset(struct ftgmac100 *priv)
 	ftgmac100_init_all(priv, true);
 
 	netdev_dbg(netdev, "Reset done !\n");
-bail:
+ bail:
 	if (priv->mii_bus)
 		mutex_unlock(&priv->mii_bus->mdio_lock);
 	if (netdev->phydev)
@@ -1551,8 +1525,7 @@ static int ftgmac100_open(struct net_device *netdev)
 	if (netdev->phydev) {
 		/* If we have a PHY, start polling */
 		phy_start(netdev->phydev);
-	}
-	if (priv->use_ncsi) {
+	} else if (priv->use_ncsi) {
 		/* If using NC-SI, set our carrier on and start the stack */
 		netif_carrier_on(netdev);
 
@@ -1564,16 +1537,15 @@ static int ftgmac100_open(struct net_device *netdev)
 
 	return 0;
 
-err_ncsi:
-	phy_stop(netdev->phydev);
+ err_ncsi:
 	napi_disable(&priv->napi);
 	netif_stop_queue(netdev);
-err_alloc:
+ err_alloc:
 	ftgmac100_free_buffers(priv);
 	free_irq(netdev->irq, netdev);
-err_irq:
+ err_irq:
 	netif_napi_del(&priv->napi);
-err_hw:
+ err_hw:
 	iowrite32(0, priv->base + FTGMAC100_OFFSET_IER);
 	ftgmac100_free_rings(priv);
 	return err;
@@ -1599,7 +1571,7 @@ static int ftgmac100_stop(struct net_device *netdev)
 	netif_napi_del(&priv->napi);
 	if (netdev->phydev)
 		phy_stop(netdev->phydev);
-	if (priv->use_ncsi)
+	else if (priv->use_ncsi)
 		ncsi_stop_dev(priv->ndev);
 
 	ftgmac100_stop_hw(priv);
@@ -1730,17 +1702,13 @@ err_register_mdiobus:
 static void ftgmac100_phy_disconnect(struct net_device *netdev)
 {
 	struct ftgmac100 *priv = netdev_priv(netdev);
-	struct phy_device *phydev = netdev->phydev;
 
-	if (!phydev)
+	if (!netdev->phydev)
 		return;
 
-	phy_disconnect(phydev);
+	phy_disconnect(netdev->phydev);
 	if (of_phy_is_fixed_link(priv->dev->of_node))
 		of_phy_deregister_fixed_link(priv->dev->of_node);
-
-	if (priv->use_ncsi)
-		fixed_phy_unregister(phydev);
 }
 
 static void ftgmac100_destroy_mdio(struct net_device *netdev)
@@ -1818,7 +1786,6 @@ static int ftgmac100_probe(struct platform_device *pdev)
 	struct resource *res;
 	int irq;
 	struct net_device *netdev;
-	struct phy_device *phydev;
 	struct ftgmac100 *priv;
 	struct device_node *np;
 	int err = 0;
@@ -1876,9 +1843,7 @@ static int ftgmac100_probe(struct platform_device *pdev)
 	priv->aneg_pause = true;
 
 	/* MAC address from chip or random one */
-	err = ftgmac100_initial_mac(priv);
-	if (err)
-		goto err_phy_connect;
+	ftgmac100_initial_mac(priv);
 
 	np = pdev->dev.of_node;
 	if (np && (of_device_is_compatible(np, "aspeed,ast2400-mac") ||
@@ -1904,19 +1869,6 @@ static int ftgmac100_probe(struct platform_device *pdev)
 		priv->ndev = ncsi_register_dev(netdev, ftgmac100_ncsi_handler);
 		if (!priv->ndev) {
 			err = -EINVAL;
-			goto err_phy_connect;
-		}
-
-		phydev = fixed_phy_register(PHY_POLL, &ncsi_phy_status, np);
-		if (IS_ERR(phydev)) {
-			dev_err(&pdev->dev, "failed to register fixed PHY device\n");
-			err = PTR_ERR(phydev);
-			goto err_phy_connect;
-		}
-		err = phy_connect_direct(netdev, phydev, ftgmac100_adjust_link,
-					 PHY_INTERFACE_MODE_MII);
-		if (err) {
-			dev_err(&pdev->dev, "Connecting PHY failed\n");
 			goto err_phy_connect;
 		}
 	} else if (np && of_phy_is_fixed_link(np)) {
@@ -2052,7 +2004,7 @@ err_alloc_etherdev:
 	return err;
 }
 
-static void ftgmac100_remove(struct platform_device *pdev)
+static int ftgmac100_remove(struct platform_device *pdev)
 {
 	struct net_device *netdev;
 	struct ftgmac100 *priv;
@@ -2080,6 +2032,7 @@ static void ftgmac100_remove(struct platform_device *pdev)
 
 	netif_napi_del(&priv->napi);
 	free_netdev(netdev);
+	return 0;
 }
 
 static const struct of_device_id ftgmac100_of_match[] = {
@@ -2090,7 +2043,7 @@ MODULE_DEVICE_TABLE(of, ftgmac100_of_match);
 
 static struct platform_driver ftgmac100_driver = {
 	.probe	= ftgmac100_probe,
-	.remove_new = ftgmac100_remove,
+	.remove	= ftgmac100_remove,
 	.driver	= {
 		.name		= DRV_NAME,
 		.of_match_table	= ftgmac100_of_match,

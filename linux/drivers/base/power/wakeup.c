@@ -19,6 +19,11 @@
 
 #include "power.h"
 
+#ifndef CONFIG_SUSPEND
+suspend_state_t pm_suspend_target_state;
+#define pm_suspend_target_state	(PM_SUSPEND_ON)
+#endif
+
 #define list_for_each_entry_rcu_locked(pos, head, member) \
 	list_for_each_entry_rcu(pos, head, member, \
 		srcu_read_lock_held(&wakeup_srcu))
@@ -280,7 +285,9 @@ EXPORT_SYMBOL_GPL(wakeup_sources_read_unlock);
  */
 struct wakeup_source *wakeup_sources_walk_start(void)
 {
-	return list_first_or_null_rcu(&wakeup_sources, struct wakeup_source, entry);
+	struct list_head *ws_head = &wakeup_sources;
+
+	return list_entry_rcu(ws_head->next, struct wakeup_source, entry);
 }
 EXPORT_SYMBOL_GPL(wakeup_sources_walk_start);
 
@@ -449,15 +456,16 @@ static struct wakeup_source *device_wakeup_detach(struct device *dev)
  * Detach the @dev's wakeup source object from it, unregister this wakeup source
  * object and destroy it.
  */
-void device_wakeup_disable(struct device *dev)
+int device_wakeup_disable(struct device *dev)
 {
 	struct wakeup_source *ws;
 
 	if (!dev || !dev->power.can_wakeup)
-		return;
+		return -EINVAL;
 
 	ws = device_wakeup_detach(dev);
 	wakeup_source_unregister(ws);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(device_wakeup_disable);
 
@@ -499,11 +507,7 @@ EXPORT_SYMBOL_GPL(device_set_wakeup_capable);
  */
 int device_set_wakeup_enable(struct device *dev, bool enable)
 {
-	if (enable)
-		return device_wakeup_enable(dev);
-
-	device_wakeup_disable(dev);
-	return 0;
+	return enable ? device_wakeup_enable(dev) : device_wakeup_disable(dev);
 }
 EXPORT_SYMBOL_GPL(device_set_wakeup_enable);
 

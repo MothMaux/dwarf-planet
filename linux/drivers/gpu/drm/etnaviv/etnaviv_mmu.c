@@ -70,7 +70,7 @@ static int etnaviv_context_map(struct etnaviv_iommu_context *context,
 }
 
 static int etnaviv_iommu_map(struct etnaviv_iommu_context *context, u32 iova,
-			     struct sg_table *sgt, int prot)
+			     struct sg_table *sgt, unsigned len, int prot)
 {	struct scatterlist *sg;
 	unsigned int da = iova;
 	unsigned int i;
@@ -80,10 +80,10 @@ static int etnaviv_iommu_map(struct etnaviv_iommu_context *context, u32 iova,
 		return -EINVAL;
 
 	for_each_sgtable_dma_sg(sgt, sg, i) {
-		phys_addr_t pa = sg_dma_address(sg) - sg->offset;
+		u32 pa = sg_dma_address(sg) - sg->offset;
 		size_t bytes = sg_dma_len(sg) + sg->offset;
 
-		VERB("map[%d]: %08x %pap(%zx)", i, iova, &pa, bytes);
+		VERB("map[%d]: %08x %08x(%zx)", i, iova, pa, bytes);
 
 		ret = etnaviv_context_map(context, da, pa, bytes, prot);
 		if (ret)
@@ -133,19 +133,6 @@ static void etnaviv_iommu_remove_mapping(struct etnaviv_iommu_context *context,
 	etnaviv_iommu_unmap(context, mapping->vram_node.start,
 			    etnaviv_obj->sgt, etnaviv_obj->base.size);
 	drm_mm_remove_node(&mapping->vram_node);
-}
-
-void etnaviv_iommu_reap_mapping(struct etnaviv_vram_mapping *mapping)
-{
-	struct etnaviv_iommu_context *context = mapping->context;
-
-	lockdep_assert_held(&context->lock);
-	WARN_ON(mapping->use);
-
-	etnaviv_iommu_remove_mapping(context, mapping);
-	etnaviv_iommu_context_put(mapping->context);
-	mapping->context = NULL;
-	list_del_init(&mapping->mmu_node);
 }
 
 static int etnaviv_iommu_find_iova(struct etnaviv_iommu_context *context,
@@ -215,7 +202,10 @@ static int etnaviv_iommu_find_iova(struct etnaviv_iommu_context *context,
 		 * this mapping.
 		 */
 		list_for_each_entry_safe(m, n, &list, scan_node) {
-			etnaviv_iommu_reap_mapping(m);
+			etnaviv_iommu_remove_mapping(context, m);
+			etnaviv_iommu_context_put(m->context);
+			m->context = NULL;
+			list_del_init(&m->mmu_node);
 			list_del_init(&m->scan_node);
 		}
 
@@ -267,7 +257,10 @@ static int etnaviv_iommu_insert_exact(struct etnaviv_iommu_context *context,
 	}
 
 	list_for_each_entry_safe(m, n, &scan_list, scan_node) {
-		etnaviv_iommu_reap_mapping(m);
+		etnaviv_iommu_remove_mapping(context, m);
+		etnaviv_iommu_context_put(m->context);
+		m->context = NULL;
+		list_del_init(&m->mmu_node);
 		list_del_init(&m->scan_node);
 	}
 
@@ -314,7 +307,7 @@ int etnaviv_iommu_map_gem(struct etnaviv_iommu_context *context,
 		goto unlock;
 
 	mapping->iova = node->start;
-	ret = etnaviv_iommu_map(context, node->start, sgt,
+	ret = etnaviv_iommu_map(context, node->start, sgt, etnaviv_obj->base.size,
 				ETNAVIV_PROT_READ | ETNAVIV_PROT_WRITE);
 
 	if (ret < 0) {
@@ -552,9 +545,6 @@ void etnaviv_iommu_global_fini(struct etnaviv_gpu *gpu)
 {
 	struct etnaviv_drm_private *priv = gpu->drm->dev_private;
 	struct etnaviv_iommu_global *global = priv->mmu_global;
-
-	if (!global)
-		return;
 
 	if (--global->use > 0)
 		return;

@@ -23,7 +23,6 @@
 #include <linux/of_device.h>
 #include <linux/of_graph.h>
 #include <linux/phy/phy.h>
-#include <linux/platform_device.h>
 #include <video/mipi_display.h>
 #include <video/videomode.h>
 
@@ -84,9 +83,9 @@
 #define XDSI_VIDEO_MODE_SYNC_EVENT	0x1
 #define XDSI_VIDEO_MODE_BURST		0x2
 
-#define XDSI_DPHY_CLK_MIN	197000000UL
-#define XDSI_DPHY_CLK_MAX	203000000UL
-#define XDSI_DPHY_CLK_REQ	200000000UL
+#define XDSI_DPHY_CLK_MIN	197000000000UL
+#define XDSI_DPHY_CLK_MAX	203000000000UL
+#define XDSI_DPHY_CLK_REQ	200000000000UL
 
 /* command timeout in usec */
 #define XDSI_CMD_TIMEOUT_VAL	(3000)
@@ -1003,13 +1002,15 @@ err_disable_dphy_clk:
 	return ret;
 }
 
-static void xlnx_dsi_remove(struct platform_device *pdev)
+static int xlnx_dsi_remove(struct platform_device *pdev)
 {
 	struct xlnx_dsi *dsi = platform_get_drvdata(pdev);
 
 	component_del(&pdev->dev, &xlnx_dsi_component_ops);
 	clk_disable_unprepare(dsi->video_aclk);
 	clk_disable_unprepare(dsi->dphy_clk_200M);
+
+	return 0;
 }
 
 static const struct of_device_id xlnx_dsi_of_match[] = {
@@ -1031,4 +1032,4 @@ module_platform_driver(dsi_driver);
 
 MODULE_AUTHOR("Siva Rajesh <sivaraj@xilinx.com>");
 MODULE_DESCRIPTION("Xilinx FPGA MIPI DSI Tx Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

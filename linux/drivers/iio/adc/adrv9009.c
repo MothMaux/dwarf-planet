@@ -26,7 +26,7 @@
 #include <linux/of_gpio.h>
 #include <linux/gpio/consumer.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
@@ -34,7 +34,6 @@
 #include <linux/clk.h>
 #include <linux/clkdev.h>
 #include <linux/clk-provider.h>
-#include <linux/clk/clkscale.h>
 
 #include <linux/jesd204/jesd204.h>
 
@@ -508,19 +507,6 @@ static const char * const adrv9009_ilas_mismatch_table[] = {
 	"checksum"
 };
 
-static int adrv9009_set_pll_frequency(struct adrv9009_rf_phy *phy, taliseRfPllName_t pll_name, uint64_t rf_pll_lo_frequency_Hz)
-{
-	int ret = TALISE_setRfPllFrequency(phy->talDevice, pll_name, rf_pll_lo_frequency_Hz);
-
-	if (ret)
-		return ret;
-	if (pll_name != TAL_RF_PLL)
-		return 0;
-
-	phy->clk_priv[TRX_LO_CLK].rate = to_ccf_scaled(rf_pll_lo_frequency_Hz, &phy->trx_lo_clkscale);
-	return clk_set_rate(phy->clk_priv[TRX_LO_CLK].hw.clk, phy->clk_priv[TRX_LO_CLK].rate);
-}
-
 static int adrv9009_gt_fw_load(struct adrv9009_rf_phy *phy);
 
 static int adrv9009_do_setup(struct adrv9009_rf_phy *phy)
@@ -765,7 +751,7 @@ static int adrv9009_do_setup(struct adrv9009_rf_phy *phy)
 		goto out;
 	}
 
-	ret = adrv9009_set_pll_frequency(phy, TAL_RF_PLL,
+	ret = TALISE_setRfPllFrequency(phy->talDevice, TAL_RF_PLL,
 				       phy->trx_lo_frequency);
 	if (ret != TALACT_NO_ACTION) {
 		dev_err(&phy->spi->dev, "%s:%d (ret %d)", __func__, __LINE__, ret);
@@ -1511,7 +1497,7 @@ static ssize_t adrv9009_phy_store(struct device *dev,
 			return -EBUSY;
 		}
 
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 
@@ -1574,7 +1560,7 @@ static ssize_t adrv9009_phy_store(struct device *dev,
 			break;
 		}
 
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 
@@ -1595,7 +1581,7 @@ static ssize_t adrv9009_phy_store(struct device *dev,
 			return -EBUSY;
 		}
 
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 		ret = TALISE_setRadioCtlPinMode(phy->talDevice,
@@ -1943,7 +1929,7 @@ static ssize_t adrv9009_phy_lo_write(struct iio_dev *indio_dev,
 			phy->current_loopBandwidth_kHz[chan->channel] = loop_bw;
 		}
 
-		ret = adrv9009_set_pll_frequency(phy, TAL_RF_PLL + chan->channel,
+		ret = TALISE_setRfPllFrequency(phy->talDevice, TAL_RF_PLL + chan->channel,
 					       readin);
 		if (ret != TALACT_NO_ACTION) {
 			adrv9009_set_radio_state(phy, RADIO_RESTORE_STATE);
@@ -1958,7 +1944,7 @@ static ssize_t adrv9009_phy_lo_write(struct iio_dev *indio_dev,
 		adrv9009_set_radio_state(phy, RADIO_RESTORE_STATE);
 		break;
 	case FHM_ENABLE:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			return ret;
 
@@ -2165,7 +2151,7 @@ static ssize_t adrv9009_phy_rx_write(struct iio_dev *indio_dev,
 	if (!phy->is_initialized)
 		return -EBUSY;
 
-	ret = kstrtobool(buf, &enable);
+	ret = strtobool(buf, &enable);
 	if (ret)
 		return ret;
 
@@ -2627,7 +2613,7 @@ static ssize_t adrv9009_phy_tx_write(struct iio_dev *indio_dev,
 	if (chan->channel > CHAN_TX2)
 		return -EINVAL;
 
-	ret = kstrtobool(buf, &enable);
+	ret = strtobool(buf, &enable);
 	if (ret)
 		return ret;
 
@@ -5420,7 +5406,7 @@ static char *adrv9009_clk_set_dev_name(struct adrv9009_rf_phy *phy,
 		return NULL;
 
 	if (*name == '-')
-		len = strscpy(dest, dev_name(&phy->spi->dev),
+		len = strlcpy(dest, dev_name(&phy->spi->dev),
 			      ADRV9009_MAX_CLK_NAME);
 	else
 		*dest = '\0';
@@ -5484,26 +5470,24 @@ static int adrv9009_clk_register(struct adrv9009_rf_phy *phy,
 	init.parent_names = &_parent_name[0];
 	init.num_parents = _parent_name[1] ? 2 : _parent_name[0] ? 1 : 0;
 
-	init.ops = &bb_clk_ops;
-
 	switch (source) {
 	case RX_SAMPL_CLK:
+		init.ops = &bb_clk_ops;
 		clk_priv->rate = phy->talInit.rx.rxProfile.rxOutputRate_kHz;
-		clk_priv->rate *= 1000;
 		break;
 	case OBS_SAMPL_CLK:
+		init.ops = &bb_clk_ops;
 		clk_priv->rate = phy->talInit.obsRx.orxProfile.orxOutputRate_kHz;
-		clk_priv->rate *= 1000;
 		break;
 	case TX_SAMPL_CLK:
+		init.ops = &bb_clk_ops;
 		clk_priv->rate = phy->talInit.tx.txProfile.txInputRate_kHz;
-		clk_priv->rate *= 1000;
-		break;
-	case TRX_LO_CLK:
 		break;
 	default:
 		return -EINVAL;
 	}
+
+	clk_priv->rate *= 1000;
 
 	clk = devm_clk_register(&phy->spi->dev, &clk_priv->hw);
 	phy->clks[source] = clk;
@@ -5577,8 +5561,8 @@ struct adrv9009_jesd204_priv {
 	struct adrv9009_jesd204_link link[3];
 };
 
-static int adrv9009_jesd204_link_pre_setup(struct jesd204_dev *jdev,
-					   enum jesd204_state_op_reason reason)
+int adrv9009_jesd204_link_pre_setup(struct jesd204_dev *jdev,
+		enum jesd204_state_op_reason reason)
 {
 	struct device *dev = jesd204_dev_to_device(jdev);
 	struct adrv9009_jesd204_priv *priv = jesd204_dev_priv(jdev);
@@ -5885,8 +5869,8 @@ static int adrv9009_jesd204_link_running(struct jesd204_dev *jdev,
 	return JESD204_STATE_CHANGE_DONE;
 }
 
-static int adrv9009_jesd204_link_setup(struct jesd204_dev *jdev,
-				       enum jesd204_state_op_reason reason)
+int adrv9009_jesd204_link_setup(struct jesd204_dev *jdev,
+				enum jesd204_state_op_reason reason)
 {
 	struct device *dev = jesd204_dev_to_device(jdev);
 	struct adrv9009_jesd204_priv *priv = jesd204_dev_priv(jdev);
@@ -6081,7 +6065,7 @@ static int adrv9009_jesd204_setup_stage2(struct jesd204_dev *jdev,
 		return -EFAULT;
 	}
 
-	ret = adrv9009_set_pll_frequency(phy, TAL_RF_PLL,
+	ret = TALISE_setRfPllFrequency(phy->talDevice, TAL_RF_PLL,
 				       phy->trx_lo_frequency);
 	if (ret != TALACT_NO_ACTION) {
 		dev_err(&phy->spi->dev,
@@ -6586,11 +6570,6 @@ static int adrv9009_probe(struct spi_device *spi)
 	phy->jdev = jdev;
 	mutex_init(&phy->lock);
 
-	if (of_clk_get_scale(spi->dev.of_node, "trx-lo", &phy->trx_lo_clkscale)) {
-		phy->trx_lo_clkscale.mult = 1;
-		phy->trx_lo_clkscale.div = 1;
-	}
-
 	ret = adrv9009_phy_parse_dt(indio_dev, &spi->dev);
 	if (ret < 0)
 		return -ret;
@@ -6753,22 +6732,18 @@ static int adrv9009_probe(struct spi_device *spi)
 
 	if (has_rx(phy))
 		adrv9009_clk_register(phy, "-rx_sampl_clk", NULL, NULL,
-				      CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
-				      RX_SAMPL_CLK);
+				CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
+				RX_SAMPL_CLK);
 
 	if (has_tx(phy)) {
 		adrv9009_clk_register(phy, "-obs_sampl_clk", NULL, NULL,
-				      CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
-				      OBS_SAMPL_CLK);
+				CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
+				OBS_SAMPL_CLK);
 
 		adrv9009_clk_register(phy, "-tx_sampl_clk", NULL, NULL,
-				      CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
-				      TX_SAMPL_CLK);
+				CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED,
+				TX_SAMPL_CLK);
 	}
-
-	adrv9009_clk_register(phy, "-trx_lo_clk", NULL, NULL,
-			      CLK_GET_RATE_NOCACHE | CLK_IGNORE_UNUSED | CLK_RECALC_NEW_RATES,
-			      TRX_LO_CLK);
 
 	phy->clk_data.clks = phy->clks;
 	phy->clk_data.clk_num = NUM_ADRV9009_CLKS;
@@ -6857,12 +6832,10 @@ static int adrv9009_probe(struct spi_device *spi)
 		}
 	}
 
-	if (!phy->jdev) {
+	if (!phy->jdev)
 		adrv9009_info(phy);
-		return 0;
-	}
 
-	ret = devm_jesd204_fsm_start(&spi->dev, phy->jdev, JESD204_LINKS_ALL);
+	ret = jesd204_fsm_start(phy->jdev, JESD204_LINKS_ALL);
 	if (ret)
 		goto out_remove_sysfs_bin;
 

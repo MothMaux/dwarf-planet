@@ -34,7 +34,7 @@
 		dma-names = "rx";
 		spibus-connected = <&adc0_ad9250>;
 	};
-	rx_dma0: dma-controller@7c420000 {
+	rx_dma0: rx-dmac@7c420000 {
 		compatible = "adi,axi-dmac-1.00.a";
 		interrupt-parent = <&axi_intc>;
 		interrupts = <13 2>;
@@ -49,13 +49,26 @@
 		dma-names = "rx";
 		spibus-connected = <&adc1_ad9250>;
 	};
-	rx_dma1: dma-controller@7c430000 {
+	rx_dma1: rx-dmac@7c430000 {
 		compatible = "adi,axi-dmac-1.00.a";
 		interrupt-parent = <&axi_intc>;
 		interrupts = <12 2>;
 		reg = <0x7c430000 0x10000>;
 		#dma-cells = <1>;
 		clocks = <&clk_bus_0>;
+
+		adi,channels {
+			#size-cells = <0>;
+			#address-cells = <1>;
+
+			dma-channel@0 {
+				reg = <0>;
+				adi,source-bus-width = <64>;
+				adi,source-bus-type = <2>;
+				adi,destination-bus-width = <64>;
+				adi,destination-bus-type = <0>;
+			};
+		};
 	};
 	axi_adxcvr: axi-adxcvr@44a60000 {
 		#address-cells = <1>;

@@ -78,7 +78,9 @@ static irqreturn_t ad7303_trigger_handler(int irq, void *p)
 		goto out;
 
 	j = 0;
-	iio_for_each_active_channel(indio_dev, i) {
+	for_each_set_bit(i,
+		indio_dev->active_scan_mask,
+		indio_dev->masklength) {
 		st->dac_cache[i] = sample[j];
 		val = AD7303_CMD_UPDATE_INPUT |
 			(i << AD7303_CFG_ADDR_OFFSET) |
@@ -103,7 +105,7 @@ static int ad7303_update_scan_mode(struct iio_dev *indio_dev,
 	struct ad7303_state *st = iio_priv(indio_dev);
 	int i;
 
-	st->num_transfers = bitmap_weight(scan_mask, iio_get_masklength(indio_dev));
+	st->num_transfers = bitmap_weight(scan_mask, indio_dev->masklength);
 
 	spi_message_init(&st->msg);
 

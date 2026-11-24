@@ -1628,7 +1628,10 @@ static int at91rm9200_udc_init(struct at91_udc *udc)
 
 static void at91rm9200_udc_pullup(struct at91_udc *udc, int is_on)
 {
-	gpiod_set_value(udc->board.pullup_pin, is_on);
+	if (is_on)
+		gpiod_set_value(udc->board.pullup_pin, 1);
+	else
+		gpiod_set_value(udc->board.pullup_pin, 0);
 }
 
 static const struct at91_udc_caps at91rm9200_udc_caps = {
@@ -1924,7 +1927,7 @@ err_unprepare_fclk:
 	return retval;
 }
 
-static void at91udc_remove(struct platform_device *pdev)
+static int at91udc_remove(struct platform_device *pdev)
 {
 	struct at91_udc *udc = platform_get_drvdata(pdev);
 	unsigned long	flags;
@@ -1932,11 +1935,8 @@ static void at91udc_remove(struct platform_device *pdev)
 	DBG("remove\n");
 
 	usb_del_gadget_udc(&udc->gadget);
-	if (udc->driver) {
-		dev_err(&pdev->dev,
-			"Driver still in use but removing anyhow\n");
-		return;
-	}
+	if (udc->driver)
+		return -EBUSY;
 
 	spin_lock_irqsave(&udc->lock, flags);
 	pullup(udc, 0);
@@ -1946,6 +1946,8 @@ static void at91udc_remove(struct platform_device *pdev)
 	remove_debug_file(udc);
 	clk_unprepare(udc->fclk);
 	clk_unprepare(udc->iclk);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -2001,8 +2003,7 @@ static int at91udc_resume(struct platform_device *pdev)
 #endif
 
 static struct platform_driver at91_udc_driver = {
-	.probe		= at91udc_probe,
-	.remove_new	= at91udc_remove,
+	.remove		= at91udc_remove,
 	.shutdown	= at91udc_shutdown,
 	.suspend	= at91udc_suspend,
 	.resume		= at91udc_resume,
@@ -2012,7 +2013,7 @@ static struct platform_driver at91_udc_driver = {
 	},
 };
 
-module_platform_driver(at91_udc_driver);
+module_platform_driver_probe(at91_udc_driver, at91udc_probe);
 
 MODULE_DESCRIPTION("AT91 udc driver");
 MODULE_AUTHOR("Thomas Rathbone, David Brownell");

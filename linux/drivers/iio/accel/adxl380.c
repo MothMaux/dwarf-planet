@@ -13,7 +13,7 @@
 #include <linux/regmap.h>
 #include <linux/units.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/events.h>
@@ -668,7 +668,8 @@ static int _adxl380_set_act_inact_time_ms(struct adxl380_state *st,
 	int ret;
 
 	/* 500us per code is the scale factor of TIME_ACT / TIME_INACT registers */
-	reg_val = min(DIV_ROUND_CLOSEST(ms * 1000, 500), ADXL380_TIME_MAX);
+	/* out of tree change due to upstream min() changes not in 6.1 */
+	reg_val = min_t(unsigned int, DIV_ROUND_CLOSEST(ms * 1000, 500), ADXL380_TIME_MAX);
 
 	put_unaligned_be24(reg_val, &st->transf_buf[0]);
 
@@ -977,7 +978,6 @@ static irqreturn_t adxl380_irq_handler(int irq, void  *p)
 	if (ret)
 		return IRQ_HANDLED;
 
-	fifo_entries = rounddown(fifo_entries, st->fifo_set_size);
 	for (i = 0; i < fifo_entries; i += st->fifo_set_size) {
 		ret = regmap_noinc_read(st->regmap, ADXL380_FIFO_DATA,
 					&st->fifo_buf[i],
@@ -1075,11 +1075,11 @@ static IIO_DEVICE_ATTR(hwfifo_watermark, 0444,
 static IIO_DEVICE_ATTR(hwfifo_enabled, 0444,
 		       adxl380_get_fifo_enabled, NULL, 0);
 
-static const struct iio_dev_attr *adxl380_fifo_attributes[] = {
-	&iio_dev_attr_hwfifo_watermark_min,
-	&iio_dev_attr_hwfifo_watermark_max,
-	&iio_dev_attr_hwfifo_watermark,
-	&iio_dev_attr_hwfifo_enabled,
+static const struct attribute *adxl380_fifo_attributes[] = {
+	&iio_dev_attr_hwfifo_watermark_min.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark_max.dev_attr.attr,
+	&iio_dev_attr_hwfifo_watermark.dev_attr.attr,
+	&iio_dev_attr_hwfifo_enabled.dev_attr.attr,
 	NULL
 };
 
@@ -1111,7 +1111,7 @@ static int adxl380_buffer_postenable(struct iio_dev *indio_dev)
 	}
 
 	st->fifo_set_size = bitmap_weight(indio_dev->active_scan_mask,
-					  iio_get_masklength(indio_dev));
+					  indio_dev->masklength);
 
 	if ((st->watermark * st->fifo_set_size) > ADXL380_FIFO_SAMPLES)
 		st->watermark = (ADXL380_FIFO_SAMPLES  / st->fifo_set_size);
@@ -1181,9 +1181,10 @@ static int adxl380_read_raw(struct iio_dev *indio_dev,
 			return ret;
 
 		ret = adxl380_read_chn(st, chan->address);
-		iio_device_release_direct_mode(indio_dev);
-		if (ret < 0)
+		if (ret)
 			return ret;
+
+		iio_device_release_direct_mode(indio_dev);
 
 		*val = sign_extend32(ret >> chan->scan_type.shift,
 				     chan->scan_type.realbits - 1);
@@ -1615,7 +1616,8 @@ static int adxl380_set_watermark(struct iio_dev *indio_dev, unsigned int val)
 {
 	struct adxl380_state *st  = iio_priv(indio_dev);
 
-	st->watermark = min(val, ADXL380_FIFO_SAMPLES);
+	/* out of tree change due to upstream min() changes not in 6.1 */
+	st->watermark = min_t(unsigned int, val, ADXL380_FIFO_SAMPLES);
 
 	return 0;
 }
@@ -1731,9 +1733,9 @@ static int adxl380_config_irq(struct iio_dev *indio_dev)
 		st->int_map[1] = ADXL380_INT0_MAP1_REG;
 	} else {
 		st->irq = fwnode_irq_get_byname(dev_fwnode(st->dev), "INT1");
-		if (st->irq < 0)
-			return dev_err_probe(st->dev, st->irq,
-					     "no interrupt name specified\n");
+		if (st->irq > 0)
+			return dev_err_probe(st->dev, -ENODEV,
+					     "no interrupt name specified");
 		st->int_map[0] = ADXL380_INT1_MAP0_REG;
 		st->int_map[1] = ADXL380_INT1_MAP1_REG;
 	}

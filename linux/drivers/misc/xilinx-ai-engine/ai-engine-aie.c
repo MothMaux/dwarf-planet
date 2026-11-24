@@ -9,7 +9,6 @@
 #include <linux/firmware/xlnx-zynqmp.h>
 #include <linux/io.h>
 #include <linux/slab.h>
-#include <linux/platform_device.h>
 #include <linux/xlnx-ai-engine.h>
 
 #include "ai-engine-internal.h"
@@ -22,6 +21,8 @@
 
 #define NUM_MODS_CORE_TILE	2U
 #define NUM_MODS_SHIMPL_TILE	1U
+
+#define NUM_UTIL_EVENTS		4U
 
 /*
  * Number of resources per module
@@ -75,13 +76,13 @@
 #define AIE_TILE_CORE_GROUP_ERROR_REGOFF	0x00034510U
 #define AIE_TILE_MEM_GROUP_ERROR_REGOFF		0x00014514U
 #define AIE_TILE_CORE_R0_REGOFF			0x00030000U
-#define AIE_TILE_CORE_MC1_REGOFF		0x00030470U
-#define AIE_TILE_CORE_S0_REGOFF			0x00030480U
-#define AIE_TILE_CORE_S7_REGOFF			0x000304F0U
-#define AIE_TILE_CORE_LS_REGOFF			0x00030500U
 #define AIE_TILE_CORE_LC_REGOFF			0x00030520U
 #define AIE_TILE_CORE_VRL0_REGOFF		0x00030530U
-#define AIE_TILE_CORE_AMH3_PART3_REGOFF		0x000307A0U
+#define AIE_TILE_CORE_AMH3_PART3_REGOFF		0x000307a0U
+#define AIE_TILE_CORE_PERFCTRL_REGOFF		0x00031000U
+#define AIE_TILE_CORE_PERFCTRL_RESET_REGOFF	0x00031008U
+#define AIE_TILE_CORE_PERFCNT0_REGOFF		0x00031020U
+#define AIE_TILE_CORE_EVNTGEN_REGOFF		0x00034008U
 
 /*
  * Register masks
@@ -92,6 +93,10 @@
 #define AIE_SHIMPL_CLKCNTR_NEXTCLK_MASK		BIT(1)
 #define AIE_TILE_CLKCNTR_COLBUF_MASK		BIT(0)
 #define AIE_TILE_CLKCNTR_NEXTCLK_MASK		BIT(1)
+#define AIE_TILE_PERFCTRL_CNT0_MASK		0x7F7FU
+#define AIE_TILE_PERFCTRL_RESET_MASK		0x7FU
+#define AIE_TILE_CORE_PERFCNT0_MASK		0xFFFFFFFFU
+#define AIE_TILE_CORE_EVNTGEN_MASK		0x7F
 
 /*
  * AI engine SHIM reset ID.
@@ -188,37 +193,24 @@ static const struct aie_tile_regs aie_kernel_regs[] = {
 	},
 };
 
-static const struct aie_tile_regs aie_core_regs_clr[] = {
-	{.soff = AIE_TILE_CORE_R0_REGOFF,
-	 .eoff = AIE_TILE_CORE_MC1_REGOFF,
-	 .width = 4,	/* 32 bits */
-	 .step = 16,	/* 0x10 */
-	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
-	},
-	{.soff = AIE_TILE_CORE_S0_REGOFF,
-	 .eoff = AIE_TILE_CORE_S7_REGOFF,
-	 .width = 1,	/* 8 bits */
-	 .step = 16,	/* 0x10 */
-	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
-	},
-	{.soff = AIE_TILE_CORE_LS_REGOFF,
-	 .eoff = AIE_TILE_CORE_LS_REGOFF,
-	 .width = 4,	/* 32 bits */
-	 .step = 4,
-	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
-	},
-	{.soff = AIE_TILE_CORE_LC_REGOFF,
-	 .eoff = AIE_TILE_CORE_LC_REGOFF,
-	 .width = 4,	/* 32 bits */
-	 .step = 4,
-	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
-	},
+static const struct aie_tile_regs aie_core_32bit_regs = {
+	.attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+	.soff = AIE_TILE_CORE_R0_REGOFF,
+	.eoff = AIE_TILE_CORE_LC_REGOFF,
+};
 
-	{.soff = AIE_TILE_CORE_VRL0_REGOFF,
-	 .eoff = AIE_TILE_CORE_AMH3_PART3_REGOFF,
-	 .width = 16,	/* 128 bits */
-	 .step = 16,	/* 0x10 */
-	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+static const struct aie_tile_regs aie_core_128bit_regs = {
+	.attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+	.soff = AIE_TILE_CORE_VRL0_REGOFF,
+	.eoff = AIE_TILE_CORE_AMH3_PART3_REGOFF,
+};
+
+static const struct aie_core_regs_attr aie_core_regs[] = {
+	{.core_regs = &aie_core_32bit_regs,
+	 .width = 1,
+	},
+	{.core_regs = &aie_core_128bit_regs,
+	 .width = 4,
 	},
 };
 
@@ -230,6 +222,191 @@ static const struct aie_single_reg_field aie_col_rst = {
 static const struct aie_single_reg_field aie_col_clkbuf = {
 	.mask = AIE_SHIMPL_CLKCNTR_COLBUF_MASK,
 	.regoff = AIE_SHIMPL_CLKCNTR_REGOFF,
+};
+
+static const struct aie_bd_lock_attr aie_tile_a_lockbd = {
+	.lock_acq_id = {
+		.mask = GENMASK(25, 22),
+		.regoff = 0x0U,
+	},
+	.lock_acq_val = {
+		.mask = BIT(17),
+		.regoff = 0x0U,
+	},
+	.lock_acq_en = {
+		.mask = BIT(18),
+		.regoff = 0x0U,
+	},
+	.lock_acq_val_en = {
+		.mask = BIT(16),
+		.regoff = 0x0U,
+	},
+	.lock_rel_id = {
+		.mask = GENMASK(25, 22),
+		.regoff = 0x0U,
+	},
+	.lock_rel_val = {
+		.mask = BIT(20),
+		.regoff = 0x0U,
+	},
+	.lock_rel_en = {
+		.mask = BIT(21),
+		.regoff = 0x0U,
+	},
+	.lock_rel_val_en = {
+		.mask = BIT(19),
+		.regoff = 0x0U,
+	},
+};
+
+static const struct aie_bd_lock_attr aie_tile_b_lockbd = {
+	.lock_acq_id = {
+		.mask = GENMASK(25, 22),
+		.regoff = 0x4U,
+	},
+	.lock_acq_val = {
+		.mask = BIT(17),
+		.regoff = 0x4U,
+	},
+	.lock_acq_en = {
+		.mask = BIT(18),
+		.regoff = 0x4U,
+	},
+	.lock_acq_val_en = {
+		.mask = BIT(16),
+		.regoff = 0x4U,
+	},
+	.lock_rel_id = {
+		.mask = GENMASK(25, 22),
+		.regoff = 0x4U,
+	},
+	.lock_rel_val = {
+		.mask = BIT(20),
+		.regoff = 0x4U,
+	},
+	.lock_rel_en = {
+		.mask = BIT(21),
+		.regoff = 0x4U,
+	},
+	.lock_rel_val_en = {
+		.mask = BIT(19),
+		.regoff = 0x4U,
+	},
+};
+
+static const struct aie_bd_lock_attr aie_shim_lockbd = {
+	.lock_acq_id = {
+		.mask = GENMASK(10, 7),
+		.regoff = 0x8U,
+	},
+	.lock_acq_val = {
+		.mask = BIT(2),
+		.regoff = 0x8U,
+	},
+	.lock_acq_en = {
+		.mask = BIT(3),
+		.regoff = 0x8U,
+	},
+	.lock_acq_val_en = {
+		.mask = BIT(1),
+		.regoff = 0x8U,
+	},
+	.lock_rel_id = {
+		.mask = GENMASK(10, 7),
+		.regoff = 0x8U,
+	},
+	.lock_rel_val = {
+		.mask = BIT(5),
+		.regoff = 0x8U,
+	},
+	.lock_rel_en = {
+		.mask = BIT(6),
+		.regoff = 0x8U,
+	},
+	.lock_rel_val_en = {
+		.mask = BIT(4),
+		.regoff = 0x8U,
+	},
+};
+
+static const struct aie_bd_pkt_attr aie_tile_pktbd = {
+	.pkt_en = {
+		.mask = BIT(27),
+		.regoff = 0x18U,
+	},
+	.pkt_type = {
+		.mask = GENMASK(14, 12),
+		.regoff = 0x10U,
+	},
+	.pkt_id = {
+		.mask = GENMASK(4, 0),
+		.regoff = 0x10U,
+	},
+};
+
+static const struct aie_bd_pkt_attr aie_shim_pktbd = {
+	.pkt_en = {
+		.mask = BIT(31),
+		.regoff = 0x10U,
+	},
+	.pkt_type = {
+		.mask = GENMASK(14, 12),
+		.regoff = 0x10U,
+	},
+	.pkt_id = {
+		.mask = GENMASK(4, 0),
+		.regoff = 0x10U,
+	},
+};
+
+static const struct aie_bd_axi_attr aie_shim_axibd = {
+	.smid = {
+		.mask = GENMASK(31, 28),
+		.regoff = 0xCU,
+	},
+	.cache = {
+		.mask = GENMASK(3, 0),
+		.regoff = 0xCU,
+	},
+	.qos = {
+		.mask = GENMASK(8, 5),
+		.regoff = 0xCU,
+	},
+	.secure_en = {
+		.mask = BIT(4),
+		.regoff = 0xCU,
+	},
+	.burst_len = {
+		.mask = GENMASK(10, 9),
+		.regoff = 0xCU,
+	},
+};
+
+static const struct aie_bd_aie_dim_attr aie_tile_dimbd = {
+	.x_incr = {
+		.mask = GENMASK(31, 24),
+		.regoff = 0x8U,
+	},
+	.x_wrap = {
+		.mask = GENMASK(23, 16),
+		.regoff = 0x8U,
+	},
+	.x_off = {
+		.mask = GENMASK(12, 0),
+		.regoff = 0x8U,
+	},
+	.y_incr = {
+		.mask = GENMASK(31, 24),
+		.regoff = 0xCU,
+	},
+	.y_wrap = {
+		.mask = GENMASK(23, 16),
+		.regoff = 0xCU,
+	},
+	.y_off = {
+		.mask = GENMASK(12, 0),
+		.regoff = 0xCU,
+	},
 };
 
 static const struct aie_bd_attr aie_tilebd = {
@@ -265,114 +442,10 @@ static const struct aie_bd_attr aie_tilebd = {
 			.regoff = 0x18U,
 		},
 	},
-	.lock = {
-		.lock_acq_id = {
-			.mask = GENMASK(25, 22),
-			.regoff = 0x0U,
-		},
-		.lock_acq_val = {
-			.mask = BIT(17),
-			.regoff = 0x0U,
-		},
-		.lock_acq_en = {
-			.mask = BIT(18),
-			.regoff = 0x0U,
-		},
-		.lock_acq_val_en = {
-			.mask = BIT(16),
-			.regoff = 0x0U,
-		},
-		.lock_rel_id = {
-			.mask = GENMASK(25, 22),
-			.regoff = 0x0U,
-		},
-		.lock_rel_val = {
-			.mask = BIT(20),
-			.regoff = 0x0U,
-		},
-		.lock_rel_en = {
-			.mask = BIT(21),
-			.regoff = 0x0U,
-		},
-		.lock_rel_val_en = {
-			.mask = BIT(19),
-			.regoff = 0x0U,
-		},
-	},
-	.lock_2 = {
-		.lock_acq_id = {
-			.mask = GENMASK(25, 22),
-			.regoff = 0x4U,
-		},
-		.lock_acq_val = {
-			.mask = BIT(17),
-			.regoff = 0x4U,
-		},
-		.lock_acq_en = {
-			.mask = BIT(18),
-			.regoff = 0x4U,
-		},
-		.lock_acq_val_en = {
-			.mask = BIT(16),
-			.regoff = 0x4U,
-		},
-		.lock_rel_id = {
-			.mask = GENMASK(25, 22),
-			.regoff = 0x4U,
-		},
-		.lock_rel_val = {
-			.mask = BIT(20),
-			.regoff = 0x4U,
-		},
-		.lock_rel_en = {
-			.mask = BIT(21),
-			.regoff = 0x4U,
-		},
-		.lock_rel_val_en = {
-			.mask = BIT(19),
-			.regoff = 0x4U,
-		},
-	},
-	.packet = {
-		.pkt_en = {
-			.mask = BIT(27),
-			.regoff = 0x18U,
-		},
-		.pkt_type = {
-			.mask = GENMASK(14, 12),
-			.regoff = 0x10U,
-		},
-		.pkt_id = {
-			.mask = GENMASK(4, 0),
-			.regoff = 0x10U,
-		},
-	},
-	.aie_dim = {
-		.x_incr = {
-			.mask = GENMASK(31, 24),
-			.regoff = 0x8U,
-		},
-		.x_wrap = {
-			.mask = GENMASK(23, 16),
-			.regoff = 0x8U,
-		},
-		.x_off = {
-			.mask = GENMASK(12, 0),
-			.regoff = 0x8U,
-		},
-		.y_incr = {
-			.mask = GENMASK(31, 24),
-			.regoff = 0xCU,
-		},
-		.y_wrap = {
-			.mask = GENMASK(23, 16),
-			.regoff = 0xCU,
-		},
-		.y_off = {
-			.mask = GENMASK(12, 0),
-			.regoff = 0xCU,
-		},
-	},
+	.lock = aie_tile_a_lockbd,
+	.lock_2 = aie_tile_b_lockbd,
+	.packet = aie_tile_pktbd,
+	.aie_dim = aie_tile_dimbd,
 	.buf_sel = {
 		.mask = BIT(16),
 		.regoff = 0x14U,
@@ -433,77 +506,30 @@ static const struct aie_bd_attr aie_shimbd = {
 			.regoff = 0x4U,
 		},
 	},
-	.lock = {
-		.lock_acq_id = {
-			.mask = GENMASK(10, 7),
-			.regoff = 0x8U,
-		},
-		.lock_acq_val = {
-			.mask = BIT(2),
-			.regoff = 0x8U,
-		},
-		.lock_acq_en = {
-			.mask = BIT(3),
-			.regoff = 0x8U,
-		},
-		.lock_acq_val_en = {
-			.mask = BIT(1),
-			.regoff = 0x8U,
-		},
-		.lock_rel_id = {
-			.mask = GENMASK(10, 7),
-			.regoff = 0x8U,
-		},
-		.lock_rel_val = {
-			.mask = BIT(5),
-			.regoff = 0x8U,
-		},
-		.lock_rel_en = {
-			.mask = BIT(6),
-			.regoff = 0x8U,
-		},
-		.lock_rel_val_en = {
-			.mask = BIT(4),
-			.regoff = 0x8U,
-		},
-	},
-	.packet = {
-		.pkt_en = {
-			.mask = BIT(31),
-			.regoff = 0x10U,
-		},
-		.pkt_type = {
-			.mask = GENMASK(14, 12),
-			.regoff = 0x10U,
-		},
-		.pkt_id = {
-			.mask = GENMASK(4, 0),
-			.regoff = 0x10U,
-		},
-	},
-	.axi = {
-		.smid = {
-			.mask = GENMASK(31, 28),
-			.regoff = 0xCU,
-		},
-		.cache = {
-			.mask = GENMASK(3, 0),
-			.regoff = 0xCU,
-		},
-		.qos = {
-			.mask = GENMASK(8, 5),
-			.regoff = 0xCU,
-		},
-		.secure_en = {
-			.mask = BIT(4),
-			.regoff = 0xCU,
-		},
-		.burst_len = {
-			.mask = GENMASK(10, 9),
-			.regoff = 0xCU,
-		},
-	},
+	.lock = aie_shim_lockbd,
+	.packet = aie_shim_pktbd,
+	.axi = aie_shim_axibd,
 	.bd_idx_off = 0x14U,
+};
+
+static const struct aie_single_reg_field aie_core_perfctrl = {
+	.mask = AIE_TILE_PERFCTRL_CNT0_MASK,
+	.regoff = AIE_TILE_CORE_PERFCTRL_REGOFF,
+};
+
+static const struct aie_single_reg_field aie_core_perfctrl_reset = {
+	.mask = AIE_TILE_PERFCTRL_RESET_MASK,
+	.regoff = AIE_TILE_CORE_PERFCTRL_RESET_REGOFF,
+};
+
+static const struct aie_single_reg_field aie_core_perfcnt = {
+	.mask = AIE_TILE_CORE_PERFCNT0_MASK,
+	.regoff = AIE_TILE_CORE_PERFCNT0_REGOFF,
+};
+
+static const struct aie_single_reg_field aie_core_evntgen = {
+	.mask = AIE_TILE_CORE_EVNTGEN_MASK,
+	.regoff = AIE_TILE_CORE_EVNTGEN_REGOFF,
 };
 
 static const struct aie_dma_attr aie_shimdma = {
@@ -689,11 +715,6 @@ static const struct aie_l2_intr_ctrl_attr aie_l2_intr_ctrl = {
 		.mask = GENMASK(15, 0),
 		.regoff = 0xcU,
 	},
-	.intr = {
-	.mask = GENMASK(1, 0),
-	.regoff = 0x10U,
-	},
-
 	.regoff = 0x15000U,
 	.num_broadcasts = 0x10U,
 };
@@ -1084,6 +1105,15 @@ struct aie_tile_rsc_attr aie_shimpl_tile_rscs_attr[AIE_RSCTYPE_MAX] =  {
 	},
 };
 
+/* Events needed for core tile utilization */
+static const
+enum aie_events aie_core_util_events[NUM_UTIL_EVENTS] = {
+		[AIE_EVENT_CORE_ACTIVE] = 28,
+		[AIE_EVENT_CORE_DISABLED] = 29,
+		[AIE_EVENT_CORE_USER_EVNT_0] = 124,
+		[AIE_EVENT_CORE_USER_EVNT_1] = 125,
+};
+
 /* modules types array of CORE tile */
 static const
 enum aie_module_type aie_core_tile_module_types[NUM_MODS_CORE_TILE] = {
@@ -1330,7 +1360,7 @@ static int aie_scan_part_clocks(struct aie_partition *apart)
 			 * Reading registers of the current tile to see the next
 			 * tile is clock gated.
 			 */
-			nbitpos = (loc.col - range->start.col) * (range->size.row - 1) + loc.row;
+			nbitpos = loc.col * (range->size.row - 1) + loc.row;
 
 			if (aie_get_tile_type(adev, &loc) !=
 					AIE_TILE_TYPE_TILE) {
@@ -1536,17 +1566,38 @@ static u32 aie_get_core_status(struct aie_partition *apart,
  */
 static int aie_part_clear_mems(struct aie_partition *apart)
 {
-	struct aie_range *range = &apart->range;
-	u32 node_id = apart->aperture->node_id;
-	int ret;
+	struct aie_device *adev = apart->adev;
+	struct aie_part_mem *pmems = apart->pmems;
+	u32 i, num_mems;
 
-	ret = zynqmp_pm_aie_operation(node_id, range->start.col,
-				      range->size.col,
-				      XILINX_AIE_OPS_ZEROISATION);
-	if (ret < 0)
-		dev_err(&apart->dev, "failed to clear memory for partition\n");
+	/* Get the number of different types of memories */
+	num_mems = adev->ops->get_mem_info(adev, &apart->range, NULL);
+	if (!num_mems)
+		return 0;
 
-	return ret;
+	/* Clear each type of memories in the partition */
+	for (i = 0; i < num_mems; i++) {
+		struct aie_mem *mem = &pmems[i].mem;
+		struct aie_range *range = &mem->range;
+		u32 c, r;
+
+		for (c = range->start.col;
+		     c < range->start.col + range->size.col; c++) {
+			for (r = range->start.row;
+			     r < range->start.row + range->size.row; r++) {
+				struct aie_location loc;
+				u32 memoff;
+
+				loc.col = c;
+				loc.row = r;
+				memoff = aie_cal_regoff(adev, loc, mem->offset);
+				memset_io(apart->aperture->base + memoff, 0,
+					  mem->size);
+			}
+		}
+	}
+
+	return 0;
 }
 
 /**
@@ -2462,14 +2513,8 @@ static const struct aie_tile_operations aie_ops = {
 	.init_part_clk_state = aie_init_part_clk_state,
 	.scan_part_clocks = aie_scan_part_clocks,
 	.set_part_clocks = aie_set_part_clocks,
-	.set_column_clock = aie_part_set_column_clock_from_user,
 	.set_tile_isolation = aie_set_tile_isolation,
 	.mem_clear = aie_part_clear_mems,
-	.part_init = aie_part_initialize,
-	.part_teardown = aie_part_teardown,
-	.part_clear_context = aie_part_clear_context,
-	.part_clean = aie_part_clean,
-	.part_reset = aie_part_reset,
 };
 
 /**
@@ -2520,8 +2565,8 @@ int aie_device_init(struct aie_device *adev)
 	adev->ops = &aie_ops;
 	adev->num_kernel_regs = ARRAY_SIZE(aie_kernel_regs);
 	adev->kernel_regs = aie_kernel_regs;
-	adev->core_regs_clr = aie_core_regs_clr;
-	adev->num_core_regs_clr = ARRAY_SIZE(aie_core_regs_clr);
+	adev->num_core_regs = ARRAY_SIZE(aie_core_regs);
+	adev->core_regs = aie_core_regs;
 	adev->col_rst = &aie_col_rst;
 	adev->col_clkbuf = &aie_col_clkbuf;
 	adev->shim_bd = &aie_shimbd;
@@ -2543,6 +2588,11 @@ int aie_device_init(struct aie_device *adev)
 	adev->core_pc = &aie_core_pc;
 	adev->core_lr = &aie_core_lr;
 	adev->core_sp = &aie_core_sp;
+	adev->core_perfctrl = &aie_core_perfctrl;
+	adev->core_perfctrl_reset = &aie_core_perfctrl_reset;
+	adev->core_perfcnt = &aie_core_perfcnt;
+	adev->core_evntgen = &aie_core_evntgen;
+	adev->core_util_events = aie_core_util_events;
 
 	aie_device_init_rscs_attr(adev);
 

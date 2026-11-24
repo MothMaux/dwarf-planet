@@ -11,6 +11,7 @@
 
 #define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
 
+#include <linux/cacheinfo.h>
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/debugfs.h>
@@ -22,7 +23,7 @@
 #include <linux/uaccess.h>
 
 #include <asm/cacheflush.h>
-#include <asm/cpu_device_id.h>
+#include <asm/intel-family.h>
 #include <asm/resctrl.h>
 #include <asm/perf_event.h>
 
@@ -30,7 +31,7 @@
 #include "internal.h"
 
 #define CREATE_TRACE_POINTS
-#include "trace.h"
+#include "pseudo_lock_event.h"
 
 /*
  * The bits needed to disable hardware prefetching varies based on the
@@ -44,21 +45,7 @@ static u64 prefetch_disable_bits;
  */
 static unsigned int pseudo_lock_major;
 static unsigned long pseudo_lock_minor_avail = GENMASK(MINORBITS, 0);
-
-static char *pseudo_lock_devnode(const struct device *dev, umode_t *mode)
-{
-	const struct rdtgroup *rdtgrp;
-
-	rdtgrp = dev_get_drvdata(dev);
-	if (mode)
-		*mode = 0600;
-	return kasprintf(GFP_KERNEL, "pseudo_lock/%s", rdtgrp->kn->name);
-}
-
-static const struct class pseudo_lock_class = {
-	.name = "pseudo_lock",
-	.devnode = pseudo_lock_devnode,
-};
+static struct class *pseudo_lock_class;
 
 /**
  * get_prefetch_disable_bits - prefetch disable bits of supported platforms
@@ -87,8 +74,8 @@ static u64 get_prefetch_disable_bits(void)
 	    boot_cpu_data.x86 != 6)
 		return 0;
 
-	switch (boot_cpu_data.x86_vfm) {
-	case INTEL_BROADWELL_X:
+	switch (boot_cpu_data.x86_model) {
+	case INTEL_FAM6_BROADWELL_X:
 		/*
 		 * SDM defines bits of MSR_MISC_FEATURE_CONTROL register
 		 * as:
@@ -99,8 +86,8 @@ static u64 get_prefetch_disable_bits(void)
 		 * 63:4 Reserved
 		 */
 		return 0xF;
-	case INTEL_ATOM_GOLDMONT:
-	case INTEL_ATOM_GOLDMONT_PLUS:
+	case INTEL_FAM6_ATOM_GOLDMONT:
+	case INTEL_FAM6_ATOM_GOLDMONT_PLUS:
 		/*
 		 * SDM defines bits of MSR_MISC_FEATURE_CONTROL register
 		 * as:
@@ -220,7 +207,7 @@ static int pseudo_lock_cstates_constrain(struct pseudo_lock_region *plr)
 	int cpu;
 	int ret;
 
-	for_each_cpu(cpu, &plr->d->hdr.cpu_mask) {
+	for_each_cpu(cpu, &plr->d->cpu_mask) {
 		pm_req = kzalloc(sizeof(*pm_req), GFP_KERNEL);
 		if (!pm_req) {
 			rdt_last_cmd_puts("Failure to allocate memory for PM QoS\n");
@@ -291,15 +278,12 @@ static void pseudo_lock_region_clear(struct pseudo_lock_region *plr)
  */
 static int pseudo_lock_region_init(struct pseudo_lock_region *plr)
 {
-	enum resctrl_scope scope = plr->s->res->ctrl_scope;
-	struct cacheinfo *ci;
+	struct cpu_cacheinfo *ci;
 	int ret;
-
-	if (WARN_ON_ONCE(scope != RESCTRL_L2_CACHE && scope != RESCTRL_L3_CACHE))
-		return -ENODEV;
+	int i;
 
 	/* Pick the first cpu we find that is associated with the cache. */
-	plr->cpu = cpumask_first(&plr->d->hdr.cpu_mask);
+	plr->cpu = cpumask_first(&plr->d->cpu_mask);
 
 	if (!cpu_online(plr->cpu)) {
 		rdt_last_cmd_printf("CPU %u associated with cache not online\n",
@@ -308,11 +292,15 @@ static int pseudo_lock_region_init(struct pseudo_lock_region *plr)
 		goto out_region;
 	}
 
-	ci = get_cpu_cacheinfo_level(plr->cpu, scope);
-	if (ci) {
-		plr->line_size = ci->coherency_line_size;
-		plr->size = rdtgroup_cbm_to_size(plr->s->res, plr->d, plr->cbm);
-		return 0;
+	ci = get_cpu_cacheinfo(plr->cpu);
+
+	plr->size = rdtgroup_cbm_to_size(plr->s->res, plr->d, plr->cbm);
+
+	for (i = 0; i < ci->num_leaves; i++) {
+		if (ci->info_list[i].level == plr->s->res->cache_level) {
+			plr->line_size = ci->info_list[i].coherency_line_size;
+			return 0;
+		}
 	}
 
 	ret = -1;
@@ -489,7 +477,7 @@ static int pseudo_lock_fn(void *_rdtgrp)
 	 * pseudo-locked followed by reading of kernel memory to load it
 	 * into the cache.
 	 */
-	__wrmsr(MSR_IA32_PQR_ASSOC, rmid_p, rdtgrp->closid);
+	__wrmsr(IA32_PQR_ASSOC, rmid_p, rdtgrp->closid);
 	/*
 	 * Cache was flushed earlier. Now access kernel memory to read it
 	 * into cache region associated with just activated plr->closid.
@@ -525,7 +513,7 @@ static int pseudo_lock_fn(void *_rdtgrp)
 	 * Critical section end: restore closid with capacity bitmask that
 	 * does not overlap with pseudo-locked region.
 	 */
-	__wrmsr(MSR_IA32_PQR_ASSOC, rmid_p, closid_p);
+	__wrmsr(IA32_PQR_ASSOC, rmid_p, closid_p);
 
 	/* Re-enable the hardware prefetcher(s) */
 	wrmsrl(MSR_MISC_FEATURE_CONTROL, saved_msr);
@@ -579,7 +567,7 @@ static int rdtgroup_locksetup_user_restrict(struct rdtgroup *rdtgrp)
 	if (ret)
 		goto err_cpus;
 
-	if (resctrl_arch_mon_capable()) {
+	if (rdt_mon_capable) {
 		ret = rdtgroup_kn_mode_restrict(rdtgrp, "mon_groups");
 		if (ret)
 			goto err_cpus_list;
@@ -626,7 +614,7 @@ static int rdtgroup_locksetup_user_restore(struct rdtgroup *rdtgrp)
 	if (ret)
 		goto err_cpus;
 
-	if (resctrl_arch_mon_capable()) {
+	if (rdt_mon_capable) {
 		ret = rdtgroup_kn_mode_restore(rdtgrp, "mon_groups", 0777);
 		if (ret)
 			goto err_cpus_list;
@@ -750,7 +738,7 @@ int rdtgroup_locksetup_enter(struct rdtgroup *rdtgrp)
 	 * anymore when this group would be used for pseudo-locking. This
 	 * is safe to call on platforms not capable of monitoring.
 	 */
-	free_rmid(rdtgrp->closid, rdtgrp->mon.rmid);
+	free_rmid(rdtgrp->mon.rmid);
 
 	ret = 0;
 	goto out;
@@ -774,8 +762,8 @@ int rdtgroup_locksetup_exit(struct rdtgroup *rdtgrp)
 {
 	int ret;
 
-	if (resctrl_arch_mon_capable()) {
-		ret = alloc_rmid(rdtgrp->closid);
+	if (rdt_mon_capable) {
+		ret = alloc_rmid();
 		if (ret < 0) {
 			rdt_last_cmd_puts("Out of RMIDs\n");
 			return ret;
@@ -785,7 +773,7 @@ int rdtgroup_locksetup_exit(struct rdtgroup *rdtgrp)
 
 	ret = rdtgroup_locksetup_user_restore(rdtgrp);
 	if (ret) {
-		free_rmid(rdtgrp->closid, rdtgrp->mon.rmid);
+		free_rmid(rdtgrp->mon.rmid);
 		return ret;
 	}
 
@@ -808,7 +796,7 @@ int rdtgroup_locksetup_exit(struct rdtgroup *rdtgrp)
  * Return: true if @cbm overlaps with pseudo-locked region on @d, false
  * otherwise.
  */
-bool rdtgroup_cbm_overlaps_pseudo_locked(struct rdt_ctrl_domain *d, unsigned long cbm)
+bool rdtgroup_cbm_overlaps_pseudo_locked(struct rdt_domain *d, unsigned long cbm)
 {
 	unsigned int cbm_len;
 	unsigned long cbm_b;
@@ -835,15 +823,12 @@ bool rdtgroup_cbm_overlaps_pseudo_locked(struct rdt_ctrl_domain *d, unsigned lon
  *         if it is not possible to test due to memory allocation issue,
  *         false otherwise.
  */
-bool rdtgroup_pseudo_locked_in_hierarchy(struct rdt_ctrl_domain *d)
+bool rdtgroup_pseudo_locked_in_hierarchy(struct rdt_domain *d)
 {
-	struct rdt_ctrl_domain *d_i;
 	cpumask_var_t cpu_with_psl;
 	struct rdt_resource *r;
+	struct rdt_domain *d_i;
 	bool ret = false;
-
-	/* Walking r->domains, ensure it can't race with cpuhp */
-	lockdep_assert_cpus_held();
 
 	if (!zalloc_cpumask_var(&cpu_with_psl, GFP_KERNEL))
 		return true;
@@ -853,10 +838,10 @@ bool rdtgroup_pseudo_locked_in_hierarchy(struct rdt_ctrl_domain *d)
 	 * associated with them.
 	 */
 	for_each_alloc_capable_rdt_resource(r) {
-		list_for_each_entry(d_i, &r->ctrl_domains, hdr.list) {
+		list_for_each_entry(d_i, &r->domains, list) {
 			if (d_i->plr)
 				cpumask_or(cpu_with_psl, cpu_with_psl,
-					   &d_i->hdr.cpu_mask);
+					   &d_i->cpu_mask);
 		}
 	}
 
@@ -864,7 +849,7 @@ bool rdtgroup_pseudo_locked_in_hierarchy(struct rdt_ctrl_domain *d)
 	 * Next test if new pseudo-locked region would intersect with
 	 * existing region.
 	 */
-	if (cpumask_intersects(&d->hdr.cpu_mask, cpu_with_psl))
+	if (cpumask_intersects(&d->cpu_mask, cpu_with_psl))
 		ret = true;
 
 	free_cpumask_var(cpu_with_psl);
@@ -1082,9 +1067,9 @@ static int measure_l2_residency(void *_plr)
 	 *     L2_HIT   02H
 	 *     L2_MISS  10H
 	 */
-	switch (boot_cpu_data.x86_vfm) {
-	case INTEL_ATOM_GOLDMONT:
-	case INTEL_ATOM_GOLDMONT_PLUS:
+	switch (boot_cpu_data.x86_model) {
+	case INTEL_FAM6_ATOM_GOLDMONT:
+	case INTEL_FAM6_ATOM_GOLDMONT_PLUS:
 		perf_miss_attr.config = X86_CONFIG(.event = 0xd1,
 						   .umask = 0x10);
 		perf_hit_attr.config = X86_CONFIG(.event = 0xd1,
@@ -1121,8 +1106,8 @@ static int measure_l3_residency(void *_plr)
 	 *       MISS      41H
 	 */
 
-	switch (boot_cpu_data.x86_vfm) {
-	case INTEL_BROADWELL_X:
+	switch (boot_cpu_data.x86_model) {
+	case INTEL_FAM6_BROADWELL_X:
 		/* On BDW the hit event counts references, not hits */
 		perf_hit_attr.config = X86_CONFIG(.event = 0x2e,
 						  .umask = 0x4f);
@@ -1140,7 +1125,7 @@ static int measure_l3_residency(void *_plr)
 	 */
 
 	counts.miss_after -= counts.miss_before;
-	if (boot_cpu_data.x86_vfm == INTEL_BROADWELL_X) {
+	if (boot_cpu_data.x86_model == INTEL_FAM6_BROADWELL_X) {
 		/*
 		 * On BDW references and misses are counted, need to adjust.
 		 * Sometimes the "hits" counter is a bit more than the
@@ -1196,7 +1181,7 @@ static int pseudo_lock_measure_cycles(struct rdtgroup *rdtgrp, int sel)
 	}
 
 	plr->thread_done = 0;
-	cpu = cpumask_first(&plr->d->hdr.cpu_mask);
+	cpu = cpumask_first(&plr->d->cpu_mask);
 	if (!cpu_online(cpu)) {
 		ret = -ENODEV;
 		goto out;
@@ -1368,7 +1353,7 @@ int rdtgroup_pseudo_lock_create(struct rdtgroup *rdtgrp)
 					    &pseudo_measure_fops);
 	}
 
-	dev = device_create(&pseudo_lock_class, NULL,
+	dev = device_create(pseudo_lock_class, NULL,
 			    MKDEV(pseudo_lock_major, new_minor),
 			    rdtgrp, "%s", rdtgrp->kn->name);
 
@@ -1398,7 +1383,7 @@ int rdtgroup_pseudo_lock_create(struct rdtgroup *rdtgrp)
 	goto out;
 
 out_device:
-	device_destroy(&pseudo_lock_class, MKDEV(pseudo_lock_major, new_minor));
+	device_destroy(pseudo_lock_class, MKDEV(pseudo_lock_major, new_minor));
 out_debugfs:
 	debugfs_remove_recursive(plr->debugfs_dir);
 	pseudo_lock_minor_release(new_minor);
@@ -1439,7 +1424,7 @@ void rdtgroup_pseudo_lock_remove(struct rdtgroup *rdtgrp)
 
 	pseudo_lock_cstates_relax(plr);
 	debugfs_remove_recursive(rdtgrp->plr->debugfs_dir);
-	device_destroy(&pseudo_lock_class, MKDEV(pseudo_lock_major, plr->minor));
+	device_destroy(pseudo_lock_class, MKDEV(pseudo_lock_major, plr->minor));
 	pseudo_lock_minor_release(plr->minor);
 
 free:
@@ -1526,7 +1511,7 @@ static int pseudo_lock_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 	 * may be scheduled elsewhere and invalidate entries in the
 	 * pseudo-locked region.
 	 */
-	if (!cpumask_subset(current->cpus_ptr, &plr->d->hdr.cpu_mask)) {
+	if (!cpumask_subset(current->cpus_ptr, &plr->d->cpu_mask)) {
 		mutex_unlock(&rdtgroup_mutex);
 		return -EINVAL;
 	}
@@ -1567,12 +1552,23 @@ static int pseudo_lock_dev_mmap(struct file *filp, struct vm_area_struct *vma)
 
 static const struct file_operations pseudo_lock_dev_fops = {
 	.owner =	THIS_MODULE,
+	.llseek =	no_llseek,
 	.read =		NULL,
 	.write =	NULL,
 	.open =		pseudo_lock_dev_open,
 	.release =	pseudo_lock_dev_release,
 	.mmap =		pseudo_lock_dev_mmap,
 };
+
+static char *pseudo_lock_devnode(struct device *dev, umode_t *mode)
+{
+	struct rdtgroup *rdtgrp;
+
+	rdtgrp = dev_get_drvdata(dev);
+	if (mode)
+		*mode = 0600;
+	return kasprintf(GFP_KERNEL, "pseudo_lock/%s", rdtgrp->kn->name);
+}
 
 int rdt_pseudo_lock_init(void)
 {
@@ -1584,18 +1580,21 @@ int rdt_pseudo_lock_init(void)
 
 	pseudo_lock_major = ret;
 
-	ret = class_register(&pseudo_lock_class);
-	if (ret) {
+	pseudo_lock_class = class_create(THIS_MODULE, "pseudo_lock");
+	if (IS_ERR(pseudo_lock_class)) {
+		ret = PTR_ERR(pseudo_lock_class);
 		unregister_chrdev(pseudo_lock_major, "pseudo_lock");
 		return ret;
 	}
 
+	pseudo_lock_class->devnode = pseudo_lock_devnode;
 	return 0;
 }
 
 void rdt_pseudo_lock_release(void)
 {
-	class_unregister(&pseudo_lock_class);
+	class_destroy(pseudo_lock_class);
+	pseudo_lock_class = NULL;
 	unregister_chrdev(pseudo_lock_major, "pseudo_lock");
 	pseudo_lock_major = 0;
 }

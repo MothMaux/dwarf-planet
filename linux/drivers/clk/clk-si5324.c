@@ -688,25 +688,12 @@ static int si5324_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 	return 0;
 }
 
-static int si5324_determine_rate(struct clk_hw *hw,
-				 struct clk_rate_request *req)
-{
-	struct si5324_hw_data *hwdata =
-		container_of(hw, struct si5324_hw_data, hw);
-
-	dev_err(&hwdata->drvdata->client->dev,
-		"%s: Missing implementation\n", clk_hw_get_name(hw));
-
-	return clk_hw_determine_rate_no_reparent(hw, req);
-}
-
 static const struct clk_ops si5324_pll_ops = {
 	.set_parent = si5324_pll_set_parent,
 	.get_parent = si5324_pll_get_parent,
 	.recalc_rate = si5324_pll_recalc_rate,
 	.round_rate = si5324_pll_round_rate,
 	.set_rate = si5324_pll_set_rate,
-	.determine_rate = si5324_determine_rate,
 };
 
 static int si5324_clkout_set_drive_strength(
@@ -864,8 +851,8 @@ static int si5324_dt_parse(struct i2c_client *client)
 {
 	struct device_node *child, *np = client->dev.of_node;
 	struct si5324_platform_data *pdata;
-	u32 array[4];
-	int sz, i;
+	struct property *prop;
+	const __be32 *p;
 	int num = 0;
 	u32 val;
 
@@ -880,21 +867,16 @@ static int si5324_dt_parse(struct i2c_client *client)
 	 * property silabs,pll-source : <num src>, [<..>]
 	 * allow to selectively set pll source
 	 */
-	sz = of_property_read_variable_u32_array(np, "silabs,pll-source", array, 2, 4);
-	sz = (sz == -EINVAL) ? 0 : sz; /* Missing property is OK */
-	if (sz < 0)
-		return dev_err_probe(&client->dev, sz, "invalid pll-source\n");
-	if (sz % 2)
-		return dev_err_probe(&client->dev, -EINVAL,
-					"missing pll-source for pll %d\n", array[sz - 1]);
-
-	for (i = 0; i < sz; i += 2) {
-		num = array[i];
-		val = array[i + 1];
-
+	of_property_for_each_u32(np, "silabs,pll-source", prop, p, num) {
 		if (num >= 1) {
 			dev_err(&client->dev,
 				"invalid pll %d on pll-source prop\n", num);
+			return -EINVAL;
+		}
+		p = of_prop_next_u32(prop, p, &val);
+		if (!p) {
+			dev_err(&client->dev,
+				"missing pll-source for pll %d\n", num);
 			return -EINVAL;
 		}
 
@@ -969,17 +951,9 @@ put_child:
 
 static u8 instance;
 
-static const struct i2c_device_id si5324_i2c_ids[] = {
-	{ "si5319", si5319 },
-	{ "si5324", si5324 },
-	{ "si5328", si5328 },
-	{ }
-};
-MODULE_DEVICE_TABLE(i2c, si5324_i2c_ids);
-
-static int si5324_i2c_probe(struct i2c_client *client)
+static int si5324_i2c_probe(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id =  i2c_match_id(si5324_i2c_ids, client);
 	struct si5324_platform_data *pdata;
 	struct si5324_driver_data *drvdata;
 	struct clk_init_data init;
@@ -1228,6 +1202,14 @@ static void si5324_i2c_remove(struct i2c_client *client)
 	of_clk_del_provider(client->dev.of_node);
 }
 
+static const struct i2c_device_id si5324_i2c_ids[] = {
+	{ "si5319", si5319 },
+	{ "si5324", si5324 },
+	{ "si5328", si5328 },
+	{ }
+};
+MODULE_DEVICE_TABLE(i2c, si5324_i2c_ids);
+
 static struct i2c_driver si5324_driver = {
 	.driver = {
 		.name = "si5324",
@@ -1241,4 +1223,4 @@ module_i2c_driver(si5324_driver);
 
 MODULE_AUTHOR("Venkateshwar Rao G <vgannava@xilinx.com>");
 MODULE_DESCRIPTION("Silicon Labs 5319/5324/5328 clock driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

@@ -1,18 +1,17 @@
 
 VIVADO_VERSION ?= 2025.1
 
-BR2_EXT_DIR = $(CURDIR)/br2-external
 BUILDROOT_DIR = $(CURDIR)/buildroot
 
 # Cross-compiler provided by buildroot toolchain
-CROSS_COMPILE = arm-none-linux-gnueabihf-
+CROSS_COMPILE = arm-linux-gnueabihf-
 TOOLS_PATH = PATH="$(BUILDROOT_DIR)/output/host/bin:$(BUILDROOT_DIR)/output/host/sbin:$(PATH)"
 TOOLCHAIN = $(BUILDROOT_DIR)/output/host/bin/$(CROSS_COMPILE)gcc
 
 NCORES = $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
 VIVADO_SETTINGS ?= /tools/Xilinx/$(VIVADO_VERSION)/Vivado/settings64.sh
 
-VSUBDIRS = hdl br2-external linux u-boot
+VSUBDIRS = hdl linux u-boot
 
 VERSION:=$(shell git describe --abbrev=4 --dirty --always --tags)
 UBOOT_VERSION=$(shell echo -n "PlutoSDR " && cd u-boot && git describe --abbrev=0 --dirty --always --tags)
@@ -64,8 +63,8 @@ endif
 TARGET_DTS_FILES:=$(foreach dts,$(TARGET_DTS_FILES),build/$(dts))
 
 TOOLCHAIN:
-	$(MAKE) -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) ARCH=arm zynq_$(TARGET)_defconfig
-	$(MAKE) -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) toolchain
+	$(MAKE) -C $(BUILDROOT_DIR) ARCH=arm zynq_$(TARGET)_defconfig
+	$(MAKE) -C $(BUILDROOT_DIR) toolchain
 
 build:
 	mkdir -p $@
@@ -86,8 +85,7 @@ build/u-boot.elf: u-boot/u-boot | build
 	cp $< $@
 
 build/uboot-env.txt: u-boot/u-boot TOOLCHAIN | build
-	$(TOOLS_PATH) $(MAKE) -C u-boot ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) u-boot-initial-env
-	cp u-boot/u-boot-initial-env $@
+	$(TOOLS_PATH) CROSS_COMPILE=$(CROSS_COMPILE) scripts/get_default_envs.sh > $@
 
 build/uboot-env.bin: build/uboot-env.txt
 	u-boot/tools/mkenvimage -s 0x20000 -o $@ $<
@@ -97,6 +95,7 @@ build/uboot-env.bin: build/uboot-env.txt
 linux/arch/arm/boot/zImage: TOOLCHAIN
 	$(TOOLS_PATH) $(MAKE) -C linux ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) zynq_$(TARGET)_defconfig
 	$(TOOLS_PATH) $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) zImage UIMAGE_LOADADDR=0x8000
+	$(TOOLS_PATH) $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) uImage UIMAGE_LOADADDR=0x8000
 
 
 .PHONY: linux/arch/arm/boot/zImage
@@ -107,27 +106,21 @@ build/zImage: linux/arch/arm/boot/zImage | build
 
 ### Device Tree ###
 
-linux/arch/arm/boot/dts/xilinx/%.dtb: TOOLCHAIN linux/arch/arm/boot/dts/xilinx/%.dts linux/arch/arm/boot/dts/xilinx/zynq-pluto-sdr.dtsi
-	$(TOOLS_PATH) DTC_FLAGS=-@ $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) xilinx/$(notdir $@)
+linux/arch/arm/boot/dts/%.dtb: TOOLCHAIN linux/arch/arm/boot/dts/%.dts linux/arch/arm/boot/dts/zynq-pluto-sdr.dtsi
+	$(TOOLS_PATH) DTC_FLAGS=-@ $(MAKE) -C linux -j $(NCORES) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) $(notdir $@)
 
-build/%.dtb: linux/arch/arm/boot/dts/xilinx/%.dtb | build
+build/%.dtb: linux/arch/arm/boot/dts/%.dtb | build
 	dtc -q -@ -I dtb -O dts $< | sed 's/axi {/amba {/g' | dtc -q -@ -I dts -O dtb -o $@
 
 ### Buildroot ###
 
 $(BUILDROOT_DIR)/output/images/rootfs.cpio.gz:
-	@echo device-fw $(VERSION)> $(BR2_EXT_DIR)/board/adi/$(TARGET)/VERSIONS
-	@$(foreach dir,$(VSUBDIRS),echo $(dir) $(shell cd $(dir) && git describe --abbrev=4 --dirty --always --tags) >> $(BR2_EXT_DIR)/board/adi/$(TARGET)/VERSIONS;)
-	@echo buildroot $(shell cd $(BUILDROOT_DIR) && git describe --abbrev=4 --dirty --always --tags 2>/dev/null || echo unknown) >> $(BR2_EXT_DIR)/board/adi/$(TARGET)/VERSIONS
-	$(MAKE) -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) ARCH=arm zynq_$(TARGET)_defconfig
+	@echo device-fw $(VERSION)> $(BUILDROOT_DIR)/board/$(TARGET)/VERSIONS
+	@$(foreach dir,$(VSUBDIRS),echo $(dir) $(shell cd $(dir) && git describe --abbrev=4 --dirty --always --tags) >> $(BUILDROOT_DIR)/board/$(TARGET)/VERSIONS;)
+	@echo buildroot $(shell cd $(BUILDROOT_DIR) && git describe --abbrev=4 --dirty --always --tags 2>/dev/null || echo unknown) >> $(BUILDROOT_DIR)/board/$(TARGET)/VERSIONS
+	$(MAKE) -C $(BUILDROOT_DIR) ARCH=arm zynq_$(TARGET)_defconfig
 
-ifneq (1, ${SKIP_LEGAL})
-	$(MAKE) -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) legal-info
-	scripts/legal_info_html.sh "$(COMPLETE_NAME)" "$(BR2_EXT_DIR)/board/adi/$(TARGET)/VERSIONS" "$(BUILDROOT_DIR)/output/legal-info/manifest.csv"
-	cp build/LICENSE.html $(BR2_EXT_DIR)/board/adi/$(TARGET)/msd/LICENSE.html
-endif
-
-	$(MAKE) -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) BUSYBOX_CONFIG_FILE=$(BR2_EXT_DIR)/board/adi/$(TARGET)/busybox-1.25.0.config all
+	$(MAKE) -C $(BUILDROOT_DIR) BUSYBOX_CONFIG_FILE=$(BUILDROOT_DIR)/board/$(TARGET)/busybox-1.25.0.config all
 
 .PHONY: $(BUILDROOT_DIR)/output/images/rootfs.cpio.gz
 
@@ -194,7 +187,7 @@ clean-build:
 clean:
 	$(MAKE) -C u-boot clean
 	$(MAKE) -C linux clean
-	test -d $(BUILDROOT_DIR) && $(MAKE) -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) clean || true
+	$(MAKE) -C $(BUILDROOT_DIR) clean
 	$(MAKE) -C hdl clean
 	rm -f $(notdir $(wildcard build/*))
 	rm -rf build/*
@@ -212,7 +205,7 @@ sdimg: build/
 	cp build/sdk/fsbl/Release/fsbl.elf 	$(SDIMGDIR)/fsbl.elf  
 	cp build/sdk/system_top/hw/system_top.bit 	$(SDIMGDIR)/system_top.bit
 	cp build/u-boot.elf 			$(SDIMGDIR)/u-boot.elf
-	cp $(CURDIR)/linux/arch/arm/boot/zImage	$(SDIMGDIR)/uImage
+	cp $(CURDIR)/linux/arch/arm/boot/uImage	$(SDIMGDIR)/uImage
 	cp build/zynq-$(TARGET).dtb 	$(SDIMGDIR)/devicetree.dtb
 	cp build/uboot-env.txt  		$(SDIMGDIR)/uEnv.txt
 	cp build/rootfs.cpio.gz  		$(SDIMGDIR)/ramdisk.image.gz
@@ -292,43 +285,6 @@ EXTRA_PKGS = \
 	--extra-pkg $(PKG_HDL)
 
 SBOM_DIR = build/sbom
-
-legal-info: $(BUILDROOT_DIR)/output/images/rootfs.cpio.gz
-ifneq (1, ${SKIP_LEGAL})
-	tar czvf build/legal-info-$(VERSION).tar.gz -C $(BUILDROOT_DIR)/output legal-info
-	mkdir -p $(SBOM_DIR)
-	$(MAKE) --no-print-directory -C $(BUILDROOT_DIR) BR2_EXTERNAL=$(BR2_EXT_DIR) show-info > $(SBOM_DIR)/show-info.json
-	@echo "=== Generating individual SBOMs ==="
-	# Buildroot SBOM (CycloneDX via native tool)
-	$(BUILDROOT_DIR)/utils/generate-cyclonedx \
-		-i $(SBOM_DIR)/show-info.json \
-		--project-name buildroot \
-		--project-version $(VERSION) \
-		-o $(SBOM_DIR)/buildroot-$(VERSION).cdx.json
-	# Linux SBOM
-	python3 scripts/merge_cyclonedx.py \
-		--project-name linux --project-version $(LINUX_VERSION) \
-		--extra-pkg $(PKG_LINUX) \
-		-o $(SBOM_DIR)/linux-$(LINUX_VERSION).cdx.json
-	# U-Boot SBOM
-	python3 scripts/merge_cyclonedx.py \
-		--project-name u-boot --project-version $(UBOOT_VER) \
-		--extra-pkg $(PKG_UBOOT) \
-		-o $(SBOM_DIR)/u-boot-$(UBOOT_VER).cdx.json
-	# HDL SBOM
-	python3 scripts/merge_cyclonedx.py \
-		--project-name hdl --project-version $(HDL_VERSION) \
-		--extra-pkg $(PKG_HDL) \
-		-o $(SBOM_DIR)/hdl-$(HDL_VERSION).cdx.json
-	@echo "=== Generating full firmware SBOM ==="
-	# Full firmware SBOM (buildroot packages + linux + u-boot + hdl)
-	python3 scripts/merge_cyclonedx.py \
-		-i $(SBOM_DIR)/buildroot-$(VERSION).cdx.json \
-		--project-name $(TARGET) --project-version $(VERSION) \
-		$(EXTRA_PKGS) \
-		-o $(SBOM_DIR)/$(TARGET)-$(VERSION).cdx.json
-endif
-
 
 git-update-all:
 	git submodule update --recursive --remote

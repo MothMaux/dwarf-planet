@@ -12,7 +12,7 @@
 #include <linux/highmem.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 #include <linux/buffer_head.h>
 #include <linux/mpage.h>
 #include <linux/writeback.h>
@@ -1257,9 +1257,12 @@ static void init_inode(struct inode *inode, struct treepath *path)
 		i_uid_write(inode, sd_v1_uid(sd));
 		i_gid_write(inode, sd_v1_gid(sd));
 		inode->i_size = sd_v1_size(sd);
-		inode_set_atime(inode, sd_v1_atime(sd), 0);
-		inode_set_mtime(inode, sd_v1_mtime(sd), 0);
-		inode_set_ctime(inode, sd_v1_ctime(sd), 0);
+		inode->i_atime.tv_sec = sd_v1_atime(sd);
+		inode->i_mtime.tv_sec = sd_v1_mtime(sd);
+		inode->i_ctime.tv_sec = sd_v1_ctime(sd);
+		inode->i_atime.tv_nsec = 0;
+		inode->i_ctime.tv_nsec = 0;
+		inode->i_mtime.tv_nsec = 0;
 
 		inode->i_blocks = sd_v1_blocks(sd);
 		inode->i_generation = le32_to_cpu(INODE_PKEY(inode)->k_dir_id);
@@ -1309,9 +1312,12 @@ static void init_inode(struct inode *inode, struct treepath *path)
 		i_uid_write(inode, sd_v2_uid(sd));
 		inode->i_size = sd_v2_size(sd);
 		i_gid_write(inode, sd_v2_gid(sd));
-		inode_set_mtime(inode, sd_v2_mtime(sd), 0);
-		inode_set_atime(inode, sd_v2_atime(sd), 0);
-		inode_set_ctime(inode, sd_v2_ctime(sd), 0);
+		inode->i_mtime.tv_sec = sd_v2_mtime(sd);
+		inode->i_atime.tv_sec = sd_v2_atime(sd);
+		inode->i_ctime.tv_sec = sd_v2_ctime(sd);
+		inode->i_ctime.tv_nsec = 0;
+		inode->i_mtime.tv_nsec = 0;
+		inode->i_atime.tv_nsec = 0;
 		inode->i_blocks = sd_v2_blocks(sd);
 		rdev = sd_v2_rdev(sd);
 		if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
@@ -1366,9 +1372,9 @@ static void inode2sd(void *sd, struct inode *inode, loff_t size)
 	set_sd_v2_uid(sd_v2, i_uid_read(inode));
 	set_sd_v2_size(sd_v2, size);
 	set_sd_v2_gid(sd_v2, i_gid_read(inode));
-	set_sd_v2_mtime(sd_v2, inode_get_mtime_sec(inode));
-	set_sd_v2_atime(sd_v2, inode_get_atime_sec(inode));
-	set_sd_v2_ctime(sd_v2, inode_get_ctime_sec(inode));
+	set_sd_v2_mtime(sd_v2, inode->i_mtime.tv_sec);
+	set_sd_v2_atime(sd_v2, inode->i_atime.tv_sec);
+	set_sd_v2_ctime(sd_v2, inode->i_ctime.tv_sec);
 	set_sd_v2_blocks(sd_v2, to_fake_used_blocks(inode, SD_V2_SIZE));
 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
 		set_sd_v2_rdev(sd_v2, new_encode_dev(inode->i_rdev));
@@ -1387,9 +1393,9 @@ static void inode2sd_v1(void *sd, struct inode *inode, loff_t size)
 	set_sd_v1_gid(sd_v1, i_gid_read(inode));
 	set_sd_v1_nlink(sd_v1, inode->i_nlink);
 	set_sd_v1_size(sd_v1, size);
-	set_sd_v1_atime(sd_v1, inode_get_atime_sec(inode));
-	set_sd_v1_ctime(sd_v1, inode_get_ctime_sec(inode));
-	set_sd_v1_mtime(sd_v1, inode_get_mtime_sec(inode));
+	set_sd_v1_atime(sd_v1, inode->i_atime.tv_sec);
+	set_sd_v1_ctime(sd_v1, inode->i_ctime.tv_sec);
+	set_sd_v1_mtime(sd_v1, inode->i_mtime.tv_sec);
 
 	if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode))
 		set_sd_v1_rdev(sd_v1, new_encode_dev(inode->i_rdev));
@@ -1980,7 +1986,7 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 
 	/* uid and gid must already be set by the caller for quota init */
 
-	simple_inode_init_ts(inode);
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	inode->i_size = i_size;
 	inode->i_blocks = 0;
 	inode->i_bytes = 0;
@@ -2081,8 +2087,10 @@ int reiserfs_new_inode(struct reiserfs_transaction_handle *th,
 	 * Mark it private if we're creating the privroot
 	 * or something under it.
 	 */
-	if (IS_PRIVATE(dir) || dentry == REISERFS_SB(sb)->priv_root)
-		reiserfs_init_priv_inode(inode);
+	if (IS_PRIVATE(dir) || dentry == REISERFS_SB(sb)->priv_root) {
+		inode->i_flags |= S_PRIVATE;
+		inode->i_opflags &= ~IOP_XATTR;
+	}
 
 	if (reiserfs_posixacl(inode->i_sb)) {
 		reiserfs_write_unlock(inode->i_sb);
@@ -2178,7 +2186,7 @@ static int grab_tail_page(struct inode *inode,
 	unsigned long offset = (inode->i_size) & (PAGE_SIZE - 1);
 	struct buffer_head *bh;
 	struct buffer_head *head;
-	struct folio *folio;
+	struct page *page;
 	int error;
 
 	/*
@@ -2190,20 +2198,20 @@ static int grab_tail_page(struct inode *inode,
 	if ((offset & (blocksize - 1)) == 0) {
 		return -ENOENT;
 	}
-	folio = __filemap_get_folio(inode->i_mapping, index,
-			FGP_LOCK | FGP_ACCESSED | FGP_CREAT,
-			mapping_gfp_mask(inode->i_mapping));
-	if (IS_ERR(folio))
-		return PTR_ERR(folio);
+	page = grab_cache_page(inode->i_mapping, index);
+	error = -ENOMEM;
+	if (!page) {
+		goto out;
+	}
 	/* start within the page of the last block in the file */
 	start = (offset / blocksize) * blocksize;
 
-	error = __block_write_begin(folio, start, offset - start,
+	error = __block_write_begin(page, start, offset - start,
 				    reiserfs_get_block_create_0);
 	if (error)
 		goto unlock;
 
-	head = folio_buffers(folio);
+	head = page_buffers(page);
 	bh = head;
 	do {
 		if (pos >= start) {
@@ -2226,13 +2234,14 @@ static int grab_tail_page(struct inode *inode,
 		goto unlock;
 	}
 	*bh_result = bh;
-	*page_result = &folio->page;
+	*page_result = page;
 
+out:
 	return error;
 
 unlock:
-	folio_unlock(folio);
-	folio_put(folio);
+	unlock_page(page);
+	put_page(page);
 	return error;
 }
 
@@ -2499,13 +2508,13 @@ out:
 
 /*
  * mason@suse.com: updated in 2.5.54 to follow the same general io
- * start/recovery path as __block_write_full_folio, along with special
+ * start/recovery path as __block_write_full_page, along with special
  * code to handle reiserfs tails.
  */
-static int reiserfs_write_folio(struct folio *folio,
-		struct writeback_control *wbc, void *data)
+static int reiserfs_write_full_page(struct page *page,
+				    struct writeback_control *wbc)
 {
-	struct inode *inode = folio->mapping->host;
+	struct inode *inode = page->mapping->host;
 	unsigned long end_index = inode->i_size >> PAGE_SHIFT;
 	int error = 0;
 	unsigned long block;
@@ -2513,7 +2522,7 @@ static int reiserfs_write_folio(struct folio *folio,
 	struct buffer_head *head, *bh;
 	int partial = 0;
 	int nr = 0;
-	int checked = folio_test_checked(folio);
+	int checked = PageChecked(page);
 	struct reiserfs_transaction_handle th;
 	struct super_block *s = inode->i_sb;
 	int bh_per_page = PAGE_SIZE / s->s_blocksize;
@@ -2521,46 +2530,47 @@ static int reiserfs_write_folio(struct folio *folio,
 
 	/* no logging allowed when nonblocking or from PF_MEMALLOC */
 	if (checked && (current->flags & PF_MEMALLOC)) {
-		folio_redirty_for_writepage(wbc, folio);
-		folio_unlock(folio);
+		redirty_page_for_writepage(wbc, page);
+		unlock_page(page);
 		return 0;
 	}
 
 	/*
-	 * The folio dirty bit is cleared before writepage is called, which
+	 * The page dirty bit is cleared before writepage is called, which
 	 * means we have to tell create_empty_buffers to make dirty buffers
-	 * The folio really should be up to date at this point, so tossing
+	 * The page really should be up to date at this point, so tossing
 	 * in the BH_Uptodate is just a sanity check.
 	 */
-	head = folio_buffers(folio);
-	if (!head)
-		head = create_empty_buffers(folio, s->s_blocksize,
+	if (!page_has_buffers(page)) {
+		create_empty_buffers(page, s->s_blocksize,
 				     (1 << BH_Dirty) | (1 << BH_Uptodate));
+	}
+	head = page_buffers(page);
 
 	/*
-	 * last folio in the file, zero out any contents past the
+	 * last page in the file, zero out any contents past the
 	 * last byte in the file
 	 */
-	if (folio->index >= end_index) {
+	if (page->index >= end_index) {
 		unsigned last_offset;
 
 		last_offset = inode->i_size & (PAGE_SIZE - 1);
-		/* no file contents in this folio */
-		if (folio->index >= end_index + 1 || !last_offset) {
-			folio_unlock(folio);
+		/* no file contents in this page */
+		if (page->index >= end_index + 1 || !last_offset) {
+			unlock_page(page);
 			return 0;
 		}
-		folio_zero_segment(folio, last_offset, folio_size(folio));
+		zero_user_segment(page, last_offset, PAGE_SIZE);
 	}
 	bh = head;
-	block = folio->index << (PAGE_SHIFT - s->s_blocksize_bits);
+	block = page->index << (PAGE_SHIFT - s->s_blocksize_bits);
 	last_block = (i_size_read(inode) - 1) >> inode->i_blkbits;
 	/* first map all the buffers, logging any direct items we find */
 	do {
 		if (block > last_block) {
 			/*
 			 * This can happen when the block size is less than
-			 * the folio size.  The corresponding bytes in the folio
+			 * the page size.  The corresponding bytes in the page
 			 * were zero filled above
 			 */
 			clear_buffer_dirty(bh);
@@ -2587,7 +2597,7 @@ static int reiserfs_write_folio(struct folio *folio,
 	 * blocks we're going to log
 	 */
 	if (checked) {
-		folio_clear_checked(folio);
+		ClearPageChecked(page);
 		reiserfs_write_lock(s);
 		error = journal_begin(&th, s, bh_per_page + 1);
 		if (error) {
@@ -2596,7 +2606,7 @@ static int reiserfs_write_folio(struct folio *folio,
 		}
 		reiserfs_update_inode_transaction(inode);
 	}
-	/* now go through and lock any dirty buffers on the folio */
+	/* now go through and lock any dirty buffers on the page */
 	do {
 		get_bh(bh);
 		if (!buffer_mapped(bh))
@@ -2617,7 +2627,7 @@ static int reiserfs_write_folio(struct folio *folio,
 			lock_buffer(bh);
 		} else {
 			if (!trylock_buffer(bh)) {
-				folio_redirty_for_writepage(wbc, folio);
+				redirty_page_for_writepage(wbc, page);
 				continue;
 			}
 		}
@@ -2634,13 +2644,13 @@ static int reiserfs_write_folio(struct folio *folio,
 		if (error)
 			goto fail;
 	}
-	BUG_ON(folio_test_writeback(folio));
-	folio_start_writeback(folio);
-	folio_unlock(folio);
+	BUG_ON(PageWriteback(page));
+	set_page_writeback(page);
+	unlock_page(page);
 
 	/*
-	 * since any buffer might be the only dirty buffer on the folio,
-	 * the first submit_bh can bring the folio out of writeback.
+	 * since any buffer might be the only dirty buffer on the page,
+	 * the first submit_bh can bring the page out of writeback.
 	 * be careful with the buffers.
 	 */
 	do {
@@ -2657,10 +2667,10 @@ static int reiserfs_write_folio(struct folio *folio,
 done:
 	if (nr == 0) {
 		/*
-		 * if this folio only had a direct item, it is very possible for
+		 * if this page only had a direct item, it is very possible for
 		 * no io to be required without there being an error.  Or,
 		 * someone else could have locked them and sent them down the
-		 * pipe without locking the folio
+		 * pipe without locking the page
 		 */
 		bh = head;
 		do {
@@ -2671,18 +2681,18 @@ done:
 			bh = bh->b_this_page;
 		} while (bh != head);
 		if (!partial)
-			folio_mark_uptodate(folio);
-		folio_end_writeback(folio);
+			SetPageUptodate(page);
+		end_page_writeback(page);
 	}
 	return error;
 
 fail:
 	/*
 	 * catches various errors, we need to make sure any valid dirty blocks
-	 * get to the media.  The folio is currently locked and not marked for
+	 * get to the media.  The page is currently locked and not marked for
 	 * writeback
 	 */
-	folio_clear_uptodate(folio);
+	ClearPageUptodate(page);
 	bh = head;
 	do {
 		get_bh(bh);
@@ -2692,15 +2702,16 @@ fail:
 		} else {
 			/*
 			 * clear any dirty bits that might have come from
-			 * getting attached to a dirty folio
+			 * getting attached to a dirty page
 			 */
 			clear_buffer_dirty(bh);
 		}
 		bh = bh->b_this_page;
 	} while (bh != head);
-	BUG_ON(folio_test_writeback(folio));
-	folio_start_writeback(folio);
-	folio_unlock(folio);
+	SetPageError(page);
+	BUG_ON(PageWriteback(page));
+	set_page_writeback(page);
+	unlock_page(page);
 	do {
 		struct buffer_head *next = bh->b_this_page;
 		if (buffer_async_write(bh)) {
@@ -2719,11 +2730,11 @@ static int reiserfs_read_folio(struct file *f, struct folio *folio)
 	return block_read_full_folio(folio, reiserfs_get_block);
 }
 
-static int reiserfs_writepages(struct address_space *mapping,
-		struct writeback_control *wbc)
+static int reiserfs_writepage(struct page *page, struct writeback_control *wbc)
 {
-	reiserfs_wait_on_write_block(mapping->host->i_sb);
-	return write_cache_pages(mapping, wbc, reiserfs_write_folio, NULL);
+	struct inode *inode = page->mapping->host;
+	reiserfs_wait_on_write_block(inode->i_sb);
+	return reiserfs_write_full_page(page, wbc);
 }
 
 static void reiserfs_truncate_failed_write(struct inode *inode)
@@ -2735,24 +2746,23 @@ static void reiserfs_truncate_failed_write(struct inode *inode)
 static int reiserfs_write_begin(struct file *file,
 				struct address_space *mapping,
 				loff_t pos, unsigned len,
-				struct folio **foliop, void **fsdata)
+				struct page **pagep, void **fsdata)
 {
 	struct inode *inode;
-	struct folio *folio;
+	struct page *page;
 	pgoff_t index;
 	int ret;
 	int old_ref = 0;
 
  	inode = mapping->host;
 	index = pos >> PAGE_SHIFT;
-	folio = __filemap_get_folio(mapping, index, FGP_WRITEBEGIN,
-			mapping_gfp_mask(mapping));
-	if (IS_ERR(folio))
-		return PTR_ERR(folio);
-	*foliop = folio;
+	page = grab_cache_page_write_begin(mapping, index);
+	if (!page)
+		return -ENOMEM;
+	*pagep = page;
 
 	reiserfs_wait_on_write_block(inode->i_sb);
-	fix_tail_page_for_writing(&folio->page);
+	fix_tail_page_for_writing(page);
 	if (reiserfs_transaction_running(inode->i_sb)) {
 		struct reiserfs_transaction_handle *th;
 		th = (struct reiserfs_transaction_handle *)current->
@@ -2762,7 +2772,7 @@ static int reiserfs_write_begin(struct file *file,
 		old_ref = th->t_refcount;
 		th->t_refcount++;
 	}
-	ret = __block_write_begin(folio, pos, len, reiserfs_get_block);
+	ret = __block_write_begin(page, pos, len, reiserfs_get_block);
 	if (ret && reiserfs_transaction_running(inode->i_sb)) {
 		struct reiserfs_transaction_handle *th = current->journal_info;
 		/*
@@ -2792,8 +2802,8 @@ static int reiserfs_write_begin(struct file *file,
 		}
 	}
 	if (ret) {
-		folio_unlock(folio);
-		folio_put(folio);
+		unlock_page(page);
+		put_page(page);
 		/* Truncate allocated blocks */
 		reiserfs_truncate_failed_write(inode);
 	}
@@ -2822,7 +2832,7 @@ int __reiserfs_write_begin(struct page *page, unsigned from, unsigned len)
 		th->t_refcount++;
 	}
 
-	ret = __block_write_begin(page_folio(page), from, len, reiserfs_get_block);
+	ret = __block_write_begin(page, from, len, reiserfs_get_block);
 	if (ret && reiserfs_transaction_running(inode->i_sb)) {
 		struct reiserfs_transaction_handle *th = current->journal_info;
 		/*
@@ -2862,9 +2872,9 @@ static sector_t reiserfs_aop_bmap(struct address_space *as, sector_t block)
 
 static int reiserfs_write_end(struct file *file, struct address_space *mapping,
 			      loff_t pos, unsigned len, unsigned copied,
-			      struct folio *folio, void *fsdata)
+			      struct page *page, void *fsdata)
 {
-	struct inode *inode = folio->mapping->host;
+	struct inode *inode = page->mapping->host;
 	int ret = 0;
 	int update_sd = 0;
 	struct reiserfs_transaction_handle *th;
@@ -2879,14 +2889,14 @@ static int reiserfs_write_end(struct file *file, struct address_space *mapping,
 
 	start = pos & (PAGE_SIZE - 1);
 	if (unlikely(copied < len)) {
-		if (!folio_test_uptodate(folio))
+		if (!PageUptodate(page))
 			copied = 0;
 
-		folio_zero_new_buffers(folio, start + copied, start + len);
+		page_zero_new_buffers(page, start + copied, start + len);
 	}
-	flush_dcache_folio(folio);
+	flush_dcache_page(page);
 
-	reiserfs_commit_page(inode, &folio->page, start, start + copied);
+	reiserfs_commit_page(inode, page, start, start + copied);
 
 	/*
 	 * generic_commit_write does this for us, but does not update the
@@ -2941,8 +2951,8 @@ static int reiserfs_write_end(struct file *file, struct address_space *mapping,
 out:
 	if (locked)
 		reiserfs_write_unlock(inode->i_sb);
-	folio_unlock(folio);
-	folio_put(folio);
+	unlock_page(page);
+	put_page(page);
 
 	if (pos + len > inode->i_size)
 		reiserfs_truncate_failed_write(inode);
@@ -3252,21 +3262,21 @@ static ssize_t reiserfs_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 	return ret;
 }
 
-int reiserfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+int reiserfs_setattr(struct user_namespace *mnt_userns, struct dentry *dentry,
 		     struct iattr *attr)
 {
 	struct inode *inode = d_inode(dentry);
 	unsigned int ia_valid;
 	int error;
 
-	error = setattr_prepare(&nop_mnt_idmap, dentry, attr);
+	error = setattr_prepare(&init_user_ns, dentry, attr);
 	if (error)
 		return error;
 
 	/* must be turned off for recursive notify_change calls */
 	ia_valid = attr->ia_valid &= ~(ATTR_KILL_SUID|ATTR_KILL_SGID);
 
-	if (is_quota_modification(&nop_mnt_idmap, inode, attr)) {
+	if (is_quota_modification(mnt_userns, inode, attr)) {
 		error = dquot_initialize(inode);
 		if (error)
 			return error;
@@ -3349,7 +3359,7 @@ int reiserfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 		reiserfs_write_unlock(inode->i_sb);
 		if (error)
 			goto out;
-		error = dquot_transfer(&nop_mnt_idmap, inode, attr);
+		error = dquot_transfer(mnt_userns, inode, attr);
 		reiserfs_write_lock(inode->i_sb);
 		if (error) {
 			journal_end(&th);
@@ -3388,13 +3398,13 @@ int reiserfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 	}
 
 	if (!error) {
-		setattr_copy(&nop_mnt_idmap, inode, attr);
+		setattr_copy(&init_user_ns, inode, attr);
 		mark_inode_dirty(inode);
 	}
 
 	if (!error && reiserfs_posixacl(inode->i_sb)) {
 		if (attr->ia_valid & ATTR_MODE)
-			error = reiserfs_acl_chmod(dentry);
+			error = reiserfs_acl_chmod(inode);
 	}
 
 out:
@@ -3402,7 +3412,7 @@ out:
 }
 
 const struct address_space_operations reiserfs_address_space_operations = {
-	.writepages = reiserfs_writepages,
+	.writepage = reiserfs_writepage,
 	.read_folio = reiserfs_read_folio,
 	.readahead = reiserfs_readahead,
 	.release_folio = reiserfs_release_folio,
@@ -3412,5 +3422,4 @@ const struct address_space_operations reiserfs_address_space_operations = {
 	.bmap = reiserfs_aop_bmap,
 	.direct_IO = reiserfs_direct_IO,
 	.dirty_folio = reiserfs_dirty_folio,
-	.migrate_folio = buffer_migrate_folio,
 };

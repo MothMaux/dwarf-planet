@@ -401,9 +401,9 @@ static int ccs811_reset(struct i2c_client *client)
 	return 0;
 }
 
-static int ccs811_probe(struct i2c_client *client)
+static int ccs811_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct iio_dev *indio_dev;
 	struct ccs811_data *data;
 	int ret;
@@ -551,7 +551,7 @@ static void ccs811_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id ccs811_id[] = {
-	{ "ccs811" },
+	{"ccs811", 0},
 	{	}
 };
 MODULE_DEVICE_TABLE(i2c, ccs811_id);

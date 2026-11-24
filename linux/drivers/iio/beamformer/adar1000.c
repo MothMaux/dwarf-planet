@@ -2635,8 +2635,8 @@ MODULE_DEVICE_TABLE(of, adar1000_of_match);
 static const struct spi_device_id adar1000_id[] = {
 	{ "adar1000" },
 	{ }
-};
-MODULE_DEVICE_TABLE(spi, adar1000_id);
+}
+MODULE_DEVICE_TABLE(spi, adar1000_id_table);
 
 static struct spi_driver adar1000_driver = {
 	.driver = {

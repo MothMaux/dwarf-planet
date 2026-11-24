@@ -481,6 +481,7 @@ static inline int kvmppc_e500_shadow_map(struct kvmppc_vcpu_e500 *vcpu_e500,
 		if (pte_present(pte)) {
 			wimg = (pte_val(pte) >> PTE_WIMGE_SHIFT) &
 				MAS2_WIMGE_MASK;
+			local_irq_restore(flags);
 		} else {
 			local_irq_restore(flags);
 			pr_err_ratelimited("%s: pte not present: gfn %lx,pfn %lx\n",
@@ -489,9 +490,8 @@ static inline int kvmppc_e500_shadow_map(struct kvmppc_vcpu_e500 *vcpu_e500,
 			goto out;
 		}
 	}
-	local_irq_restore(flags);
-
 	kvmppc_e500_ref_setup(ref, gtlbe, pfn, wimg);
+
 	kvmppc_e500_setup_stlbe(&vcpu_e500->vcpu, gtlbe, tsize,
 				ref, gvaddr, stlbe);
 
@@ -623,7 +623,7 @@ void kvmppc_mmu_map(struct kvm_vcpu *vcpu, u64 eaddr, gpa_t gpaddr,
 
 #ifdef CONFIG_KVM_BOOKE_HV
 int kvmppc_load_last_inst(struct kvm_vcpu *vcpu,
-		enum instruction_fetch_type type, unsigned long *instr)
+		enum instruction_fetch_type type, u32 *instr)
 {
 	gva_t geaddr;
 	hpa_t addr;
@@ -713,7 +713,7 @@ int kvmppc_load_last_inst(struct kvm_vcpu *vcpu,
 }
 #else
 int kvmppc_load_last_inst(struct kvm_vcpu *vcpu,
-		enum instruction_fetch_type type, unsigned long *instr)
+		enum instruction_fetch_type type, u32 *instr)
 {
 	return EMULATE_AGAIN;
 }
@@ -745,6 +745,12 @@ bool kvm_test_age_gfn(struct kvm *kvm, struct kvm_gfn_range *range)
 {
 	/* XXX could be more clever ;) */
 	return false;
+}
+
+bool kvm_set_spte_gfn(struct kvm *kvm, struct kvm_gfn_range *range)
+{
+	/* The page will get remapped properly on its next fault */
+	return kvm_e500_mmu_unmap_gfn(kvm, range);
 }
 
 /*****************************************/

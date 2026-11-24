@@ -6,14 +6,14 @@
  * Author: Lars-Peter Clausen <lars@metafoo.de>
  */
 
-#include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
-
+#include <linux/gcd.h>
+#include <linux/of_gpio.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -35,6 +35,7 @@ struct adau1373_dai {
 struct adau1373 {
 	struct regmap *regmap;
 	struct adau1373_dai dais[3];
+	struct gpio_desc *gpio_sd;
 };
 
 #define ADAU1373_INPUT_MODE	0x00
@@ -836,7 +837,7 @@ static int adau1373_check_aif_clk(struct snd_soc_dapm_widget *source,
 	else
 		clk = "SYSCLK2";
 
-	return snd_soc_dapm_widget_name_cmp(source, clk) == 0;
+	return strcmp(source->name, clk) == 0;
 }
 
 static int adau1373_check_src(struct snd_soc_dapm_widget *source,
@@ -1453,7 +1454,7 @@ static const struct regmap_config adau1373_regmap_config = {
 	.volatile_reg = adau1373_register_volatile,
 	.max_register = ADAU1373_SOFT_RESET,
 
-	.cache_type = REGCACHE_MAPLE,
+	.cache_type = REGCACHE_RBTREE,
 	.reg_defaults = adau1373_reg_defaults,
 	.num_reg_defaults = ARRAY_SIZE(adau1373_reg_defaults),
 };
@@ -1476,17 +1477,16 @@ static const struct snd_soc_component_driver adau1373_component_driver = {
 static int adau1373_i2c_probe(struct i2c_client *client)
 {
 	struct adau1373 *adau1373;
-	struct gpio_desc *gpio;
 	int ret;
 
 	adau1373 = devm_kzalloc(&client->dev, sizeof(*adau1373), GFP_KERNEL);
 	if (!adau1373)
 		return -ENOMEM;
 
-	gpio = devm_gpiod_get_optional(&client->dev, "shutdown",
-				       GPIOD_OUT_HIGH);
-	if (IS_ERR(gpio))
-		return PTR_ERR(gpio);
+	adau1373->gpio_sd = devm_gpiod_get_optional(&client->dev, "shutdown",
+						    GPIOD_OUT_HIGH);
+	if (IS_ERR(adau1373->gpio_sd))
+		return PTR_ERR(adau1373->gpio_sd);
 
 	adau1373->regmap = devm_regmap_init_i2c(client,
 		&adau1373_regmap_config);
@@ -1504,7 +1504,7 @@ static int adau1373_i2c_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id adau1373_i2c_id[] = {
-	{ "adau1373" },
+	{ "adau1373", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adau1373_i2c_id);
@@ -1513,7 +1513,7 @@ static struct i2c_driver adau1373_i2c_driver = {
 	.driver = {
 		.name = "adau1373",
 	},
-	.probe = adau1373_i2c_probe,
+	.probe_new = adau1373_i2c_probe,
 	.id_table = adau1373_i2c_id,
 };
 

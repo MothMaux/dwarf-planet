@@ -25,13 +25,12 @@ properties:
       - ltc2387-16-x4
       - ltc2387-18
       - ltc2387-18-x4
-      - adaq23875
-      - adaq23876
-      - adaq23878
+      - adaq2387-16
+      - adaq2387-18
 
   clocks:
-    description: Sampling clock
     maxItems: 1
+      Sampling clock
 
   dmas:
     maxItems: 1

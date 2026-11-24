@@ -207,7 +207,8 @@ __xhls_get_pad_format(struct xhls_device *xhls,
 
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		format = v4l2_subdev_state_get_format(sd_state, pad);
+		format = v4l2_subdev_get_try_format(&xhls->xvip.subdev,
+						    sd_state, pad);
 		break;
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		format = &xhls->formats[pad];
@@ -277,10 +278,10 @@ static int xhls_open(struct v4l2_subdev *subdev, struct v4l2_subdev_fh *fh)
 	struct v4l2_mbus_framefmt *format;
 
 	/* Initialize with default formats */
-	format = v4l2_subdev_state_get_format(fh->state, XVIP_PAD_SINK);
+	format = v4l2_subdev_get_try_format(subdev, fh->state, XVIP_PAD_SINK);
 	*format = xhls->default_formats[XVIP_PAD_SINK];
 
-	format = v4l2_subdev_state_get_format(fh->state, XVIP_PAD_SOURCE);
+	format = v4l2_subdev_get_try_format(subdev, fh->state, XVIP_PAD_SOURCE);
 	*format = xhls->default_formats[XVIP_PAD_SOURCE];
 
 	return 0;
@@ -432,7 +433,7 @@ static int xhls_probe(struct platform_device *pdev)
 	v4l2_subdev_init(subdev, &xhls_ops);
 	subdev->dev = &pdev->dev;
 	subdev->internal_ops = &xhls_internal_ops;
-	strscpy(subdev->name, dev_name(&pdev->dev), sizeof(subdev->name));
+	strlcpy(subdev->name, dev_name(&pdev->dev), sizeof(subdev->name));
 	v4l2_set_subdevdata(subdev, xhls);
 	subdev->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
@@ -468,7 +469,7 @@ error:
 	return ret;
 }
 
-static void xhls_remove(struct platform_device *pdev)
+static int xhls_remove(struct platform_device *pdev)
 {
 	struct xhls_device *xhls = platform_get_drvdata(pdev);
 	struct v4l2_subdev *subdev = &xhls->xvip.subdev;
@@ -478,6 +479,8 @@ static void xhls_remove(struct platform_device *pdev)
 	media_entity_cleanup(&subdev->entity);
 
 	xvip_cleanup_resources(&xhls->xvip);
+
+	return 0;
 }
 
 static const struct of_device_id xhls_of_id_table[] = {
@@ -499,4 +502,4 @@ module_platform_driver(xhls_driver);
 
 MODULE_AUTHOR("Laurent Pinchart <laurent.pinchart@ideasonboard.com>");
 MODULE_DESCRIPTION("Xilinx HLS Core Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

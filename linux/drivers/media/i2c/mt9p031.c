@@ -15,7 +15,6 @@
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/log2.h>
-#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_graph.h>
@@ -113,6 +112,11 @@
 #define MT9P031_TEST_PATTERN_RED			0xa2
 #define MT9P031_TEST_PATTERN_BLUE			0xa3
 
+enum mt9p031_model {
+	MT9P031_MODEL_COLOR,
+	MT9P031_MODEL_MONOCHROME,
+};
+
 struct mt9p031 {
 	struct v4l2_subdev subdev;
 	struct media_pad pad;
@@ -125,7 +129,7 @@ struct mt9p031 {
 	struct clk *clk;
 	struct regulator_bulk_data regulators[3];
 
-	u32 code;
+	enum mt9p031_model model;
 	struct aptina_pll pll;
 	unsigned int clk_div;
 	bool use_pll;
@@ -303,7 +307,6 @@ static inline int mt9p031_pll_disable(struct mt9p031 *mt9p031)
 
 static int mt9p031_power_on(struct mt9p031 *mt9p031)
 {
-	unsigned long rate, delay;
 	int ret;
 
 	/* Ensure RESET_BAR is active */
@@ -331,12 +334,7 @@ static int mt9p031_power_on(struct mt9p031 *mt9p031)
 	/* Now RESET_BAR must be high */
 	if (mt9p031->reset) {
 		gpiod_set_value(mt9p031->reset, 0);
-		/* Wait 850000 EXTCLK cycles before de-asserting reset. */
-		rate = clk_get_rate(mt9p031->clk);
-		if (!rate)
-			rate = 6000000;	/* Slowest supported clock, 6 MHz */
-		delay = DIV_ROUND_UP(850000 * 1000, rate);
-		msleep(delay);
+		usleep_range(1000, 2000);
 	}
 
 	return 0;
@@ -545,7 +543,8 @@ __mt9p031_get_pad_format(struct mt9p031 *mt9p031,
 {
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		return v4l2_subdev_state_get_format(sd_state, pad);
+		return v4l2_subdev_get_try_format(&mt9p031->subdev, sd_state,
+						  pad);
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		return &mt9p031->format;
 	default:
@@ -560,7 +559,8 @@ __mt9p031_get_pad_crop(struct mt9p031 *mt9p031,
 {
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		return v4l2_subdev_state_get_crop(sd_state, pad);
+		return v4l2_subdev_get_try_crop(&mt9p031->subdev, sd_state,
+						pad);
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		return &mt9p031->crop;
 	default:
@@ -692,8 +692,8 @@ static int mt9p031_set_selection(struct v4l2_subdev *subdev,
 	return 0;
 }
 
-static int mt9p031_init_state(struct v4l2_subdev *subdev,
-			      struct v4l2_subdev_state *sd_state)
+static int mt9p031_init_cfg(struct v4l2_subdev *subdev,
+			    struct v4l2_subdev_state *sd_state)
 {
 	struct mt9p031 *mt9p031 = to_mt9p031(subdev);
 	struct v4l2_mbus_framefmt *format;
@@ -702,13 +702,19 @@ static int mt9p031_init_state(struct v4l2_subdev *subdev,
 					     V4L2_SUBDEV_FORMAT_TRY;
 
 	crop = __mt9p031_get_pad_crop(mt9p031, sd_state, 0, which);
+	v4l2_subdev_get_try_crop(subdev, sd_state, 0);
 	crop->left = MT9P031_COLUMN_START_DEF;
 	crop->top = MT9P031_ROW_START_DEF;
 	crop->width = MT9P031_WINDOW_WIDTH_DEF;
 	crop->height = MT9P031_WINDOW_HEIGHT_DEF;
 
 	format = __mt9p031_get_pad_format(mt9p031, sd_state, 0, which);
-	format->code = mt9p031->code;
+
+	if (mt9p031->model == MT9P031_MODEL_MONOCHROME)
+		format->code = MEDIA_BUS_FMT_Y12_1X12;
+	else
+		format->code = MEDIA_BUS_FMT_SGRBG12_1X12;
+
 	format->width = MT9P031_WINDOW_WIDTH_DEF;
 	format->height = MT9P031_WINDOW_HEIGHT_DEF;
 	format->field = V4L2_FIELD_NONE;
@@ -1032,6 +1038,7 @@ static const struct v4l2_subdev_video_ops mt9p031_subdev_video_ops = {
 };
 
 static const struct v4l2_subdev_pad_ops mt9p031_subdev_pad_ops = {
+	.init_cfg = mt9p031_init_cfg,
 	.enum_mbus_code = mt9p031_enum_mbus_code,
 	.enum_frame_size = mt9p031_enum_frame_size,
 	.get_fmt = mt9p031_get_format,
@@ -1047,7 +1054,6 @@ static const struct v4l2_subdev_ops mt9p031_subdev_ops = {
 };
 
 static const struct v4l2_subdev_internal_ops mt9p031_subdev_internal_ops = {
-	.init_state = mt9p031_init_state,
 	.registered = mt9p031_registered,
 	.open = mt9p031_open,
 	.close = mt9p031_close,
@@ -1069,7 +1075,7 @@ mt9p031_get_pdata(struct i2c_client *client)
 	if (!IS_ENABLED(CONFIG_OF) || !client->dev.of_node)
 		return client->dev.platform_data;
 
-	np = of_graph_get_endpoint_by_regs(client->dev.of_node, 0, -1);
+	np = of_graph_get_next_endpoint(client->dev.of_node, NULL);
 	if (!np)
 		return NULL;
 
@@ -1091,7 +1097,8 @@ done:
 	return pdata;
 }
 
-static int mt9p031_probe(struct i2c_client *client)
+static int mt9p031_probe(struct i2c_client *client,
+			 const struct i2c_device_id *did)
 {
 	struct mt9p031_platform_data *pdata = mt9p031_get_pdata(client);
 	struct i2c_adapter *adapter = client->adapter;
@@ -1117,7 +1124,7 @@ static int mt9p031_probe(struct i2c_client *client)
 	mt9p031->pdata = pdata;
 	mt9p031->output_control	= MT9P031_OUTPUT_CONTROL_DEF;
 	mt9p031->mode2 = MT9P031_READ_MODE_2_ROW_BLC;
-	mt9p031->code = (uintptr_t)i2c_get_match_data(client);
+	mt9p031->model = did->driver_data;
 
 	mt9p031->regulators[0].supply = "vdd";
 	mt9p031->regulators[1].supply = "vdd_io";
@@ -1179,7 +1186,7 @@ static int mt9p031_probe(struct i2c_client *client)
 
 	mt9p031->subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
-	ret = mt9p031_init_state(&mt9p031->subdev, NULL);
+	ret = mt9p031_init_cfg(&mt9p031->subdev, NULL);
 	if (ret)
 		goto done;
 
@@ -1214,24 +1221,26 @@ static void mt9p031_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id mt9p031_id[] = {
-	{ "mt9p006", MEDIA_BUS_FMT_SGRBG12_1X12 },
-	{ "mt9p031", MEDIA_BUS_FMT_SGRBG12_1X12 },
-	{ "mt9p031m", MEDIA_BUS_FMT_Y12_1X12 },
-	{ /* sentinel */ }
+	{ "mt9p006", MT9P031_MODEL_COLOR },
+	{ "mt9p031", MT9P031_MODEL_COLOR },
+	{ "mt9p031m", MT9P031_MODEL_MONOCHROME },
+	{ }
 };
 MODULE_DEVICE_TABLE(i2c, mt9p031_id);
 
+#if IS_ENABLED(CONFIG_OF)
 static const struct of_device_id mt9p031_of_match[] = {
-	{ .compatible = "aptina,mt9p006", .data = (void *)MEDIA_BUS_FMT_SGRBG12_1X12 },
-	{ .compatible = "aptina,mt9p031", .data = (void *)MEDIA_BUS_FMT_SGRBG12_1X12 },
-	{ .compatible = "aptina,mt9p031m", .data = (void *)MEDIA_BUS_FMT_Y12_1X12 },
-	{ /* sentinel */ }
+	{ .compatible = "aptina,mt9p006", },
+	{ .compatible = "aptina,mt9p031", },
+	{ .compatible = "aptina,mt9p031m", },
+	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, mt9p031_of_match);
+#endif
 
 static struct i2c_driver mt9p031_i2c_driver = {
 	.driver = {
-		.of_match_table = mt9p031_of_match,
+		.of_match_table = of_match_ptr(mt9p031_of_match),
 		.name = "mt9p031",
 	},
 	.probe          = mt9p031_probe,

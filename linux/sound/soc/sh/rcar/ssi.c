@@ -17,8 +17,6 @@
  */
 
 #include <sound/simple_card_utils.h>
-#include <linux/of.h>
-#include <linux/of_irq.h>
 #include <linux/delay.h>
 #include "rsnd.h"
 #define RSND_SSI_NAME_SIZE 16
@@ -305,14 +303,15 @@ static int rsnd_ssi_master_clk_start(struct rsnd_mod *mod,
 		return 0;
 	}
 
-	ret = -EIO;
 	main_rate = rsnd_ssi_clk_query(rdai, rate, chan, &idx);
-	if (!main_rate)
-		goto rate_err;
+	if (!main_rate) {
+		dev_err(dev, "unsupported clock rate\n");
+		return -EIO;
+	}
 
 	ret = rsnd_adg_ssi_clk_try_start(mod, main_rate);
 	if (ret < 0)
-		goto rate_err;
+		return ret;
 
 	/*
 	 * SSI clock will be output contiguously
@@ -334,11 +333,6 @@ static int rsnd_ssi_master_clk_start(struct rsnd_mod *mod,
 		rsnd_mod_name(mod), chan, rate);
 
 	return 0;
-
-rate_err:
-	dev_err(dev, "unsupported clock rate (%d)\n", rate);
-
-	return ret;
 }
 
 static void rsnd_ssi_master_clk_stop(struct rsnd_mod *mod,
@@ -707,7 +701,7 @@ rsnd_ssi_interrupt_out:
 	spin_unlock(&priv->lock);
 
 	if (elapsed)
-		snd_pcm_period_elapsed(io->substream);
+		rsnd_dai_period_elapsed(io);
 
 	if (stop)
 		snd_pcm_stop_xrun(io->substream);
@@ -1050,7 +1044,7 @@ static void rsnd_ssi_debug_info(struct seq_file *m,
 	seq_printf(m, "chan:            %d\n",		ssi->chan);
 	seq_printf(m, "user:            %d\n",		ssi->usrcnt);
 
-	rsnd_debugfs_mod_reg_show(m, mod, RSND_BASE_SSI,
+	rsnd_debugfs_mod_reg_show(m, mod, RSND_GEN2_SSI,
 				  rsnd_mod_id(mod) * 0x40, 0x40);
 }
 #define DEBUG_INFO .debug_info = rsnd_ssi_debug_info
@@ -1214,10 +1208,10 @@ int rsnd_ssi_probe(struct rsnd_priv *priv)
 			goto rsnd_ssi_probe_done;
 		}
 
-		if (of_property_read_bool(np, "shared-pin"))
+		if (of_get_property(np, "shared-pin", NULL))
 			rsnd_flags_set(ssi, RSND_SSI_CLK_PIN_SHARE);
 
-		if (of_property_read_bool(np, "no-busif"))
+		if (of_get_property(np, "no-busif", NULL))
 			rsnd_flags_set(ssi, RSND_SSI_NO_BUSIF);
 
 		ssi->irq = irq_of_parse_and_map(np, 0);

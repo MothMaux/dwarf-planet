@@ -1,75 +1,79 @@
 [
     {
         "BriefDescription": "Execution stalls while L3 cache miss demand load is outstanding.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "CounterMask": "6",
         "EventCode": "0xa3",
         "EventName": "CYCLE_ACTIVITY.STALLS_L3_MISS",
+        "PEBScounters": "0,1,2,3",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x6"
     },
     {
         "BriefDescription": "Number of machine clears due to memory ordering conflicts.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc3",
         "EventName": "MACHINE_CLEARS.MEMORY_ORDERING",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of Machine Clears detected dye to memory ordering. Memory Ordering Machine Clears may apply when a memory read may not conform to the memory ordering rules of the x86 architecture",
         "SampleAfterValue": "100003",
+        "Speculative": "1",
         "UMask": "0x2"
     },
     {
         "BriefDescription": "Cycles while L1 cache miss demand load is outstanding.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "CounterMask": "2",
         "EventCode": "0x47",
         "EventName": "MEMORY_ACTIVITY.CYCLES_L1D_MISS",
+        "PEBScounters": "0,1,2,3",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x2"
     },
     {
         "BriefDescription": "Execution stalls while L1 cache miss demand load is outstanding.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "CounterMask": "3",
         "EventCode": "0x47",
         "EventName": "MEMORY_ACTIVITY.STALLS_L1D_MISS",
+        "PEBScounters": "0,1,2,3",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x3"
     },
     {
-        "BriefDescription": "Execution stalls while L2 cache miss demand cacheable load request is outstanding.",
+        "BriefDescription": "MEMORY_ACTIVITY.STALLS_L2_MISS",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "CounterMask": "5",
         "EventCode": "0x47",
         "EventName": "MEMORY_ACTIVITY.STALLS_L2_MISS",
-        "PublicDescription": "Execution stalls while L2 cache miss demand cacheable load request is outstanding (will not count for uncacheable demand requests e.g. bus lock).",
+        "PEBScounters": "0,1,2,3",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x5"
     },
     {
-        "BriefDescription": "Execution stalls while L3 cache miss demand cacheable load request is outstanding.",
+        "BriefDescription": "MEMORY_ACTIVITY.STALLS_L3_MISS",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "CounterMask": "9",
         "EventCode": "0x47",
         "EventName": "MEMORY_ACTIVITY.STALLS_L3_MISS",
-        "PublicDescription": "Execution stalls while L3 cache miss demand cacheable load request is outstanding (will not count for uncacheable demand requests e.g. bus lock).",
+        "PEBScounters": "0,1,2,3",
         "SampleAfterValue": "1000003",
+        "Speculative": "1",
         "UMask": "0x9"
     },
     {
-        "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 1024 cycles.",
-        "Counter": "1,2,3,4,5,6,7",
-        "Data_LA": "1",
-        "EventCode": "0xcd",
-        "EventName": "MEM_TRANS_RETIRED.LOAD_LATENCY_GT_1024",
-        "MSRIndex": "0x3F6",
-        "MSRValue": "0x400",
-        "PEBS": "2",
-        "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 1024 cycles.  Reported latency may be longer than just the memory latency.",
-        "SampleAfterValue": "53",
-        "UMask": "0x1"
-    },
-    {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 128 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -77,12 +81,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x80",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 128 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "1009",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 16 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -90,12 +97,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x10",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 16 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "20011",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 256 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -103,12 +113,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x100",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 256 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "503",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 32 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -116,12 +129,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x20",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 32 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "100007",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 4 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -129,12 +145,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x4",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 4 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "100003",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 512 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -142,12 +161,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x200",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 512 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "101",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 64 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -155,12 +177,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x40",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 64 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "2003",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 8 cycles.",
+        "CollectPEBSRecord": "2",
         "Counter": "1,2,3,4,5,6,7",
         "Data_LA": "1",
         "EventCode": "0xcd",
@@ -168,13 +193,15 @@
         "MSRIndex": "0x3F6",
         "MSRValue": "0x8",
         "PEBS": "2",
+        "PEBScounters": "1,2,3,4,5,6,7",
         "PublicDescription": "Counts randomly selected loads when the latency from first dispatch to completion is greater than 8 cycles.  Reported latency may be longer than just the memory latency.",
         "SampleAfterValue": "50021",
+        "TakenAlone": "1",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Retired memory store access operations. A PDist event for PEBS Store Latency Facility.",
-        "Counter": "0",
+        "CollectPEBSRecord": "2",
         "Data_LA": "1",
         "EventCode": "0xcd",
         "EventName": "MEM_TRANS_RETIRED.STORE_SAMPLE",
@@ -190,6 +217,7 @@
         "EventName": "OCR.DEMAND_CODE_RD.L3_MISS",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3FBFC00004",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -200,6 +228,7 @@
         "EventName": "OCR.DEMAND_DATA_RD.L3_MISS",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3FBFC00001",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -210,6 +239,7 @@
         "EventName": "OCR.DEMAND_RFO.L3_MISS",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3F3FC00002",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -220,6 +250,7 @@
         "EventName": "OCR.HWPF_L3.L3_MISS",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x94002380",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -230,6 +261,7 @@
         "EventName": "OCR.HWPF_L3.L3_MISS_LOCAL",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x84002380",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -240,6 +272,7 @@
         "EventName": "OCR.READS_TO_CORE.L3_MISS",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3F3FC04477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -250,6 +283,7 @@
         "EventName": "OCR.READS_TO_CORE.L3_MISS_LOCAL",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x3F04C04477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -260,6 +294,7 @@
         "EventName": "OCR.READS_TO_CORE.L3_MISS_LOCAL_SOCKET",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x70CC04477",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -270,6 +305,7 @@
         "EventName": "OCR.STREAMING_WR.L3_MISS",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x94000800",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
@@ -280,115 +316,121 @@
         "EventName": "OCR.STREAMING_WR.L3_MISS_LOCAL",
         "MSRIndex": "0x1a6,0x1a7",
         "MSRValue": "0x84000800",
+        "Offcore": "1",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
     {
-        "BriefDescription": "Counts demand data read requests that miss the L3 cache.",
-        "Counter": "0,1,2,3",
-        "EventCode": "0x21",
-        "EventName": "OFFCORE_REQUESTS.L3_MISS_DEMAND_DATA_RD",
-        "SampleAfterValue": "100003",
-        "UMask": "0x10"
-    },
-    {
-        "BriefDescription": "For every cycle, increments by the number of demand data read requests pending that are known to have missed the L3 cache.",
-        "Counter": "0,1,2,3",
-        "EventCode": "0x20",
-        "EventName": "OFFCORE_REQUESTS_OUTSTANDING.L3_MISS_DEMAND_DATA_RD",
-        "PublicDescription": "For every cycle, increments by the number of demand data read requests pending that are known to have missed the L3 cache.  Note that this does not capture all elapsed cycles while requests are outstanding - only cycles from when the requests were known by the requesting core to have missed the L3 cache.",
-        "SampleAfterValue": "2000003",
-        "UMask": "0x10"
-    },
-    {
         "BriefDescription": "Number of times an RTM execution aborted.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc9",
         "EventName": "RTM_RETIRED.ABORTED",
-        "PEBS": "1",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of times RTM abort was triggered.",
         "SampleAfterValue": "100003",
         "UMask": "0x4"
     },
     {
         "BriefDescription": "Number of times an RTM execution aborted due to none of the previous 4 categories (e.g. interrupt)",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc9",
         "EventName": "RTM_RETIRED.ABORTED_EVENTS",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of times an RTM execution aborted due to none of the previous 4 categories (e.g. interrupt).",
         "SampleAfterValue": "100003",
         "UMask": "0x80"
     },
     {
         "BriefDescription": "Number of times an RTM execution aborted due to various memory events (e.g. read/write capacity and conflicts)",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc9",
         "EventName": "RTM_RETIRED.ABORTED_MEM",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of times an RTM execution aborted due to various memory events (e.g. read/write capacity and conflicts).",
         "SampleAfterValue": "100003",
         "UMask": "0x8"
     },
     {
         "BriefDescription": "Number of times an RTM execution aborted due to incompatible memory type",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc9",
         "EventName": "RTM_RETIRED.ABORTED_MEMTYPE",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of times an RTM execution aborted due to incompatible memory type.",
         "SampleAfterValue": "100003",
         "UMask": "0x40"
     },
     {
         "BriefDescription": "Number of times an RTM execution aborted due to HLE-unfriendly instructions",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc9",
         "EventName": "RTM_RETIRED.ABORTED_UNFRIENDLY",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of times an RTM execution aborted due to HLE-unfriendly instructions.",
         "SampleAfterValue": "100003",
         "UMask": "0x20"
     },
     {
         "BriefDescription": "Number of times an RTM execution successfully committed",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc9",
         "EventName": "RTM_RETIRED.COMMIT",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of times RTM commit succeeded.",
         "SampleAfterValue": "100003",
         "UMask": "0x2"
     },
     {
         "BriefDescription": "Number of times an RTM execution started.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3,4,5,6,7",
         "EventCode": "0xc9",
         "EventName": "RTM_RETIRED.START",
+        "PEBScounters": "0,1,2,3,4,5,6,7",
         "PublicDescription": "Counts the number of times we entered an RTM region. Does not count nested transactions.",
         "SampleAfterValue": "100003",
         "UMask": "0x1"
     },
     {
         "BriefDescription": "Speculatively counts the number of TSX aborts due to a data capacity limitation for transactional reads",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "EventCode": "0x54",
         "EventName": "TX_MEM.ABORT_CAPACITY_READ",
+        "PEBScounters": "0,1,2,3",
         "PublicDescription": "Speculatively counts the number of Transactional Synchronization Extensions (TSX) aborts due to a data capacity limitation for transactional reads",
         "SampleAfterValue": "100003",
+        "Speculative": "1",
         "UMask": "0x80"
     },
     {
         "BriefDescription": "Speculatively counts the number of TSX aborts due to a data capacity limitation for transactional writes.",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "EventCode": "0x54",
         "EventName": "TX_MEM.ABORT_CAPACITY_WRITE",
+        "PEBScounters": "0,1,2,3",
         "PublicDescription": "Speculatively counts the number of Transactional Synchronization Extensions (TSX) aborts due to a data capacity limitation for transactional writes.",
         "SampleAfterValue": "100003",
+        "Speculative": "1",
         "UMask": "0x2"
     },
     {
         "BriefDescription": "Number of times a transactional abort was signaled due to a data conflict on a transactionally accessed address",
+        "CollectPEBSRecord": "2",
         "Counter": "0,1,2,3",
         "EventCode": "0x54",
         "EventName": "TX_MEM.ABORT_CONFLICT",
+        "PEBScounters": "0,1,2,3",
         "PublicDescription": "Counts the number of times a TSX line had a cache conflict.",
         "SampleAfterValue": "100003",
+        "Speculative": "1",
         "UMask": "0x1"
     }
 ]

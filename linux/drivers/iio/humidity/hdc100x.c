@@ -351,7 +351,8 @@ static const struct iio_info hdc100x_info = {
 	.attrs = &hdc100x_attribute_group,
 };
 
-static int hdc100x_probe(struct i2c_client *client)
+static int hdc100x_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct iio_dev *indio_dev;
 	struct hdc100x_data *data;
@@ -396,12 +397,12 @@ static int hdc100x_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id hdc100x_id[] = {
-	{ "hdc100x" },
-	{ "hdc1000" },
-	{ "hdc1008" },
-	{ "hdc1010" },
-	{ "hdc1050" },
-	{ "hdc1080" },
+	{ "hdc100x", 0 },
+	{ "hdc1000", 0 },
+	{ "hdc1008", 0 },
+	{ "hdc1010", 0 },
+	{ "hdc1050", 0 },
+	{ "hdc1080", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, hdc100x_id);

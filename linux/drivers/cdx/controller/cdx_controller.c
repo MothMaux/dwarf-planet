@@ -5,8 +5,7 @@
  * Copyright (C) 2022-2023, Advanced Micro Devices, Inc.
  */
 
-#include <linux/mod_devicetable.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/cdx/cdx_bus.h>
 #include <linux/irqdomain.h>
@@ -34,16 +33,6 @@ static const struct cdx_mcdi_ops mcdi_ops = {
 	.mcdi_request = cdx_mcdi_request,
 };
 
-static int cdx_bus_enable(struct cdx_controller *cdx, u8 bus_num)
-{
-	return cdx_mcdi_bus_enable(cdx->priv, bus_num);
-}
-
-static int cdx_bus_disable(struct cdx_controller *cdx, u8 bus_num)
-{
-	return cdx_mcdi_bus_disable(cdx->priv, bus_num);
-}
-
 void cdx_rpmsg_post_probe(struct cdx_controller *cdx)
 {
 	/* Register CDX controller with CDX bus driver */
@@ -55,6 +44,21 @@ void cdx_rpmsg_pre_remove(struct cdx_controller *cdx)
 {
 	cdx_unregister_controller(cdx);
 	cdx_mcdi_wait_for_quiescence(cdx->priv, MCDI_RPC_TIMEOUT);
+}
+
+static int cdx_bus_enable(struct cdx_controller *cdx, bool enable)
+{
+	int ret;
+
+	if (enable)
+		ret = cdx_mcdi_bus_enable(cdx->priv, 0);
+	else
+		ret = cdx_mcdi_bus_disable(cdx->priv, 0);
+
+	if (!ret)
+		cdx->enabled = enable;
+
+	return ret;
 }
 
 static int cdx_configure_device(struct cdx_controller *cdx,
@@ -72,17 +76,19 @@ static int cdx_configure_device(struct cdx_controller *cdx,
 		data = dev_config->msi.data;
 		addr = dev_config->msi.addr;
 
-		ret = cdx_mcdi_write_msi(cdx->priv, bus_num, dev_num, msi_index, addr, data);
+		ret = cdx_mcdi_write_msi(cdx->priv, bus_num, dev_num,
+					 msi_index, addr, data);
 		break;
 	case CDX_DEV_RESET_CONF:
 		ret = cdx_mcdi_reset_device(cdx->priv, bus_num, dev_num);
 		break;
 	case CDX_DEV_BUS_MASTER_CONF:
 		ret = cdx_mcdi_bus_master_enable(cdx->priv, bus_num, dev_num,
-						 dev_config->bus_master_enable);
+						 dev_config->bme);
 		break;
 	case CDX_DEV_MSI_ENABLE:
-		ret = cdx_mcdi_msi_enable(cdx->priv, bus_num, dev_num, dev_config->msi_enable);
+		ret = cdx_mcdi_msi_enable(cdx->priv, bus_num, dev_num,
+					  dev_config->msi_enable);
 		break;
 	default:
 		ret = -EINVAL;
@@ -107,19 +113,24 @@ static int cdx_scan_devices(struct cdx_controller *cdx)
 	num_cdx_bus = (u8)ret;
 
 	for (bus_num = 0; bus_num < num_cdx_bus; bus_num++) {
-		struct device *bus_dev;
 		u8 num_cdx_dev;
 
-		/* Add the bus on cdx subsystem */
-		bus_dev = cdx_bus_add(cdx, bus_num);
-		if (!bus_dev)
+		ret = cdx_mcdi_bus_enable(cdx_mcdi, bus_num);
+		if (ret && ret != -EALREADY) {
+			dev_err(cdx->dev,
+				"CDX bus %d enable failed: %d\n", bus_num, ret);
 			continue;
+		}
 
 		/* MCDI FW Read: Fetch the number of devices present */
 		ret = cdx_mcdi_get_num_devs(cdx_mcdi, bus_num);
 		if (ret < 0) {
 			dev_err(cdx->dev,
 				"Get devices on CDX bus %d failed: %d\n", bus_num, ret);
+			ret = cdx_mcdi_bus_disable(cdx_mcdi, bus_num);
+			if (ret)
+				dev_err(cdx->dev,
+					"CDX bus %d disable failed: %d\n", bus_num, ret);
 			continue;
 		}
 		num_cdx_dev = (u8)ret;
@@ -137,7 +148,6 @@ static int cdx_scan_devices(struct cdx_controller *cdx)
 				continue;
 			}
 			dev_params.cdx = cdx;
-			dev_params.parent = bus_dev;
 
 			/* Add the device to the cdx bus */
 			ret = cdx_device_add(&dev_params);
@@ -156,8 +166,7 @@ static int cdx_scan_devices(struct cdx_controller *cdx)
 }
 
 static struct cdx_ops cdx_ops = {
-	.bus_enable		= cdx_bus_enable,
-	.bus_disable	= cdx_bus_disable,
+	.enable		= cdx_bus_enable,
 	.scan		= cdx_scan_devices,
 	.dev_configure	= cdx_configure_device,
 };
@@ -222,7 +231,7 @@ mcdi_init_fail:
 	return ret;
 }
 
-static void xlnx_cdx_remove(struct platform_device *pdev)
+static int xlnx_cdx_remove(struct platform_device *pdev)
 {
 	struct cdx_controller *cdx = platform_get_drvdata(pdev);
 	struct cdx_mcdi *cdx_mcdi = cdx->priv;
@@ -234,6 +243,8 @@ static void xlnx_cdx_remove(struct platform_device *pdev)
 
 	cdx_mcdi_finish(cdx_mcdi);
 	kfree(cdx_mcdi);
+
+	return 0;
 }
 
 static const struct of_device_id cdx_match_table[] = {
@@ -250,7 +261,7 @@ static struct platform_driver cdx_pdriver = {
 		   .of_match_table = cdx_match_table,
 		   },
 	.probe = xlnx_cdx_probe,
-	.remove_new = xlnx_cdx_remove,
+	.remove = xlnx_cdx_remove,
 };
 
 static int __init cdx_controller_init(void)
@@ -275,4 +286,3 @@ module_exit(cdx_controller_exit);
 MODULE_AUTHOR("AMD Inc.");
 MODULE_DESCRIPTION("CDX controller for AMD devices");
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS(CDX_BUS_CONTROLLER);

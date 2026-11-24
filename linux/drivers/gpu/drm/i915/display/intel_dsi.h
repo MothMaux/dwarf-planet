@@ -57,6 +57,9 @@ struct intel_dsi {
 		u16 phys;	/* ICL DSI */
 	};
 
+	/* if true, use HS mode, otherwise LP */
+	bool hs;
+
 	/* virtual channel */
 	int channel;
 
@@ -66,7 +69,7 @@ struct intel_dsi {
 	/* number of DSI lanes */
 	unsigned int lane_count;
 
-	/* i2c bus associated with the target device */
+	/* i2c bus associated with the slave device */
 	int i2c_bus_num;
 
 	/*
@@ -90,6 +93,7 @@ struct intel_dsi {
 	bool bgr_enabled;
 
 	u8 pixel_overlap;
+	u32 port_bits;
 	u32 bw_timer;
 	u32 dphy_reg;
 
@@ -169,7 +173,5 @@ enum drm_mode_status intel_dsi_mode_valid(struct drm_connector *connector,
 struct intel_dsi_host *intel_dsi_host_init(struct intel_dsi *intel_dsi,
 					   const struct mipi_dsi_host_ops *funcs,
 					   enum port port);
-void intel_dsi_wait_panel_power_cycle(struct intel_dsi *intel_dsi);
-void intel_dsi_shutdown(struct intel_encoder *encoder);
 
 #endif /* _INTEL_DSI_H */

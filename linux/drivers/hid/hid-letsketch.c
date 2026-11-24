@@ -41,7 +41,7 @@
 #include <linux/timer.h>
 #include <linux/usb.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include "hid-ids.h"
 
@@ -238,7 +238,7 @@ static int letsketch_probe(struct hid_device *hdev, const struct hid_device_id *
 	char buf[256];
 	int i, ret;
 
-	if (!hid_is_usb(hdev))
+	if (!hid_is_using_ll_driver(hdev, &usb_hid_driver))
 		return -ENODEV;
 
 	intf = to_usb_interface(hdev->dev.parent);
@@ -319,5 +319,4 @@ static struct hid_driver letsketch_driver = {
 module_hid_driver(letsketch_driver);
 
 MODULE_AUTHOR("Hans de Goede <hdegoede@redhat.com>");
-MODULE_DESCRIPTION("Driver for the LetSketch / VSON WP9620N drawing tablet");
 MODULE_LICENSE("GPL");

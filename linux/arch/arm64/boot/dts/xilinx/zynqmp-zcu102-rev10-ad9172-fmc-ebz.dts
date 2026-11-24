@@ -21,6 +21,11 @@
 			#size-cells = <0>;
 			reg = <0>;
 			/* HPC0_IIC */
+			ad7291@2f {
+				compatible = "adi,ad7291";
+				reg = <0x2f>;
+			};
+
 			eeprom@50 {
 				compatible = "at24,24c02";
 				reg = <0x50>;
@@ -38,11 +43,10 @@
 		#size-cells = <0x1>;
 		ranges = <0 0 0 0xffffffff>;
 
-		tx_dma: dma-controller@9c420000 {
+		tx_dma: tx-dmac@9c420000 {
+			#dma-cells = <1>;
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x9c420000 0x10000>;
-			#dma-cells = <1>;
-			dma-coherent;
 			interrupts = <0 108 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&zynqmp_clk 71>;
 		};

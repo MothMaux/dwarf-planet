@@ -64,7 +64,7 @@
 			xlnx,spi-mode = <0>;
 		};
 
-		rx_dma: dma-controller@7c420000 {
+		rx_dma: dma@7c420000 {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x7c420000 0x10000>;
 			#dma-cells = <1>;
@@ -74,7 +74,7 @@
 			clocks = <&clk_bus_0>;
 		};
 
-		tx_dma: dma-controller@7c430000 {
+		tx_dma: dma@7c430000  {
 			compatible = "adi,axi-dmac-1.00.a";
 			reg = <0x7c430000 0x10000>;
 			#dma-cells = <1>;
@@ -82,16 +82,6 @@
 			interrupt-parent = <&axi_intc>;
 			interrupts = <13 4>;
 			clocks = <&clk_bus_0>;
-		};
-
-		axi_data_offload_tx: axi-data-offload-0@7c460000 {
-			compatible = "adi,axi-data-offload-1.0.a";
-			reg = <0x7c460000 0x10000>;
-		};
-
-		axi_data_offload_rx: axi-data-offload-1@7c450000 {
-			compatible = "adi,axi-data-offload-1.0.a";
-			reg = <0x7c450000 0x10000>;
 		};
 
 		axi_ad9081_core_rx: axi-ad9081-rx-3@44a10000 {
@@ -117,7 +107,6 @@
 
 			plddrbypass-gpios = <&axi_gpio 61 0>;
 			adi,axi-pl-fifo-enable;
-			adi,axi-data-offload-connected = <&axi_data_offload_tx>;
 
 			jesd204-device;
 			#jesd204-cells = <2>;

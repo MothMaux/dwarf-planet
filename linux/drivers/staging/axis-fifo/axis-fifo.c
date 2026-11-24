@@ -15,8 +15,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/of.h>
-#include <linux/platform_device.h>
 #include <linux/wait.h>
 #include <linux/mutex.h>
 #include <linux/device.h>
@@ -34,6 +32,10 @@
 #include <linux/jiffies.h>
 #include <linux/miscdevice.h>
 
+#include <linux/of_address.h>
+#include <linux/of_device.h>
+#include <linux/of_platform.h>
+
 /* ----------------------------
  *       driver parameters
  * ----------------------------
@@ -42,6 +44,7 @@
 #define DRIVER_NAME "axis_fifo"
 
 #define READ_BUF_SIZE 128U /* read buffer length in words */
+#define WRITE_BUF_SIZE 128U /* write buffer length in words */
 
 /* ----------------------------
  *     IP register offsets
@@ -100,17 +103,17 @@
  *           globals
  * ----------------------------
  */
-static long read_timeout = 1000; /* ms to wait before read() times out */
-static long write_timeout = 1000; /* ms to wait before write() times out */
+static int read_timeout = 1000; /* ms to wait before read() times out */
+static int write_timeout = 1000; /* ms to wait before write() times out */
 
 /* ----------------------------
  * module command-line arguments
  * ----------------------------
  */
 
-module_param(read_timeout, long, 0444);
+module_param(read_timeout, int, 0444);
 MODULE_PARM_DESC(read_timeout, "ms to wait before blocking read() timing out; set to -1 for no timeout");
-module_param(write_timeout, long, 0444);
+module_param(write_timeout, int, 0444);
 MODULE_PARM_DESC(write_timeout, "ms to wait before blocking write() timing out; set to -1 for no timeout");
 
 /* ----------------------------
@@ -164,9 +167,14 @@ static ssize_t sysfs_read(struct device *dev, char *buf,
 {
 	struct axis_fifo *fifo = dev_get_drvdata(dev);
 	unsigned int read_val;
+	unsigned int len;
+	char tmp[32];
 
 	read_val = ioread32(fifo->base_addr + addr_offset);
-	return sysfs_emit(buf, "0x%x\n", read_val);
+	len =  snprintf(tmp, sizeof(tmp), "0x%x\n", read_val);
+	memcpy(buf, tmp, len);
+
+	return len;
 }
 
 static ssize_t isr_store(struct device *dev, struct device_attribute *attr,
@@ -375,8 +383,10 @@ static ssize_t axis_fifo_read(struct file *f, char __user *buf,
 		 */
 		mutex_lock(&fifo->read_lock);
 		ret = wait_event_interruptible_timeout(fifo->read_queue,
-						       ioread32(fifo->base_addr + XLLF_RDFO_OFFSET),
-						       read_timeout);
+			ioread32(fifo->base_addr + XLLF_RDFO_OFFSET),
+				 (read_timeout >= 0) ?
+				  msecs_to_jiffies(read_timeout) :
+				  MAX_SCHEDULE_TIMEOUT);
 
 		if (ret <= 0) {
 			if (ret == 0) {
@@ -391,28 +401,32 @@ static ssize_t axis_fifo_read(struct file *f, char __user *buf,
 	}
 
 	bytes_available = ioread32(fifo->base_addr + XLLF_RLR_OFFSET);
-	words_available = bytes_available / sizeof(u32);
 	if (!bytes_available) {
-		dev_err(fifo->dt_device, "received a packet of length 0\n");
+		dev_err(fifo->dt_device, "received a packet of length 0 - fifo core will be reset\n");
+		reset_ip_core(fifo);
 		ret = -EIO;
 		goto end_unlock;
 	}
 
 	if (bytes_available > len) {
-		dev_err(fifo->dt_device, "user read buffer too small (available bytes=%zu user buffer bytes=%zu)\n",
+		dev_err(fifo->dt_device, "user read buffer too small (available bytes=%zu user buffer bytes=%zu) - fifo core will be reset\n",
 			bytes_available, len);
+		reset_ip_core(fifo);
 		ret = -EINVAL;
-		goto err_flush_rx;
+		goto end_unlock;
 	}
 
 	if (bytes_available % sizeof(u32)) {
 		/* this probably can't happen unless IP
 		 * registers were previously mishandled
 		 */
-		dev_err(fifo->dt_device, "received a packet that isn't word-aligned\n");
+		dev_err(fifo->dt_device, "received a packet that isn't word-aligned - fifo core will be reset\n");
+		reset_ip_core(fifo);
 		ret = -EIO;
-		goto err_flush_rx;
+		goto end_unlock;
 	}
+
+	words_available = bytes_available / sizeof(u32);
 
 	/* read data into an intermediate buffer, copying the contents
 	 * to userspace when the buffer is full
@@ -425,23 +439,19 @@ static ssize_t axis_fifo_read(struct file *f, char __user *buf,
 			tmp_buf[i] = ioread32(fifo->base_addr +
 					      XLLF_RDFD_OFFSET);
 		}
-		words_available -= copy;
 
 		if (copy_to_user(buf + copied * sizeof(u32), tmp_buf,
 				 copy * sizeof(u32))) {
+			reset_ip_core(fifo);
 			ret = -EFAULT;
-			goto err_flush_rx;
+			goto end_unlock;
 		}
 
 		copied += copy;
+		words_available -= copy;
 	}
-	mutex_unlock(&fifo->read_lock);
 
-	return bytes_available;
-
-err_flush_rx:
-	while (words_available--)
-		ioread32(fifo->base_addr + XLLF_RDFD_OFFSET);
+	ret = bytes_available;
 
 end_unlock:
 	mutex_unlock(&fifo->read_lock);
@@ -469,8 +479,11 @@ static ssize_t axis_fifo_write(struct file *f, const char __user *buf,
 {
 	struct axis_fifo *fifo = (struct axis_fifo *)f->private_data;
 	unsigned int words_to_write;
-	u32 *txbuf;
+	unsigned int copied;
+	unsigned int copy;
+	unsigned int i;
 	int ret;
+	u32 tmp_buf[WRITE_BUF_SIZE];
 
 	if (len % sizeof(u32)) {
 		dev_err(fifo->dt_device,
@@ -486,17 +499,11 @@ static ssize_t axis_fifo_write(struct file *f, const char __user *buf,
 		return -EINVAL;
 	}
 
-	/*
-	 * In 'Store-and-Forward' mode, the maximum packet that can be
-	 * transmitted is limited by the size of the FIFO, which is
-	 * (C_TX_FIFO_DEPTH–4)*(data interface width/8) bytes.
-	 *
-	 * Do not attempt to send a packet larger than 'tx_fifo_depth - 4',
-	 * otherwise a 'Transmit Packet Overrun Error' interrupt will be
-	 * raised, which requires a reset of the TX circuit to recover.
-	 */
-	if (words_to_write > (fifo->tx_fifo_depth - 4))
+	if (words_to_write > fifo->tx_fifo_depth) {
+		dev_err(fifo->dt_device, "tried to write more words [%u] than slots in the fifo buffer [%u]\n",
+			words_to_write, fifo->tx_fifo_depth);
 		return -EINVAL;
+	}
 
 	if (fifo->write_flags & O_NONBLOCK) {
 		/*
@@ -519,9 +526,11 @@ static ssize_t axis_fifo_write(struct file *f, const char __user *buf,
 		 */
 		mutex_lock(&fifo->write_lock);
 		ret = wait_event_interruptible_timeout(fifo->write_queue,
-						       ioread32(fifo->base_addr + XLLF_TDFV_OFFSET)
-								>= words_to_write,
-						       write_timeout);
+			ioread32(fifo->base_addr + XLLF_TDFV_OFFSET)
+				 >= words_to_write,
+				 (write_timeout >= 0) ?
+				  msecs_to_jiffies(write_timeout) :
+				  MAX_SCHEDULE_TIMEOUT);
 
 		if (ret <= 0) {
 			if (ret == 0) {
@@ -535,20 +544,33 @@ static ssize_t axis_fifo_write(struct file *f, const char __user *buf,
 		}
 	}
 
-	txbuf = vmemdup_user(buf, len);
-	if (IS_ERR(txbuf)) {
-		ret = PTR_ERR(txbuf);
-		goto end_unlock;
+	/* write data from an intermediate buffer into the fifo IP, refilling
+	 * the buffer with userspace data as needed
+	 */
+	copied = 0;
+	while (words_to_write > 0) {
+		copy = min(words_to_write, WRITE_BUF_SIZE);
+
+		if (copy_from_user(tmp_buf, buf + copied * sizeof(u32),
+				   copy * sizeof(u32))) {
+			reset_ip_core(fifo);
+			ret = -EFAULT;
+			goto end_unlock;
+		}
+
+		for (i = 0; i < copy; i++)
+			iowrite32(tmp_buf[i], fifo->base_addr +
+				  XLLF_TDFD_OFFSET);
+
+		copied += copy;
+		words_to_write -= copy;
 	}
 
-	for (int i = 0; i < words_to_write; ++i)
-		iowrite32(txbuf[i], fifo->base_addr + XLLF_TDFD_OFFSET);
+	ret = copied * sizeof(u32);
 
 	/* write packet size to fifo */
-	iowrite32(len, fifo->base_addr + XLLF_TLR_OFFSET);
+	iowrite32(ret, fifo->base_addr + XLLF_TLR_OFFSET);
 
-	ret = len;
-	kvfree(txbuf);
 end_unlock:
 	mutex_unlock(&fifo->write_lock);
 
@@ -764,6 +786,9 @@ static int axis_fifo_parse_dt(struct axis_fifo *fifo)
 		goto end;
 	}
 
+	/* IP sets TDFV to fifo depth - 4 so we will do the same */
+	fifo->tx_fifo_depth -= 4;
+
 	ret = get_dts_property(fifo, "xlnx,use-rx-data", &fifo->has_rx_fifo);
 	if (ret) {
 		dev_err(fifo->dt_device, "missing xlnx,use-rx-data property\n");
@@ -818,8 +843,16 @@ static int axis_fifo_probe(struct platform_device *pdev)
 	 * ----------------------------
 	 */
 
-	/* get iospace for the device and request physical memory */
-	fifo->base_addr = devm_platform_get_and_ioremap_resource(pdev, 0, &r_mem);
+	/* get iospace for the device */
+	r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!r_mem) {
+		dev_err(fifo->dt_device, "invalid address\n");
+		rc = -ENODEV;
+		goto err_initial;
+	}
+
+	/* request physical memory */
+	fifo->base_addr = devm_ioremap_resource(fifo->dt_device, r_mem);
 	if (IS_ERR(fifo->base_addr)) {
 		rc = PTR_ERR(fifo->base_addr);
 		goto err_initial;
@@ -877,6 +910,9 @@ static int axis_fifo_probe(struct platform_device *pdev)
 	if (rc < 0)
 		goto err_initial;
 
+	dev_info(fifo->dt_device, "axis-fifo created at %pa mapped to 0x%pa, irq=%i\n",
+		 &r_mem->start, &fifo->base_addr, fifo->irq);
+
 	return 0;
 
 err_initial:
@@ -884,13 +920,15 @@ err_initial:
 	return rc;
 }
 
-static void axis_fifo_remove(struct platform_device *pdev)
+static int axis_fifo_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct axis_fifo *fifo = dev_get_drvdata(dev);
 
 	misc_deregister(&fifo->miscdev);
 	dev_set_drvdata(dev, NULL);
+
+	return 0;
 }
 
 static const struct of_device_id axis_fifo_of_match[] = {
@@ -905,22 +943,12 @@ static struct platform_driver axis_fifo_driver = {
 		.of_match_table	= axis_fifo_of_match,
 	},
 	.probe		= axis_fifo_probe,
-	.remove_new	= axis_fifo_remove,
+	.remove		= axis_fifo_remove,
 };
 
 static int __init axis_fifo_init(void)
 {
-	if (read_timeout >= 0)
-		read_timeout = msecs_to_jiffies(read_timeout);
-	else
-		read_timeout = MAX_SCHEDULE_TIMEOUT;
-
-	if (write_timeout >= 0)
-		write_timeout = msecs_to_jiffies(write_timeout);
-	else
-		write_timeout = MAX_SCHEDULE_TIMEOUT;
-
-	pr_info("axis-fifo driver loaded with parameters read_timeout = %li, write_timeout = %li\n",
+	pr_info("axis-fifo driver loaded with parameters read_timeout = %i, write_timeout = %i\n",
 		read_timeout, write_timeout);
 	return platform_driver_register(&axis_fifo_driver);
 }

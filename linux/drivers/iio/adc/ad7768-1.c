@@ -20,7 +20,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/sysfs.h>
 #include <linux/spi/spi.h>
-#include <linux/spi/legacy-spi-engine.h>
+#include <linux/spi/spi-engine.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/buffer-dma.h>
@@ -228,7 +228,7 @@ struct ad7768_state {
 		__be32 word;
 		struct {
 			__be32 chan;
-			aligned_s64 timestamp;
+			s64 timestamp;
 		} scan;
 	} data __aligned(IIO_DMA_MINALIGN);
 };
@@ -284,24 +284,6 @@ static int ad7768_spi_reg_write_masked(struct ad7768_state *st,
 		return ret;
 
 	return ad7768_spi_reg_write(st, addr, (reg_val & ~mask) | val);
-}
-
-static int ad7768_send_sync_pulse(struct ad7768_state *st)
-{
-	/*
-	 * The datasheet specifies a minimum SYNC_IN pulse width of 1.5 × Tmclk,
-	 * where Tmclk is the MCLK period. The supported MCLK frequencies range
-	 * from 0.6 MHz to 17 MHz, which corresponds to a minimum SYNC_IN pulse
-	 * width of approximately 2.5 µs in the worst-case scenario (0.6 MHz).
-	 *
-	 * Add a delay to ensure the pulse width is always sufficient to
-	 * trigger synchronization.
-	 */
-	gpiod_set_value_cansleep(st->gpio_sync_in, 1);
-	fsleep(3);
-	gpiod_set_value_cansleep(st->gpio_sync_in, 0);
-
-	return 0;
 }
 
 static int ad7768_set_mode(struct ad7768_state *st,
@@ -390,10 +372,13 @@ static int ad7768_set_dig_fil(struct ad7768_state *st,
 		return ret;
 
 	/* A sync-in pulse is required every time the filter dec rate changes */
-	return ad7768_send_sync_pulse(st);
+	gpiod_set_value(st->gpio_sync_in, 1);
+	gpiod_set_value(st->gpio_sync_in, 0);
+
+	return 0;
 }
 
-static int ad7768_gpio_direction_input(struct gpio_chip *chip, unsigned int offset)
+int ad7768_gpio_direction_input(struct gpio_chip *chip, unsigned int offset)
 {
 	struct ad7768_state *st = gpiochip_get_data(chip);
 	int ret;
@@ -408,8 +393,8 @@ static int ad7768_gpio_direction_input(struct gpio_chip *chip, unsigned int offs
 	return ret;
 }
 
-static int ad7768_gpio_direction_output(struct gpio_chip *chip,
-					unsigned int offset, int value)
+int ad7768_gpio_direction_output(struct gpio_chip *chip,
+				 unsigned int offset, int value)
 {
 	struct ad7768_state *st = gpiochip_get_data(chip);
 	int ret;
@@ -424,7 +409,7 @@ static int ad7768_gpio_direction_output(struct gpio_chip *chip,
 	return ret;
 }
 
-static int ad7768_gpio_get(struct gpio_chip *chip, unsigned int offset)
+int ad7768_gpio_get(struct gpio_chip *chip, unsigned int offset)
 {
 	struct ad7768_state *st = gpiochip_get_data(chip);
 	unsigned int val;
@@ -450,7 +435,7 @@ gpio_get_err:
 	return ret;
 }
 
-static void ad7768_gpio_set(struct gpio_chip *chip, unsigned int offset, int value)
+void ad7768_gpio_set(struct gpio_chip *chip, unsigned int offset, int value)
 {
 	struct ad7768_state *st = gpiochip_get_data(chip);
 	unsigned int val;
@@ -471,7 +456,7 @@ gpio_set_err:
 	mutex_unlock(&st->lock);
 }
 
-static int ad7768_gpio_request(struct gpio_chip *chip, unsigned int offset)
+int ad7768_gpio_request(struct gpio_chip *chip, unsigned int offset)
 {
 	struct ad7768_state *st = gpiochip_get_data(chip);
 
@@ -483,7 +468,7 @@ static int ad7768_gpio_request(struct gpio_chip *chip, unsigned int offset)
 	return 0;
 }
 
-static int ad7768_gpio_init(struct ad7768_state *st)
+int ad7768_gpio_init(struct ad7768_state *st)
 {
 	int ret;
 
@@ -613,7 +598,6 @@ static int ad7768_read_raw(struct iio_dev *indio_dev,
 		iio_device_release_direct_mode(indio_dev);
 		if (ret < 0)
 			return ret;
-		*val = sign_extend32(ret, chan->scan_type.realbits - 1);
 
 		return IIO_VAL_INT;
 
@@ -779,16 +763,16 @@ static int ad7768_buffer_postenable(struct iio_dev *indio_dev)
 		return ret;
 
 	if (st->spi_is_dma_mapped) {
-		spi_bus_lock(st->spi->controller);
+		spi_bus_lock(st->spi->master);
 
 		tx_data[0] = AD7768_RD_FLAG_MSK(AD7768_REG_ADC_DATA) << 24;
 		xfer.tx_buf = tx_data;
 		xfer.rx_buf = rx_data;
 		spi_message_init_with_transfers(&msg, &xfer, 1);
-		ret = legacy_spi_engine_offload_load_msg(st->spi, &msg);
+		ret = spi_engine_offload_load_msg(st->spi, &msg);
 		if (ret < 0)
 			return ret;
-		legacy_spi_engine_offload_enable(st->spi, true);
+		spi_engine_offload_enable(st->spi, true);
 	}
 
 	return ret;
@@ -800,8 +784,8 @@ static int ad7768_buffer_predisable(struct iio_dev *indio_dev)
 	unsigned int regval;
 
 	if (st->spi_is_dma_mapped) {
-		legacy_spi_engine_offload_enable(st->spi, false);
-		spi_bus_unlock(st->spi->controller);
+		spi_engine_offload_enable(st->spi, false);
+		spi_bus_unlock(st->spi->master);
 	}
 
 	/*
@@ -864,7 +848,8 @@ static int ad7768_hardware_buffer_alloc(struct iio_dev *indio_dev)
 {
 	indio_dev->setup_ops = &ad7768_buffer_ops;
 	return devm_iio_dmaengine_buffer_setup(indio_dev->dev.parent,
-					       indio_dev, "rx");
+					       indio_dev, "rx",
+					       IIO_BUFFER_DIRECTION_IN);
 }
 
 static int ad7768_set_channel_label(struct iio_dev *indio_dev,
@@ -872,10 +857,13 @@ static int ad7768_set_channel_label(struct iio_dev *indio_dev,
 {
 	struct ad7768_state *st = iio_priv(indio_dev);
 	struct device *device = indio_dev->dev.parent;
+	struct fwnode_handle *fwnode;
+	struct fwnode_handle *child;
 	const char *label;
 	int crt_ch = 0;
 
-	device_for_each_child_node_scoped(device, child) {
+	fwnode = dev_fwnode(device);
+	fwnode_for_each_child_node(fwnode, child) {
 		if (fwnode_property_read_u32(child, "reg", &crt_ch))
 			continue;
 
@@ -902,21 +890,6 @@ static int ad7768_probe(struct spi_device *spi)
 		return -ENOMEM;
 
 	st = iio_priv(indio_dev);
-	/*
-	 * Datasheet recommends SDI line to be kept high when data is not being
-	 * clocked out of the controller and the spi clock is free running,
-	 * to prevent accidental reset.
-	 * Since many controllers do not support the SPI_MOSI_IDLE_HIGH flag
-	 * yet, only request the MOSI idle state to enable if the controller
-	 * supports it.
-	 */
-	if (spi->controller->mode_bits & SPI_MOSI_IDLE_HIGH) {
-		spi->mode |= SPI_MOSI_IDLE_HIGH;
-		ret = spi_setup(spi);
-		if (ret < 0)
-			return ret;
-	}
-
 	st->spi = spi;
 
 	st->vref = devm_regulator_get(&spi->dev, "vref");
@@ -938,7 +911,7 @@ static int ad7768_probe(struct spi_device *spi)
 		return PTR_ERR(st->mclk);
 
 	st->mclk_freq = clk_get_rate(st->mclk);
-	st->spi_is_dma_mapped = legacy_spi_engine_offload_supported(spi);
+	st->spi_is_dma_mapped = spi_engine_offload_supported(spi);
 	st->irq = spi->irq;
 
 	mutex_init(&st->lock);
@@ -977,7 +950,7 @@ MODULE_DEVICE_TABLE(spi, ad7768_id_table);
 
 static const struct of_device_id ad7768_of_match[] = {
 	{ .compatible = "adi,ad7768-1" },
-	{ }
+	{ },
 };
 MODULE_DEVICE_TABLE(of, ad7768_of_match);
 

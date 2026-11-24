@@ -2745,7 +2745,7 @@ int32_t adrv9001_FlexStreamProcessorMemRead(adi_adrv9001_Device_t *device,
     ADI_API_RETURN(device);
 }
 
-static int32_t adrv9001_ArmMailBoxErrCodeGet(adi_adrv9001_Device_t *device, uint16_t *mailboxErrCode)
+int32_t adrv9001_ArmMailBoxErrCodeGet(adi_adrv9001_Device_t *device, uint16_t *mailboxErrCode)
 {
     /* reading the command status register for given opcode */
     uint8_t errCode = 0;
@@ -2796,7 +2796,7 @@ static const char* adrv9001_CmdErrMsgGet(uint32_t errCode)
     return NULL;
 }
 
-static const char* adrv9001_ArmMailBoxErrMsgGet(uint32_t errCode)
+const char* adrv9001_ArmMailBoxErrMsgGet(uint32_t errCode)
 {
 #ifndef ADI_ADRV9001_ARM_VERBOSE
     return "";
@@ -3341,7 +3341,7 @@ int32_t adrv9001_ArmProfileWrite(adi_adrv9001_Device_t *device, const adi_adrv90
 * Fetches the (cached) pointer to the PFIR profile buffer on the ARM.
 * Returns ADI_COMMON_ERR_API_FAIL if the cached value is invalid - perhaps the program hasn't been loaded yet.
 */
-static int32_t adrv9001_pFirProfileAddr_Get(adi_adrv9001_Device_t *device, uint32_t *pfirProfileAddr)
+int32_t adrv9001_pFirProfileAddr_Get(adi_adrv9001_Device_t *device, uint32_t *pfirProfileAddr)
 {
     int32_t  recoveryAction = ADI_COMMON_ACT_NO_ACTION;
 

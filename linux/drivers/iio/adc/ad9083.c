@@ -465,7 +465,7 @@ static ssize_t ad9083_phy_store(struct device *dev,
 			break;
 		}
 
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 
@@ -1051,10 +1051,7 @@ static int ad9083_probe(struct spi_device *spi)
 	if (ret < 0)
 		return ret;
 
-	if (!jdev)
-		return 0;
-
-	return devm_jesd204_fsm_start(&spi->dev, jdev, JESD204_LINKS_ALL);
+	return jesd204_fsm_start(jdev, JESD204_LINKS_ALL);
 }
 
 static const struct spi_device_id ad9083_id[] = {

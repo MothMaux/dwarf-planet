@@ -33,7 +33,6 @@
 #define HSFSTS_CTL_FCYCLE_WRITE		(0x02 << HSFSTS_CTL_FCYCLE_SHIFT)
 #define HSFSTS_CTL_FCYCLE_ERASE		(0x03 << HSFSTS_CTL_FCYCLE_SHIFT)
 #define HSFSTS_CTL_FCYCLE_ERASE_64K	(0x04 << HSFSTS_CTL_FCYCLE_SHIFT)
-#define HSFSTS_CTL_FCYCLE_RDSFDP	(0x05 << HSFSTS_CTL_FCYCLE_SHIFT)
 #define HSFSTS_CTL_FCYCLE_RDID		(0x06 << HSFSTS_CTL_FCYCLE_SHIFT)
 #define HSFSTS_CTL_FCYCLE_WRSR		(0x07 << HSFSTS_CTL_FCYCLE_SHIFT)
 #define HSFSTS_CTL_FCYCLE_RDSR		(0x08 << HSFSTS_CTL_FCYCLE_SHIFT)
@@ -104,7 +103,7 @@
 #define BXT_PR				0x84
 #define BXT_SSFSTS_CTL			0xa0
 #define BXT_FREG_NUM			12
-#define BXT_PR_NUM			5
+#define BXT_PR_NUM			6
 
 #define CNL_PR				0x84
 #define CNL_FREG_NUM			6
@@ -143,7 +142,7 @@
  * @base: Beginning of MMIO space
  * @pregs: Start of protection registers
  * @sregs: Start of software sequencer registers
- * @host: Pointer to the SPI controller structure
+ * @master: Pointer to the SPI controller structure
  * @nregions: Maximum number of regions
  * @pr_num: Maximum number of protected range registers
  * @chip0_size: Size of the first flash chip in bytes
@@ -161,7 +160,7 @@ struct intel_spi {
 	void __iomem *base;
 	void __iomem *pregs;
 	void __iomem *sregs;
-	struct spi_controller *host;
+	struct spi_controller *master;
 	size_t nregions;
 	size_t pr_num;
 	size_t chip0_size;
@@ -353,21 +352,34 @@ static int intel_spi_opcode_index(struct intel_spi *ispi, u8 opcode, int optype)
 	return 0;
 }
 
-static int intel_spi_hw_cycle(struct intel_spi *ispi,
-			      const struct intel_spi_mem_op *iop, size_t len)
+static int intel_spi_hw_cycle(struct intel_spi *ispi, u8 opcode, size_t len)
 {
 	u32 val, status;
 	int ret;
 
-	if (!iop->replacement_op)
-		return -EINVAL;
-
 	val = readl(ispi->base + HSFSTS_CTL);
 	val &= ~(HSFSTS_CTL_FCYCLE_MASK | HSFSTS_CTL_FDBC_MASK);
+
+	switch (opcode) {
+	case SPINOR_OP_RDID:
+		val |= HSFSTS_CTL_FCYCLE_RDID;
+		break;
+	case SPINOR_OP_WRSR:
+		val |= HSFSTS_CTL_FCYCLE_WRSR;
+		break;
+	case SPINOR_OP_RDSR:
+		val |= HSFSTS_CTL_FCYCLE_RDSR;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (len > INTEL_SPI_FIFO_SZ)
+		return -EINVAL;
+
 	val |= (len - 1) << HSFSTS_CTL_FDBC_SHIFT;
 	val |= HSFSTS_CTL_FCERR | HSFSTS_CTL_FDONE;
 	val |= HSFSTS_CTL_FGO;
-	val |= iop->replacement_op;
 	writel(val, ispi->base + HSFSTS_CTL);
 
 	ret = intel_spi_wait_hw_busy(ispi);
@@ -393,6 +405,9 @@ static int intel_spi_sw_cycle(struct intel_spi *ispi, u8 opcode, size_t len,
 	ret = intel_spi_opcode_index(ispi, opcode, optype);
 	if (ret < 0)
 		return ret;
+
+	if (len > INTEL_SPI_FIFO_SZ)
+		return -EINVAL;
 
 	/*
 	 * Always clear it after each SW sequencer operation regardless
@@ -458,18 +473,17 @@ static int intel_spi_read_reg(struct intel_spi *ispi, const struct spi_mem *mem,
 			      const struct intel_spi_mem_op *iop,
 			      const struct spi_mem_op *op)
 {
-	u32 addr = intel_spi_chip_addr(ispi, mem) + op->addr.val;
 	size_t nbytes = op->data.nbytes;
 	u8 opcode = op->cmd.opcode;
 	int ret;
 
-	writel(addr, ispi->base + FADDR);
+	writel(intel_spi_chip_addr(ispi, mem), ispi->base + FADDR);
 
 	if (ispi->swseq_reg)
 		ret = intel_spi_sw_cycle(ispi, opcode, nbytes,
 					 OPTYPE_READ_NO_ADDR);
 	else
-		ret = intel_spi_hw_cycle(ispi, iop, nbytes);
+		ret = intel_spi_hw_cycle(ispi, opcode, nbytes);
 
 	if (ret)
 		return ret;
@@ -481,7 +495,6 @@ static int intel_spi_write_reg(struct intel_spi *ispi, const struct spi_mem *mem
 			       const struct intel_spi_mem_op *iop,
 			       const struct spi_mem_op *op)
 {
-	u32 addr = intel_spi_chip_addr(ispi, mem) + op->addr.val;
 	size_t nbytes = op->data.nbytes;
 	u8 opcode = op->cmd.opcode;
 	int ret;
@@ -525,7 +538,7 @@ static int intel_spi_write_reg(struct intel_spi *ispi, const struct spi_mem *mem
 	if (opcode == SPINOR_OP_WRDI)
 		return 0;
 
-	writel(addr, ispi->base + FADDR);
+	writel(intel_spi_chip_addr(ispi, mem), ispi->base + FADDR);
 
 	/* Write the value beforehand */
 	ret = intel_spi_write_block(ispi, op->data.buf.out, nbytes);
@@ -535,7 +548,7 @@ static int intel_spi_write_reg(struct intel_spi *ispi, const struct spi_mem *mem
 	if (ispi->swseq_reg)
 		return intel_spi_sw_cycle(ispi, opcode, nbytes,
 					  OPTYPE_WRITE_NO_ADDR);
-	return intel_spi_hw_cycle(ispi, iop, nbytes);
+	return intel_spi_hw_cycle(ispi, opcode, nbytes);
 }
 
 static int intel_spi_read(struct intel_spi *ispi, const struct spi_mem *mem,
@@ -700,18 +713,13 @@ static int intel_spi_erase(struct intel_spi *ispi, const struct spi_mem *mem,
 	return 0;
 }
 
-static int intel_spi_adjust_op_size(struct spi_mem *mem, struct spi_mem_op *op)
-{
-	op->data.nbytes = clamp_val(op->data.nbytes, 0, INTEL_SPI_FIFO_SZ);
-	return 0;
-}
-
 static bool intel_spi_cmp_mem_op(const struct intel_spi_mem_op *iop,
 				 const struct spi_mem_op *op)
 {
 	if (iop->mem_op.cmd.nbytes != op->cmd.nbytes ||
 	    iop->mem_op.cmd.buswidth != op->cmd.buswidth ||
-	    iop->mem_op.cmd.dtr != op->cmd.dtr)
+	    iop->mem_op.cmd.dtr != op->cmd.dtr ||
+	    iop->mem_op.cmd.opcode != op->cmd.opcode)
 		return false;
 
 	if (iop->mem_op.addr.nbytes != op->addr.nbytes ||
@@ -736,18 +744,17 @@ intel_spi_match_mem_op(struct intel_spi *ispi, const struct spi_mem_op *op)
 	const struct intel_spi_mem_op *iop;
 
 	for (iop = ispi->mem_ops; iop->mem_op.cmd.opcode; iop++) {
-		if (iop->mem_op.cmd.opcode == op->cmd.opcode &&
-		    intel_spi_cmp_mem_op(iop, op))
-			return iop;
+		if (intel_spi_cmp_mem_op(iop, op))
+			break;
 	}
 
-	return NULL;
+	return iop->mem_op.cmd.opcode ? iop : NULL;
 }
 
 static bool intel_spi_supports_mem_op(struct spi_mem *mem,
 				      const struct spi_mem_op *op)
 {
-	struct intel_spi *ispi = spi_controller_get_devdata(mem->spi->controller);
+	struct intel_spi *ispi = spi_master_get_devdata(mem->spi->master);
 	const struct intel_spi_mem_op *iop;
 
 	iop = intel_spi_match_mem_op(ispi, op);
@@ -778,7 +785,7 @@ static bool intel_spi_supports_mem_op(struct spi_mem *mem,
 
 static int intel_spi_exec_mem_op(struct spi_mem *mem, const struct spi_mem_op *op)
 {
-	struct intel_spi *ispi = spi_controller_get_devdata(mem->spi->controller);
+	struct intel_spi *ispi = spi_master_get_devdata(mem->spi->master);
 	const struct intel_spi_mem_op *iop;
 
 	iop = intel_spi_match_mem_op(ispi, op);
@@ -790,7 +797,7 @@ static int intel_spi_exec_mem_op(struct spi_mem *mem, const struct spi_mem_op *o
 
 static const char *intel_spi_get_name(struct spi_mem *mem)
 {
-	const struct intel_spi *ispi = spi_controller_get_devdata(mem->spi->controller);
+	const struct intel_spi *ispi = spi_master_get_devdata(mem->spi->master);
 
 	/*
 	 * Return name of the flash controller device to be compatible
@@ -801,7 +808,7 @@ static const char *intel_spi_get_name(struct spi_mem *mem)
 
 static int intel_spi_dirmap_create(struct spi_mem_dirmap_desc *desc)
 {
-	struct intel_spi *ispi = spi_controller_get_devdata(desc->mem->spi->controller);
+	struct intel_spi *ispi = spi_master_get_devdata(desc->mem->spi->master);
 	const struct intel_spi_mem_op *iop;
 
 	iop = intel_spi_match_mem_op(ispi, &desc->info.op_tmpl);
@@ -815,7 +822,7 @@ static int intel_spi_dirmap_create(struct spi_mem_dirmap_desc *desc)
 static ssize_t intel_spi_dirmap_read(struct spi_mem_dirmap_desc *desc, u64 offs,
 				     size_t len, void *buf)
 {
-	struct intel_spi *ispi = spi_controller_get_devdata(desc->mem->spi->controller);
+	struct intel_spi *ispi = spi_master_get_devdata(desc->mem->spi->master);
 	const struct intel_spi_mem_op *iop = desc->priv;
 	struct spi_mem_op op = desc->info.op_tmpl;
 	int ret;
@@ -832,7 +839,7 @@ static ssize_t intel_spi_dirmap_read(struct spi_mem_dirmap_desc *desc, u64 offs,
 static ssize_t intel_spi_dirmap_write(struct spi_mem_dirmap_desc *desc, u64 offs,
 				      size_t len, const void *buf)
 {
-	struct intel_spi *ispi = spi_controller_get_devdata(desc->mem->spi->controller);
+	struct intel_spi *ispi = spi_master_get_devdata(desc->mem->spi->master);
 	const struct intel_spi_mem_op *iop = desc->priv;
 	struct spi_mem_op op = desc->info.op_tmpl;
 	int ret;
@@ -846,7 +853,6 @@ static ssize_t intel_spi_dirmap_write(struct spi_mem_dirmap_desc *desc, u64 offs
 }
 
 static const struct spi_controller_mem_ops intel_spi_mem_ops = {
-	.adjust_op_size = intel_spi_adjust_op_size,
 	.supports_op = intel_spi_supports_mem_op,
 	.exec_op = intel_spi_exec_mem_op,
 	.get_name = intel_spi_get_name,
@@ -906,26 +912,18 @@ static const struct spi_controller_mem_ops intel_spi_mem_ops = {
  */
 #define INTEL_SPI_GENERIC_OPS						\
 	/* Status register operations */				\
-	INTEL_SPI_MEM_OP_REPL(SPI_MEM_OP_CMD(SPINOR_OP_RDID, 1),	\
-			      SPI_MEM_OP_NO_ADDR,			\
-			      INTEL_SPI_OP_DATA_IN(1),			\
-			      intel_spi_read_reg,			\
-			      HSFSTS_CTL_FCYCLE_RDID),			\
-	INTEL_SPI_MEM_OP_REPL(SPI_MEM_OP_CMD(SPINOR_OP_RDSR, 1),	\
-			      SPI_MEM_OP_NO_ADDR,			\
-			      INTEL_SPI_OP_DATA_IN(1),			\
-			      intel_spi_read_reg,			\
-			      HSFSTS_CTL_FCYCLE_RDSR),			\
-	INTEL_SPI_MEM_OP_REPL(SPI_MEM_OP_CMD(SPINOR_OP_WRSR, 1),	\
-			      SPI_MEM_OP_NO_ADDR,			\
-			      INTEL_SPI_OP_DATA_OUT(1),			\
-			      intel_spi_write_reg,			\
-			      HSFSTS_CTL_FCYCLE_WRSR),			\
-	INTEL_SPI_MEM_OP_REPL(SPI_MEM_OP_CMD(SPINOR_OP_RDSFDP, 1),	\
-			      INTEL_SPI_OP_ADDR(3),			\
-			      INTEL_SPI_OP_DATA_IN(1),			\
-			      intel_spi_read_reg,			\
-			      HSFSTS_CTL_FCYCLE_RDSFDP),		\
+	INTEL_SPI_MEM_OP(SPI_MEM_OP_CMD(SPINOR_OP_RDID, 1),		\
+			 SPI_MEM_OP_NO_ADDR,				\
+			 INTEL_SPI_OP_DATA_IN(1),			\
+			 intel_spi_read_reg),				\
+	INTEL_SPI_MEM_OP(SPI_MEM_OP_CMD(SPINOR_OP_RDSR, 1),		\
+			 SPI_MEM_OP_NO_ADDR,				\
+			 INTEL_SPI_OP_DATA_IN(1),			\
+			 intel_spi_read_reg),				\
+	INTEL_SPI_MEM_OP(SPI_MEM_OP_CMD(SPINOR_OP_WRSR, 1),		\
+			 SPI_MEM_OP_NO_ADDR,				\
+			 INTEL_SPI_OP_DATA_OUT(1),			\
+			 intel_spi_write_reg),				\
 	/* Normal read */						\
 	INTEL_SPI_MEM_OP(SPI_MEM_OP_CMD(SPINOR_OP_READ, 1),		\
 			 INTEL_SPI_OP_ADDR(3),				\
@@ -1254,13 +1252,6 @@ static void intel_spi_fill_partition(struct intel_spi *ispi,
 		if (end > part->size)
 			part->size = end;
 	}
-
-	/*
-	 * Regions can refer to the second chip too so in this case we
-	 * just make the BIOS partition to occupy the whole chip.
-	 */
-	if (ispi->chip0_size && part->size > ispi->chip0_size)
-		part->size = MTDPART_SIZ_FULL;
 }
 
 static int intel_spi_read_desc(struct intel_spi *ispi)
@@ -1339,27 +1330,22 @@ static int intel_spi_read_desc(struct intel_spi *ispi)
 
 	nc = (buf[1] & FLMAP0_NC_MASK) >> FLMAP0_NC_SHIFT;
 	if (!nc)
-		ispi->host->num_chipselect = 1;
+		ispi->master->num_chipselect = 1;
 	else if (nc == 1)
-		ispi->host->num_chipselect = 2;
+		ispi->master->num_chipselect = 2;
 	else
 		return -EINVAL;
 
 	dev_dbg(ispi->dev, "%u flash components found\n",
-		ispi->host->num_chipselect);
+		ispi->master->num_chipselect);
 	return 0;
 }
 
 static int intel_spi_populate_chip(struct intel_spi *ispi)
 {
 	struct flash_platform_data *pdata;
-	struct mtd_partition *parts;
 	struct spi_board_info chip;
 	int ret;
-
-	ret = intel_spi_read_desc(ispi);
-	if (ret)
-		return ret;
 
 	pdata = devm_kzalloc(ispi->dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
@@ -1377,36 +1363,21 @@ static int intel_spi_populate_chip(struct intel_spi *ispi)
 	snprintf(chip.modalias, 8, "spi-nor");
 	chip.platform_data = pdata;
 
-	if (!spi_new_device(ispi->host, &chip))
+	if (!spi_new_device(ispi->master, &chip))
 		return -ENODEV;
 
 	/* Add the second chip if present */
-	if (ispi->host->num_chipselect < 2)
+	if (ispi->master->num_chipselect < 2)
 		return 0;
 
-	pdata = devm_kzalloc(ispi->dev, sizeof(*pdata), GFP_KERNEL);
-	if (!pdata)
-		return -ENOMEM;
+	ret = intel_spi_read_desc(ispi);
+	if (ret)
+		return ret;
 
-	pdata->name = devm_kasprintf(ispi->dev, GFP_KERNEL, "%s-chip1",
-				     dev_name(ispi->dev));
-	if (!pdata->name)
-		return -ENOMEM;
-
-	pdata->nr_parts = 1;
-	parts = devm_kcalloc(ispi->dev, pdata->nr_parts, sizeof(*parts),
-			     GFP_KERNEL);
-	if (!parts)
-		return -ENOMEM;
-
-	parts[0].size = MTDPART_SIZ_FULL;
-	parts[0].name = "BIOS1";
-	pdata->parts = parts;
-
-	chip.platform_data = pdata;
+	chip.platform_data = NULL;
 	chip.chip_select = 1;
 
-	if (!spi_new_device(ispi->host, &chip))
+	if (!spi_new_device(ispi->master, &chip))
 		return -ENODEV;
 	return 0;
 }
@@ -1423,31 +1394,31 @@ static int intel_spi_populate_chip(struct intel_spi *ispi)
 int intel_spi_probe(struct device *dev, struct resource *mem,
 		    const struct intel_spi_boardinfo *info)
 {
-	struct spi_controller *host;
+	struct spi_controller *master;
 	struct intel_spi *ispi;
 	int ret;
 
-	host = devm_spi_alloc_host(dev, sizeof(*ispi));
-	if (!host)
+	master = devm_spi_alloc_master(dev, sizeof(*ispi));
+	if (!master)
 		return -ENOMEM;
 
-	host->mem_ops = &intel_spi_mem_ops;
+	master->mem_ops = &intel_spi_mem_ops;
 
-	ispi = spi_controller_get_devdata(host);
+	ispi = spi_master_get_devdata(master);
 
 	ispi->base = devm_ioremap_resource(dev, mem);
 	if (IS_ERR(ispi->base))
 		return PTR_ERR(ispi->base);
 
 	ispi->dev = dev;
-	ispi->host = host;
+	ispi->master = master;
 	ispi->info = info;
 
 	ret = intel_spi_init(ispi);
 	if (ret)
 		return ret;
 
-	ret = devm_spi_register_controller(dev, host);
+	ret = devm_spi_register_master(dev, master);
 	if (ret)
 		return ret;
 

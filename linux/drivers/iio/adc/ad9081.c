@@ -152,9 +152,6 @@ enum ad9081_debugfs_cmd {
 	DBGFS_BIST_PRBS_JTX,
 	DBGFS_DEV_API_INFO,
 	DBGFS_DEV_CHIP_INFO,
-	DBGFS_JESD_RX_RECAL_204C,
-	DBGFS_JRX_LMFC_DELAY_LINK0,
-	DBGFS_JRX_LMFC_DELAY_LINK1,
 	DBGFS_ENTRY_MAX,
 };
 
@@ -173,7 +170,7 @@ struct ad9081_phy {
 	adi_ad9081_device_t ad9081;
 	struct axiadc_chip_info chip_info;
 	struct clk *dev_clk;
-	struct bin_attribute	bin;
+	struct bin_attribute 	bin;
 
 	struct gpio_desc *rx1_en_gpio;
 	struct gpio_desc *rx2_en_gpio;
@@ -264,7 +261,8 @@ struct ad9081_phy {
 	adi_cms_chip_id_t chip_id;
 
 	struct ad9081_jesd_link jtx_link_rx[2];
-	short coeffs[192];
+	short coeffs_i[196];
+	short coeffs_q[196];
 
 	char rx_chan_labels[MAX_NUM_CHANNELIZER][32];
 	char tx_chan_labels[MAX_NUM_CHANNELIZER][32];
@@ -275,37 +273,6 @@ struct ad9081_phy {
 	u8 rx_ffh_gpio_mux_sel[6];
 	u8 sync_ms_gpio_num;
 	char dbuf[1024];
-
-	/* Global PA Protection settings */
-	bool pa_protection_gpio_as_pa_en;
-	u8 pa_protection_rotation_mode;
-	bool pa_protection_rotation_mode_valid;
-
-	/* Per-DAC PA Protection settings */
-	struct {
-		bool soft_off_enable;
-		bool soft_off_new_gain_enable;
-		u8 soft_off_ramp_rate;
-		bool soft_off_ramp_rate_valid;
-		u16 soft_off_triggers;  /* Bitmask of triggers */
-		bool soft_off_triggers_valid;
-		u8 soft_on_triggers;    /* Bitmask of triggers */
-		bool soft_on_triggers_valid;
-		bool long_avg_enable;
-		u8 long_avg_time;
-		u16 long_avg_threshold;
-		bool long_avg_valid;  /* Both time and threshold must be provided */
-		bool short_avg_enable;
-		u8 short_avg_time;
-		u16 short_avg_threshold;
-		bool short_avg_valid;  /* Both time and threshold must be provided */
-		bool dsa_enable;
-		u8 dsa_code;
-		u8 dsa_cutover;
-		u8 dsa_boost;
-		u16 dsa_gain;
-		bool dsa_params_valid;  /* All DSA params must be provided */
-	} pa_protection[MAX_NUM_MAIN_DATAPATHS];
 };
 
 static int adi_ad9081_adc_nco_sync(adi_ad9081_device_t *device,
@@ -373,7 +340,7 @@ static int adi_ad9081_adc_nco_sync(adi_ad9081_device_t *device,
 	return API_CMS_ERROR_OK;
 }
 
-static int adi_ad9081_device_gpio_set_highz(adi_ad9081_device_t *device, u8 gpio_index)
+int adi_ad9081_device_gpio_set_highz(adi_ad9081_device_t *device, u8 gpio_index)
 {
 	int err;
 
@@ -415,8 +382,8 @@ static int ad9081_nco_sync(struct ad9081_phy *phy, bool master)
 					     phy->nco_sync_ms_extra_lmfc_num);
 }
 
-static int32_t ad9081_jesd_tx_link_dig_reset(adi_ad9081_device_t *device,
-					     uint8_t reset)
+int32_t ad9081_jesd_tx_link_dig_reset(adi_ad9081_device_t *device,
+				      uint8_t reset)
 {
 	int32_t err;
 
@@ -442,8 +409,8 @@ ad9081_link_sel(struct ad9081_jesd_link *link)
 	return ad9081_link_is_dual(link) ? AD9081_LINK_ALL : AD9081_LINK_0;
 }
 
-static int32_t ad9081_log_write(void *user_data, int32_t log_type, const char *message,
-				va_list argp)
+int32_t ad9081_log_write(void *user_data, int32_t log_type, const char *message,
+			 va_list argp)
 {
 	struct axiadc_converter *conv = user_data;
 	char logMessage[160];
@@ -551,53 +518,23 @@ static int ad9081_reg_access(struct iio_dev *indio_dev, unsigned int reg,
 	if (reg & 0x40000000) { /* CBUS Access */
 		if (readval == NULL)
 			return adi_ad9081_device_cbusjrx_register_set(&phy->ad9081,
-				reg & 0xFF, writeval, (reg >> 8) & 0xFF);
+				reg & 0xFF, writeval, (reg >> 8) & 0x7);
 
 		ret = adi_ad9081_device_cbusjrx_register_get(&phy->ad9081,
-			reg & 0xFF, &val, (reg >> 8) & 0xFF);
+			reg & 0xFF, &val, (reg >> 8) & 0x7);
 		if (ret < 0)
 			return ret;
 	} else {
-		if (reg & 0x3F000000) {
-			/* Support for setting a PAGE MASK prior in register read/write */
-			dev_dbg(&phy->spi->dev,
-			       "ad9081_reg_access: mask-reg=0x%X, mask-val=0x%X\n",
-			       (reg >> 24) & 0x3F, (reg >> 16) & 0xFF);
-
-			ret = adi_ad9081_hal_reg_set(&phy->ad9081, (reg >> 24) & 0x3F, (reg >> 16) & 0xFF);
-			if (ret < 0)
-				return ret;
-		}
-		if (readval == NULL) {
-			dev_dbg(&phy->spi->dev,
-			       "ad9081_reg_access: reg=0x%X, writeval=0x%X\n",
-			       reg & 0x3FFF, writeval);
-
+		if (readval == NULL)
 			return adi_ad9081_hal_reg_set(&phy->ad9081, reg & 0x3FFF, writeval);
-		}
 
 		ret = adi_ad9081_hal_reg_get(&phy->ad9081, reg & 0x3FFF, &val);
 		if (ret < 0)
 			return ret;
-
-		dev_dbg(&phy->spi->dev,
-		       "ad9081_reg_access: reg=0x%X, readval=0x%X\n",
-		       reg & 0x3FFF, val);
-
 	}
 	*readval = val;
 
 	return 0;
-}
-
-static int ad9081_reg_access_locked(struct iio_dev *indio_dev, unsigned int reg,
-			     unsigned int writeval, unsigned int *readval)
-{
-	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
-
-	guard(mutex)(&conv->lock);
-
-	return ad9081_reg_access(indio_dev, reg, writeval, readval);
 }
 
 #define AD9081_MAX_CLK_NAME 79
@@ -611,7 +548,7 @@ static char *ad9081_clk_set_dev_name(struct ad9081_phy *phy, char *dest,
 		return NULL;
 
 	if (*name == '-')
-		len = strscpy(dest, dev_name(&phy->spi->dev),
+		len = strlcpy(dest, dev_name(&phy->spi->dev),
 			      AD9081_MAX_CLK_NAME);
 	else
 		*dest = '\0';
@@ -764,11 +701,12 @@ static int ad9081_read_thresh(struct iio_dev *indio_dev,
 	struct spi_device *spi = conv->spi;
 	u16 low, high;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 	low = (ad9081_spi_read(spi, AD9081_FD_LT_MSB_REG) << 8) |
 		ad9081_spi_read(spi, AD9081_FD_LT_LSB_REG);
 	high = (ad9081_spi_read(spi, AD9081_FD_UT_MSB_REG) << 8) |
 		ad9081_spi_read(spi, AD9081_FD_UT_LSB_REG);
+	mutex_unlock(&conv->lock);
 
 	switch (info) {
 	case IIO_EV_INFO_HYSTERESIS:
@@ -809,21 +747,25 @@ static int ad9081_write_thresh(struct iio_dev *indio_dev,
 	int ret = 0;
 	int low, high;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 	high = (ad9081_spi_read(spi, AD9081_FD_UT_MSB_REG) << 8) |
 		ad9081_spi_read(spi, AD9081_FD_UT_LSB_REG);
 
 	switch (info) {
 	case IIO_EV_INFO_HYSTERESIS:
-		if (val < 0)
-			return -EINVAL;
-
+		if (val < 0) {
+			ret = -EINVAL;
+			goto unlock;
+		}
 
 		low = high - val;
 		break;
+
 	case IIO_EV_INFO_VALUE:
-		if (val > 0x7FF)
-			return -EINVAL;
+		if (val > 0x7FF) {
+			ret = -EINVAL;
+			goto unlock;
+		}
 
 		ad9081_spi_write(spi, AD9081_FD_UT_MSB_REG, val >> 8);
 		ad9081_spi_write(spi, AD9081_FD_UT_LSB_REG, val & 0xFF);
@@ -833,8 +775,10 @@ static int ad9081_write_thresh(struct iio_dev *indio_dev,
 			ad9081_spi_read(spi, AD9081_FD_LT_LSB_REG);
 		low = val - high + low;
 		break;
+
 	default:
-		return -EINVAL;
+		ret = -EINVAL;
+		goto unlock;
 	}
 
 	if (low < 0)
@@ -843,7 +787,9 @@ static int ad9081_write_thresh(struct iio_dev *indio_dev,
 	ad9081_spi_write(spi, AD9081_FD_LT_MSB_REG, low >> 8);
 	ad9081_spi_write(spi, AD9081_FD_LT_LSB_REG, low & 0xFF);
 
-	return 0;
+unlock:
+	mutex_unlock(&conv->lock);
+	return ret;
 }
 
 static int ad9081_write_thresh_en(struct iio_dev *indio_dev,
@@ -854,18 +800,21 @@ static int ad9081_write_thresh_en(struct iio_dev *indio_dev,
 	struct spi_device *spi = conv->spi;
 	int ret;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 
 	ret = ad9081_spi_read(spi, AD9081_CHIP_PIN_CTRL1_REG);
 	if (ret < 0)
-		return ret;
+		goto err_unlock;
 
 	if (state)
 		ret &= ~AD9081_CHIP_PIN_CTRL_MASK(chan->channel);
 	else
 		ret |= AD9081_CHIP_PIN_CTRL_MASK(chan->channel);
 
-	return ad9081_spi_write(spi, AD9081_CHIP_PIN_CTRL1_REG, ret);
+	ret = ad9081_spi_write(spi, AD9081_CHIP_PIN_CTRL1_REG, ret);
+err_unlock:
+	mutex_unlock(&conv->lock);
+	return ret;
 }
 #endif
 
@@ -908,11 +857,12 @@ static int ad9081_testmode_write(struct iio_dev *indio_dev,
 	struct ad9081_phy *phy = conv->phy;
 	int ret;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 	ret = adi_ad9081_adc_test_mode_config_set(&phy->ad9081, item, item,
 						  AD9081_LINK_ALL);
 	if (!ret)
 		conv->testmode[chan->channel] = item;
+	mutex_unlock(&conv->lock);
 
 	return ret;
 }
@@ -931,9 +881,6 @@ static const char *const ad9081_adc_testmodes[] = {
 	[AD9081_TMODE_PN15] = "pn15",
 	[AD9081_TMODE_PN31] = "pn31",
 	[AD9081_TMODE_RAMP] = "ramp",
-	[12] = "",
-	[13] = "",
-	[14] = ""
 };
 
 static const char *const ad9081_jesd_testmodes[] = {
@@ -955,7 +902,7 @@ static const struct iio_enum ad9081_testmode_enum = {
 	.get = ad9081_testmode_read,
 };
 
-static int ad9081_iio_val_to_str(char *buf, u32 max, int val)
+int ad9081_iio_val_to_str(char *buf, u32 max, int val)
 {
 	int vals[2];
 
@@ -965,7 +912,7 @@ static int ad9081_iio_val_to_str(char *buf, u32 max, int val)
 	return iio_format_value(buf, IIO_VAL_FRACTIONAL, 2, vals);
 }
 
-static int ad9081_iio_str_to_val(const char *str, int min, int max, int *val)
+int ad9081_iio_str_to_val(const char *str, int min, int max, int *val)
 {
 	int ret, integer, fract;
 
@@ -1057,10 +1004,11 @@ static int ad9081_nyquist_zone_write(struct iio_dev *indio_dev,
 	ad9081_iiochan_to_fddc_cddc(phy, chan, &fddc_num,
 		&fddc_mask, &cddc_num, &cddc_mask);
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 	ret = adi_ad9081_adc_nyquist_zone_set(&phy->ad9081, cddc_mask, item);
 	if (!ret)
 		phy->rx_nyquist_zone[cddc_num] = item;
+	mutex_unlock(&conv->lock);
 
 	return ret;
 }
@@ -1105,7 +1053,7 @@ static int ad9081_main_ffh_mode_write(struct iio_dev *indio_dev,
 	ad9081_iiochan_to_fddc_cddc(phy, chan, &fddc_num,
 		&fddc_mask, &cddc_num, &cddc_mask);
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 	if (chan->output) {
 		ret = adi_ad9081_dac_duc_main_nco_hopf_mode_set(&phy->ad9081,
 						  cddc_mask, item);
@@ -1124,6 +1072,7 @@ static int ad9081_main_ffh_mode_write(struct iio_dev *indio_dev,
 		if (!ret)
 			phy->rx_main_ffh_mode[cddc_num] = item;
 	}
+	mutex_unlock(&conv->lock);
 
 	return ret;
 }
@@ -1165,7 +1114,7 @@ static ssize_t ad9081_ext_info_read(struct iio_dev *indio_dev,
 	u8 cddc_num, cddc_mask, fddc_num, fddc_mask;
 	int i, ret = -EINVAL;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 
 	ad9081_iiochan_to_fddc_cddc(phy, chan, &fddc_num,
 		&fddc_mask, &cddc_num, &cddc_mask);
@@ -1207,6 +1156,7 @@ static ssize_t ad9081_ext_info_read(struct iio_dev *indio_dev,
 
 		}
 
+		mutex_unlock(&conv->lock);
 		return sprintf(buf, "[%lld 1 %lld]\n", -1 * range, range);
 	case FDDC_NCO_FREQ_AVAIL:
 		if (chan->output) {
@@ -1225,6 +1175,7 @@ static ssize_t ad9081_ext_info_read(struct iio_dev *indio_dev,
 
 		}
 
+		mutex_unlock(&conv->lock);
 		return sprintf(buf, "[%lld 1 %lld]\n", -1 * range, range);
 	case CDDC_NCO_PHASE:
 		if (chan->output) {
@@ -1249,6 +1200,7 @@ static ssize_t ad9081_ext_info_read(struct iio_dev *indio_dev,
 		break;
 	case FDDC_NCO_GAIN:
 		val = phy->dac_cache.chan_gain[fddc_num];
+		mutex_unlock(&conv->lock);
 		return ad9081_iio_val_to_str(buf, 0xFFF, val);
 	case CDDC_6DB_GAIN:
 		val = phy->rx_cddc_gain_6db_en[cddc_num];
@@ -1268,9 +1220,11 @@ static ssize_t ad9081_ext_info_read(struct iio_dev *indio_dev,
 		break;
 	case DAC_MAIN_TEST_TONE_OFFSET:
 		val = phy->dac_cache.main_test_tone_offset[fddc_num];
+		mutex_unlock(&conv->lock);
 		return ad9081_iio_val_to_str(buf, 0x7FFF, val);
 	case DAC_CHAN_TEST_TONE_OFFSET:
 		val = phy->dac_cache.chan_test_tone_offset[fddc_num];
+		mutex_unlock(&conv->lock);
 		return ad9081_iio_val_to_str(buf, 0x7FFF, val);
 	case TRX_CONVERTER_RATE:
 		if (chan->output)
@@ -1290,7 +1244,7 @@ static ssize_t ad9081_ext_info_read(struct iio_dev *indio_dev,
 			for_each_cddc(i, cddc_mask) {
 				val = phy->tx_main_ffh_select[i];
 				ret = 0;
-				goto out;
+				goto out_unlock;
 			}
 		} else {
 			val = phy->rx_main_ffh_select[cddc_num];
@@ -1340,14 +1294,14 @@ static ssize_t ad9081_ext_info_read(struct iio_dev *indio_dev,
 		}
 		ret = sysfs_emit(buf, "%lld\n",
 			phy->tx_ffh_hopf_vals[phy->tx_ffh_hopf_index[cddc_num]][cddc_num]);
-		if (ret <= 0)
-			ret = -EINVAL;
 		break;
 	default:
 		ret = -EINVAL;
 	}
 
-out:
+out_unlock:
+	mutex_unlock(&conv->lock);
+
 	if (ret == 0)
 		ret = sprintf(buf, "%lld\n", val);
 
@@ -1369,7 +1323,7 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	s64 val64;
 	u64 ftw;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 
 	ad9081_iiochan_to_fddc_cddc(phy, chan, &fddc_num,
 		&fddc_mask, &cddc_num, &cddc_mask);
@@ -1378,7 +1332,7 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	case CDDC_NCO_FREQ:
 		ret = kstrtoll(buf, 10, &readin);
 		if (ret)
-			return ret;
+			goto out;
 
 		if (chan->output) {
 			/* set main nco */
@@ -1403,7 +1357,7 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	case FDDC_NCO_FREQ:
 		ret = kstrtoll(buf, 10, &readin);
 		if (ret)
-			return ret;
+			goto out;
 
 		if (chan->output) {
 			ret = adi_ad9081_dac_duc_nco_set(&phy->ad9081,
@@ -1427,7 +1381,7 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	case CDDC_NCO_PHASE:
 		ret = kstrtoll(buf, 10, &readin);
 		if (ret)
-			return ret;
+			goto out;
 
 		readin = clamp_t(long long, readin, -180000, 180000);
 
@@ -1459,7 +1413,7 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	case FDDC_NCO_PHASE:
 		ret = kstrtoll(buf, 10, &readin);
 		if (ret)
-			return ret;
+			goto out;
 
 		readin = clamp_t(long long, readin, -180000, 180000);
 
@@ -1489,39 +1443,39 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	case FDDC_NCO_GAIN:
 		ret = ad9081_iio_str_to_val(buf, 0, 0xFFF, &readin_32);
 		if (ret)
-			return ret;
+			goto out;
 		ret = adi_ad9081_dac_duc_nco_gain_set(
 			&phy->ad9081, fddc_mask, readin_32);
 		if (!ret)
 			phy->dac_cache.chan_gain[fddc_num] = readin_32;
 		break;
 	case CDDC_6DB_GAIN:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
-			return ret;
+			goto out;
 
 		ret = adi_ad9081_adc_ddc_coarse_gain_set(
 			&phy->ad9081, cddc_mask, enable);
 		if (ret)
-			return ret;
+			goto out;
 		phy->rx_cddc_gain_6db_en[cddc_num] = enable;
 		ret = 0;
 		break;
 	case FDDC_6DB_GAIN:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
-			return ret;
+			goto out;
 		ret = adi_ad9081_adc_ddc_fine_gain_set(
 			&phy->ad9081, fddc_mask, enable);
 		if (ret)
-			return ret;
+			goto out;
 		phy->rx_fddc_gain_6db_en[fddc_num] = enable;
 		ret = 0;
 		break;
 	case DAC_MAIN_TEST_TONE_EN:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
-			return ret;
+			goto out;
 
 		ret = adi_ad9081_dac_duc_main_dc_test_tone_en_set(&phy->ad9081,
 								  cddc_mask, enable);
@@ -1529,9 +1483,9 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 			phy->dac_cache.main_test_tone_en[fddc_num] = enable;
 		break;
 	case DAC_CHAN_TEST_TONE_EN:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
-			return ret;
+			goto out;
 
 		ret = adi_ad9081_dac_dc_test_tone_en_set(
 			&phy->ad9081, fddc_mask, enable);
@@ -1541,7 +1495,7 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	case DAC_MAIN_TEST_TONE_OFFSET:
 		ret = ad9081_iio_str_to_val(buf, 0, 0x7FFF, &readin_32);
 		if (ret)
-			return ret;
+			goto out;
 
 		ret = adi_ad9081_dac_duc_main_dc_test_tone_offset_set(
 			&phy->ad9081, cddc_mask, readin_32);
@@ -1552,7 +1506,7 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 	case DAC_CHAN_TEST_TONE_OFFSET:
 		ret = ad9081_iio_str_to_val(buf, 0, 0x7FFF, &readin_32);
 		if (ret)
-			return ret;
+			goto out;
 
 		ret = adi_ad9081_dac_dc_test_tone_offset_set(
 			&phy->ad9081, fddc_mask, readin_32);
@@ -1567,12 +1521,13 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 		}
 		ret = kstrtoll(buf, 10, &readin);
 		if (ret)
-			return ret;
+			goto out;
 
 		if (chan->output) {
-			if (readin < 0 || readin >= MAX_NUM_TX_NCO_CHAN_REGS)
-				return -EINVAL;
-
+			if (readin < 0 || readin >= MAX_NUM_TX_NCO_CHAN_REGS) {
+				ret = -EINVAL;
+				goto out;
+			}
 			/* set main nco */
 			for_each_cddc(i, cddc_mask) {
 				ret = adi_ad9081_dac_duc_main_nco_hopf_select_set(&phy->ad9081,
@@ -1583,9 +1538,10 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 					ret = -EFAULT;
 			}
 		} else {
-			if (readin < 0 || readin >= MAX_NUM_RX_NCO_CHAN_REGS)
-				return -EINVAL;
-
+			if (readin < 0 || readin >= MAX_NUM_RX_NCO_CHAN_REGS) {
+				ret = -EINVAL;
+				goto out;
+			}
 			ret = adi_ad9081_adc_ddc_coarse_nco_channel_selection_set(&phy->ad9081,
 				cddc_mask, readin);
 			if (!ret)
@@ -1601,19 +1557,21 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 		}
 		ret = kstrtoll(buf, 10, &readin);
 		if (ret)
-			return ret;
+			goto out;
 
 		if (chan->output) {
 			readin = clamp_t(long long, readin, 0, 30);
-			if (readin < 0 || readin >= MAX_NUM_TX_NCO_CHAN_REGS)
-				return -EINVAL;
-
+			if (readin < 0 || readin >= MAX_NUM_TX_NCO_CHAN_REGS) {
+				ret = -EINVAL;
+				goto out;
+			}
 			for_each_cddc(i, cddc_mask)
 				phy->tx_ffh_hopf_index[i] = readin;
 		} else {
-			if (readin < 0 || readin >= MAX_NUM_RX_NCO_CHAN_REGS)
-				return -EINVAL;
-
+			if (readin < 0 || readin >= MAX_NUM_RX_NCO_CHAN_REGS) {
+				ret = -EINVAL;
+				goto out;
+			}
 			ret = adi_ad9081_adc_ddc_coarse_nco_channel_update_index_set(&phy->ad9081,
 				cddc_mask, readin);
 			if (!ret)
@@ -1629,9 +1587,9 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 			ret = -EOPNOTSUPP;
 			break;
 		}
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
-			return ret;
+			goto out;
 
 		if (chan->output) {
 			ret = adi_ad9081_dac_duc_main_nco_hopf_gpio_as_hop_en_set(&phy->ad9081,
@@ -1695,6 +1653,9 @@ static ssize_t ad9081_ext_info_write(struct iio_dev *indio_dev,
 		ret = -EINVAL;
 	}
 
+out:
+	mutex_unlock(&conv->lock);
+
 	return ret ? ret : len;
 }
 
@@ -1709,90 +1670,90 @@ static struct iio_chan_spec_ext_info rxadc_ext_info[] = {
 		.name = "main_nco_frequency",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_NCO_FREQ,
 	},
 	{
 		.name = "main_nco_frequency_available",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 		.private = CDDC_NCO_FREQ_AVAIL,
 	},
 	{
 		.name = "channel_nco_frequency",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = FDDC_NCO_FREQ,
 	},
 	{
 		.name = "channel_nco_frequency_available",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = FDDC_NCO_FREQ_AVAIL,
 	},
 	{
 		.name = "main_nco_phase",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_NCO_PHASE,
 	},
 	{
 		.name = "channel_nco_phase",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = FDDC_NCO_PHASE,
 	},
 	{
 		.name = "main_6db_digital_gain_en",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_6DB_GAIN,
 	},
 	{
 		.name = "channel_6db_digital_gain_en",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = FDDC_6DB_GAIN,
 	},
 	{
 		.name = "adc_frequency",
 		.read = ad9081_ext_info_read,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 		.private = TRX_CONVERTER_RATE,
 	},
 	{
 		.name = "main_nco_ffh_select",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_FFH_HOPF_SET,
 	},
 	{
 		.name = "main_nco_ffh_index",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_FFH_INDEX_SET,
 	},
 	{
 		.name = "main_ffh_trig_hop_en",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = ADC_CDDC_FFH_TRIG_HOP_EN,
 	},
 	{
 		.name = "main_ffh_gpio_mode_en",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = ADC_FFH_GPIO_MODE_SET,
 	},
 	{},
@@ -1805,111 +1766,111 @@ static struct iio_chan_spec_ext_info txdac_ext_info[] = {
 		.name = "main_nco_frequency",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_NCO_FREQ,
 	},
 	{
 		.name = "main_nco_frequency_available",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 		.private = CDDC_NCO_FREQ_AVAIL,
 	},
 	{
 		.name = "channel_nco_frequency",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = FDDC_NCO_FREQ,
 	},
 	{
 		.name = "channel_nco_frequency_available",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 		.private = FDDC_NCO_FREQ_AVAIL,
 	},
 	{
 		.name = "main_nco_phase",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_NCO_PHASE,
 	},
 	{
 		.name = "channel_nco_phase",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = FDDC_NCO_PHASE,
 	},
 	{
 		.name = "channel_nco_gain_scale",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = FDDC_NCO_GAIN,
 	},
 	{
 		.name = "main_nco_test_tone_en",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = DAC_MAIN_TEST_TONE_EN,
 	},
 	{
 		.name = "channel_nco_test_tone_en",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = DAC_CHAN_TEST_TONE_EN,
 	},
 	{
 		.name = "main_nco_test_tone_scale",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = DAC_MAIN_TEST_TONE_OFFSET,
 	},
 	{
 		.name = "channel_nco_test_tone_scale",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = DAC_CHAN_TEST_TONE_OFFSET,
 	},
 	{
 		.name = "dac_frequency",
 		.read = ad9081_ext_info_read,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 		.private = TRX_CONVERTER_RATE,
 	},
 	{
 		.name = "main_nco_ffh_select",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_FFH_HOPF_SET,
 	},
 	{
 		.name = "main_nco_ffh_index",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = CDDC_FFH_INDEX_SET,
 	},
 	{
 		.name = "main_ffh_gpio_mode_en",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SHARED_BY_TYPE,
+		.shared = true,
 		.private = DAC_FFH_GPIO_MODE_SET,
 	},
 	{
 		.name = "main_nco_ffh_frequency",
 		.read = ad9081_ext_info_read,
 		.write = ad9081_ext_info_write,
-		.shared = IIO_SEPARATE,
+		.shared = false,
 		.private = DAC_FFH_FREQ_SET,
 	},
 	{},
@@ -2001,8 +1962,8 @@ static const char *const ad9081_jtx_qbf_states[] = {
 	"ILA_BP", "DATA"
 };
 
-static int ad9081_jesd_tx_link_status_print(struct ad9081_phy *phy,
-					    struct jesd204_link *lnk, int retry)
+int ad9081_jesd_tx_link_status_print(struct ad9081_phy *phy,
+				     struct jesd204_link *lnk, int retry)
 {
 	int ret, l;
 	u16 stat;
@@ -2226,121 +2187,6 @@ static int ad9081_setup_tx(struct spi_device *spi)
 		adi_ad9081_jesd_rx_syncb_driver_powerdown_set(&phy->ad9081, 0);
 	}
 
-	/* Configure PA Protection for each DAC */
-	for (i = 0; i < ARRAY_SIZE(phy->pa_protection); i++) {
-		u8 dac_mask = BIT(i);
-
-		/* Configure soft-off enable */
-		ret = adi_ad9081_dac_soft_off_gain_enable_set(&phy->ad9081,
-			dac_mask, phy->pa_protection[i].soft_off_enable);
-		if (ret != 0) {
-			dev_err(&spi->dev, "Failed to enable soft-off gain for DAC %d\n", i);
-			return ret;
-		}
-
-		/* Enable new soft-off gain block if requested */
-		ret = adi_ad9081_dac_soft_off_new_gain_enable_set(&phy->ad9081,
-			dac_mask, phy->pa_protection[i].soft_off_new_gain_enable);
-		if (ret != 0) {
-			dev_err(&spi->dev, "Failed to enable new soft-off gain for DAC %d\n", i);
-			return ret;
-		}
-
-		/* Set ramp rate - only if provided in DT */
-		if (phy->pa_protection[i].soft_off_ramp_rate_valid) {
-			ret = adi_ad9081_dac_soft_off_gain_ramp_rate_set(&phy->ad9081,
-				dac_mask, phy->pa_protection[i].soft_off_ramp_rate);
-			if (ret != 0) {
-				dev_err(&spi->dev, "Failed to set soft-off ramp rate for DAC %d\n", i);
-				return ret;
-			}
-		}
-
-		/* Configure soft-off triggers - only if provided in DT */
-		if (phy->pa_protection[i].soft_off_triggers_valid) {
-			ret = adi_ad9081_dac_soft_off_enable_set(&phy->ad9081,
-				dac_mask, phy->pa_protection[i].soft_off_triggers);
-			if (ret != 0) {
-				dev_err(&spi->dev, "Failed to set soft-off triggers for DAC %d\n", i);
-				return ret;
-			}
-		}
-
-		/* Configure soft-on triggers - only if provided in DT */
-		if (phy->pa_protection[i].soft_on_triggers_valid) {
-			ret = adi_ad9081_dac_soft_on_enable_set(&phy->ad9081,
-				dac_mask, phy->pa_protection[i].soft_on_triggers);
-			if (ret != 0) {
-				dev_err(&spi->dev, "Failed to set soft-on triggers for DAC %d\n", i);
-				return ret;
-			}
-		}
-
-		/* Configure long averaging PA protection - only if enabled and params valid */
-		if (phy->pa_protection[i].long_avg_enable && phy->pa_protection[i].long_avg_valid) {
-			ret = adi_ad9081_dac_long_pa_set(&phy->ad9081, dac_mask, 1,
-				phy->pa_protection[i].long_avg_time,
-				phy->pa_protection[i].long_avg_threshold);
-			if (ret != 0) {
-				dev_err(&spi->dev, "Failed to set long PA averaging for DAC %d\n", i);
-				return ret;
-			}
-		}
-
-		/* Configure short averaging PA protection - only if enabled and params valid */
-		if (phy->pa_protection[i].short_avg_enable && phy->pa_protection[i].short_avg_valid) {
-			ret = adi_ad9081_dac_short_pa_set(&phy->ad9081, dac_mask, 1,
-				phy->pa_protection[i].short_avg_time,
-				phy->pa_protection[i].short_avg_threshold);
-			if (ret != 0) {
-				dev_err(&spi->dev, "Failed to set short PA averaging for DAC %d\n", i);
-				return ret;
-			}
-		}
-
-		/* Configure DSA - only if enabled and all params valid */
-		if (phy->pa_protection[i].dsa_enable && phy->pa_protection[i].dsa_params_valid) {
-			ret = adi_ad9081_dac_duc_main_dsa_enable_set(&phy->ad9081,
-				dac_mask, 1);
-			if (ret != 0) {
-				dev_err(&spi->dev, "Failed to enable DSA for DAC %d\n", i);
-				return ret;
-			}
-
-			/* Set DSA parameters */
-			ret = adi_ad9081_dac_duc_main_dsa_set(&phy->ad9081, dac_mask,
-				phy->pa_protection[i].dsa_code,
-				phy->pa_protection[i].dsa_cutover,
-				phy->pa_protection[i].dsa_boost,
-				phy->pa_protection[i].dsa_gain);
-			if (ret != 0) {
-				dev_err(&spi->dev, "Failed to configure DSA for DAC %d\n", i);
-				return ret;
-			}
-		}
-	}
-
-	/* Configure global PA protection settings */
-
-	/* Configure rotation mode if provided in DT (global setting) */
-	if (phy->pa_protection_rotation_mode_valid) {
-		ret = adi_ad9081_dac_rotation_mode_set(&phy->ad9081,
-			phy->pa_protection_rotation_mode);
-		if (ret != 0) {
-			dev_err(&spi->dev, "Failed to set rotation mode\n");
-			return ret;
-		}
-	}
-
-	/* Configure GPIO as PA enable if requested (global setting) */
-	if (phy->pa_protection_gpio_as_pa_en) {
-		ret = adi_ad9081_dac_gpio_as_pa_en_set(&phy->ad9081, 1);
-		if (ret != 0) {
-			dev_err(&spi->dev, "Failed to configure GPIO as PA enable\n");
-			return ret;
-		}
-	}
-
 	return 0;
 }
 
@@ -2488,22 +2334,6 @@ static int ad9081_setup_rx(struct spi_device *spi)
 		phy->adc_dcm[1] = dcm;
 	}
 
-	switch (phy->chip_id.prod_id) {
-	case CHIPID_AD9081:
-		if (phy->chip_id.prod_grade != 0xB) /* check for AD9081-4D4AB */
-			break;
-		fallthrough;
-	case CHIPID_AD9988:
-		fallthrough;
-	case CHIPID_AD9986:
-		if (phy->adc_dcm[0] == 1 || phy->adc_dcm[1] == 1) {
-			dev_err(&phy->spi->dev,
-				"Decimation of 1x1 are not supported by the AD9081-4D4AB, AD9986, and AD9988");
-			return -EINVAL;
-		}
-		break;
-	}
-
 	sample_rate = DIV_ROUND_CLOSEST_ULL(phy->adc_frequency_hz, phy->adc_dcm[0]);
 	clk_set_rate_scaled(phy->clks[RX_SAMPL_CLK], sample_rate,
 		&phy->clkscale[RX_SAMPL_CLK]);
@@ -2630,6 +2460,8 @@ static int ad9081_multichip_sync(struct ad9081_phy *phy, int step)
 		jesd204_fsm_stop(phy->jdev, JESD204_LINKS_ALL);
 		jesd204_fsm_clear_errors(phy->jdev, JESD204_LINKS_ALL);
 		return jesd204_fsm_start(phy->jdev, JESD204_LINKS_ALL);
+	case 20:
+		return adi_ad9081_jesd_rx_calibrate_204c(&phy->ad9081, 1, 0, 1);
 	default:
 		return -EINVAL;
 	}
@@ -2649,8 +2481,6 @@ static int ad9081_read_raw(struct iio_dev *indio_dev,
 
 	ad9081_iiochan_to_fddc_cddc(phy, chan, &fddc_num,
 		&fddc_mask, &cddc_num, &cddc_mask);
-
-	guard(mutex)(&conv->lock);
 
 	switch (info) {
 	case IIO_CHAN_INFO_SAMP_FREQ:
@@ -2686,9 +2516,8 @@ static int ad9081_write_raw(struct iio_dev *indio_dev,
 {
 	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
 	struct ad9081_phy *phy = conv->phy;
+	unsigned long r_clk;
 	int ret;
-
-	guard(mutex)(&conv->lock);
 
 	switch (info) {
 	case IIO_CHAN_INFO_SAMP_FREQ:
@@ -2702,6 +2531,18 @@ static int ad9081_write_raw(struct iio_dev *indio_dev,
 			return -EPERM;
 
 		return ad9081_set_sample_rate(conv, val);
+
+		r_clk = clk_round_rate(conv->clk, val);
+		if (r_clk < 0 || r_clk > conv->chip_info->max_rate) {
+			dev_warn(&conv->spi->dev,
+				 "Error setting ADC sample rate %ld", r_clk);
+			return -EINVAL;
+		}
+
+		ret = clk_set_rate(conv->clk, r_clk);
+		if (ret < 0)
+			return ret;
+		break;
 	case IIO_CHAN_INFO_ENABLE:
 		if (chan->output) {
 			u8 cddc_num, cddc_mask, fddc_num, fddc_mask;
@@ -2825,7 +2666,7 @@ static ssize_t ad9081_phy_store(struct device *dev,
 	bool enable;
 	int ret = 0;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
 
 	switch ((u32)this_attr->address & 0xFF) {
 	case AD9081_LOOPBACK_MODE:
@@ -2879,7 +2720,7 @@ static ssize_t ad9081_phy_store(struct device *dev,
 			break;
 		}
 
-		ret = kstrtobool(buf, &bres);
+		ret = strtobool(buf, &bres);
 		if (ret < 0) {
 			ret = -EINVAL;
 			break;
@@ -2915,7 +2756,7 @@ static ssize_t ad9081_phy_store(struct device *dev,
 			break;
 		}
 
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 
@@ -2933,7 +2774,7 @@ static ssize_t ad9081_phy_store(struct device *dev,
 
 		break;
 	case AD9081_POWER_DOWN:
-		ret = kstrtobool(buf, &enable);
+		ret = strtobool(buf, &enable);
 		if (ret)
 			break;
 		ret = ad9081_set_power_state(phy, !enable);
@@ -2941,6 +2782,8 @@ static ssize_t ad9081_phy_store(struct device *dev,
 	default:
 		ret = -EINVAL;
 	}
+
+	mutex_unlock(&conv->lock);
 
 	return ret ? ret : len;
 }
@@ -2959,8 +2802,7 @@ static ssize_t ad9081_phy_show(struct device *dev,
 	bool paused;
 	int ret = 0;
 
-	guard(mutex)(&conv->lock);
-
+	mutex_lock(&conv->lock);
 	switch ((u32)this_attr->address & 0xFF) {
 	case AD9081_LOOPBACK_MODE:
 		if (phy->tx_disable || phy->rx_disable) {
@@ -3068,6 +2910,7 @@ static ssize_t ad9081_phy_show(struct device *dev,
 	default:
 		ret = -EINVAL;
 	}
+	mutex_unlock(&conv->lock);
 
 	return ret;
 }
@@ -3199,8 +3042,6 @@ static int ad9081_status_show(struct seq_file *file, void *offset)
 	u16 stat;
 	u8 vals[3];
 
-	guard(mutex)(&conv->lock);
-
 	for (l = AD9081_LINK_0; !phy->tx_disable && (l < (ad9081_link_is_dual(phy->jrx_link_tx) ?
 		AD9081_LINK_ALL : AD9081_LINK_1)); l++) {
 
@@ -3284,13 +3125,16 @@ static int ad9081_fsc_set(void *arg, const u64 val)
 	struct iio_dev *indio_dev = arg;
 	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
 	struct ad9081_phy *phy = conv->phy;
+	int ret;
 
 	if (!val)
 		return -EINVAL;
 
-	guard(mutex)(&conv->lock);
+	mutex_lock(&conv->lock);
+	ret = adi_ad9081_dac_fsc_set(&phy->ad9081, AD9081_DAC_ALL, val, 1);
+	mutex_unlock(&conv->lock);
 
-	return adi_ad9081_dac_fsc_set(&phy->ad9081, AD9081_DAC_ALL, val, 1);
+	return ret;
 }
 
 DEFINE_DEBUGFS_ATTRIBUTE(ad9081_fsc_fops, NULL, ad9081_fsc_set, "%llu");
@@ -3300,7 +3144,7 @@ static const char* const pfir_filter_modes[] = {
 	"matrix", "complex_full", "complex_half", "real_n"
 };
 
-static unsigned char pfir_mode_tap_lut[] = {0, 48, 96, 0, 48, 64, 96, 192};
+static unsigned char pfir_mode_tap_lut[] = {0, 48, 96, 0, 48, 128, 96, 192};
 
 static const char* const pfir_filter_pairs[] = {
 	"adc_pair_0", "adc_pair_1", "adc_pair_all"
@@ -3308,6 +3152,18 @@ static const char* const pfir_filter_pairs[] = {
 
 static const char* const pfir_filter_pages[] = {
 	"page_0", "page_1", "page_2", "page_3", "page_all"
+};
+
+enum coeff_load_sel_types {
+	REAL_I_LOAD = 0,
+	REAL_Q_LOAD = 1,
+	REAL_CROSS_I_LOAD = 2,
+	REAL_CROSS_Q_LOAD = 3,
+	COMPLEX_LOAD = 4,
+};
+
+static const char* const pfir_filter_load_type[] = {
+	"real_i", "real_q", "real_cross_i", "real_cross_q", "complex"
 };
 
 static u32 ad9081_pfir_gain_enc(int val)
@@ -3325,6 +3181,57 @@ static u32 ad9081_pfir_gain_enc(int val)
 		return AD9081_ADC_PFIR_GAIN_0DB;
 	}
 };
+
+static int ad9081_adc_pfir_prog(struct ad9081_phy *phy,
+	adi_ad9081_adc_pfir_ctl_page_e ctl_pages,
+	adi_ad9081_adc_pfir_coeff_page_e coeff_pages,
+	adi_ad9081_adc_pfir_i_mode_e mode,
+	uint8_t coeff_load_sel,
+	int16_t *coeffs, uint8_t coeffs_num)
+{
+	int ret, i;
+
+	if (coeffs_num != pfir_mode_tap_lut[mode])
+		dev_err(&phy->spi->dev, "Expected %d coefficients got %d",
+			pfir_mode_tap_lut[mode], coeffs_num);
+
+	ret = adi_ad9081_adc_pfir_coeff_validate(&phy->ad9081, coeffs_num, coeffs);
+	if (ret)
+		dev_err(&phy->spi->dev, "Validate %s:%s coefficients failed (%d)",
+			pfir_filter_modes[mode],
+			pfir_filter_load_type[coeff_load_sel], ret);
+
+	ret = adi_ad9081_adc_pfir_coeff_load_sel_set(&phy->ad9081, ctl_pages,
+			1 << coeff_load_sel);
+	if (ret)
+		goto out;
+
+	for (i = 0; i < coeffs_num; i++) {
+		ret = adi_ad9081_adc_pfir_coeff_set(&phy->ad9081, coeff_pages, i,
+						    coeffs[i]);
+		if (ret)
+			goto out;
+	}
+
+	ret = adi_ad9081_adc_pfir_coeff_load_sel_set(&phy->ad9081, ctl_pages, 0);
+	if (ret)
+		goto out;
+
+	ret = adi_ad9081_adc_pfir_coeff_xfer_set(&phy->ad9081, ctl_pages, 1);
+	if (ret)
+		goto out;
+
+	ret =  adi_ad9081_adc_pfir_coeff_xfer_set(&phy->ad9081, ctl_pages, 0);
+out:
+	dev_printk(ret ? KERN_ERR : KERN_INFO, &phy->spi->dev,
+		"Filter loading ADC<0x%X> on pages <0x%X> using <%s> with <%d> tabs {%d, %d, %d, ..., %d, %d, %d} load type %s\n",
+		ctl_pages, coeff_pages, pfir_filter_modes[mode], coeffs_num,
+		coeffs[0], coeffs[1], coeffs[2],
+		coeffs[coeffs_num - 3], coeffs[coeffs_num - 2], coeffs[coeffs_num - 1],
+		pfir_filter_load_type[coeff_load_sel]);
+
+	return ret;
+}
 
 #if 0
 int adi_ad9081_adc_pfir_coeffs_get(adi_ad9081_device_t *device,
@@ -3355,22 +3262,16 @@ static int ad9081_parse_fir(struct ad9081_phy *phy,
 				 char *data, u32 size)
 {
 	char *line;
-	int i = 0, ret;
+	int i = 0, q = 0, ret;
 	char *ptr = data;
 
 	adi_ad9081_adc_pfir_ctl_page_e ctl_pages = AD9081_ADC_PFIR_ADC_PAIR_ALL;
 	adi_ad9081_adc_pfir_coeff_page_e coeff_pages = AD9081_ADC_PFIR_COEFF_PAGE_ALL;
 	adi_ad9081_adc_pfir_i_mode_e i_mode = AD9081_ADC_PFIR_I_MODE_DISABLE;
 	adi_ad9081_adc_pfir_q_mode_e q_mode = AD9081_ADC_PFIR_Q_MODE_DISABLE;
+	adi_ad9081_adc_pfir_gain_e ix_gain = 0, iy_gain = 0, qx_gain = 0, qy_gain = 0;
 	u8 half_complex_delay = 0, image_cancel_delay = 0;
 	u8 read_mask = 0;
-
-	adi_ad9081_adc_pfir_gain_t pfir_gain = {
-		.ix_gain = AD9081_ADC_PFIR_GAIN_0DB,
-		.iy_gain = AD9081_ADC_PFIR_GAIN_0DB,
-		.qx_gain = AD9081_ADC_PFIR_GAIN_0DB,
-		.qy_gain = AD9081_ADC_PFIR_GAIN_0DB
-	};
 
 	while ((line = strsep(&ptr, "\n"))) {
 		if (line >= data + size) {
@@ -3403,10 +3304,10 @@ static int ad9081_parse_fir(struct ad9081_phy *phy,
 				     &ix, &iy, &qx, &qy);
 
 			if (ret == 4) {
-				pfir_gain.ix_gain = ad9081_pfir_gain_enc(ix);
-				pfir_gain.iy_gain = ad9081_pfir_gain_enc(iy);
-				pfir_gain.qx_gain = ad9081_pfir_gain_enc(qx);
-				pfir_gain.qy_gain = ad9081_pfir_gain_enc(qy);
+				ix_gain = ad9081_pfir_gain_enc(ix);
+				iy_gain = ad9081_pfir_gain_enc(iy);
+				qx_gain = ad9081_pfir_gain_enc(qx);
+				qy_gain = ad9081_pfir_gain_enc(qy);
 
 				read_mask |= BIT(1);
 				continue;
@@ -3453,14 +3354,20 @@ static int ad9081_parse_fir(struct ad9081_phy *phy,
 
 			ret = sscanf(line, "%d %d %d %d", &val1, &val2, &val3, &val4);
 			if (ret == 4) {
-				if (i >= ARRAY_SIZE(phy->coeffs) / 4)
+				if (i >= ARRAY_SIZE(phy->coeffs_i) / 2)
 					return -EINVAL;
 
-				phy->coeffs[i] = (short)val1;
-				phy->coeffs[i + 48] = (short)val2;
-				phy->coeffs[i + 96] = (short)val3;
-				phy->coeffs[i + 144] = (short)val4;
+				phy->coeffs_i[i] = (short)val1;
+				phy->coeffs_i[i + 96] = (short)val2;
 				i++;
+
+
+				if (q >= ARRAY_SIZE(phy->coeffs_q) / 2)
+					return -EINVAL;
+
+				phy->coeffs_q[q] = (short)val3;
+				phy->coeffs_q[q + 96] = (short)val4;
+				q++;
 
 				continue;
 			}
@@ -3468,34 +3375,26 @@ static int ad9081_parse_fir(struct ad9081_phy *phy,
 			int val1, val2;
 
 			ret = sscanf(line, "%d %d", &val1, &val2);
-			if (ret == 1) {
-				if (i >= ARRAY_SIZE(phy->coeffs))
+			if (ret == 1 || ret == 2) {
+				if (i >= ARRAY_SIZE(phy->coeffs_i))
 					return -EINVAL;
 
-				phy->coeffs[i++] = (short)val1;
-			} else if (ret == 2) {
-				int offset = 96;
+				if (i_mode == AD9081_ADC_PFIR_I_MODE_COMPLEX_FULL) {
+					phy->coeffs_i[i++] = (short)val1;
+					phy->coeffs_i[i++] = (short)val2;
 
-				if (i_mode == AD9081_ADC_PFIR_I_MODE_COMPLEX_FULL)
-					offset = 64;
+				} else {
+					phy->coeffs_i[i++] = (short)val1;
 
-				if (i >= ARRAY_SIZE(phy->coeffs) / 2)
-					return -EINVAL;
-				phy->coeffs[i] = (short)val1;
-				phy->coeffs[i + offset] = (short)val2;
-				i++;
+					if (ret == 1) /* single real_n */
+						val2 = val1;
+
+					phy->coeffs_q[q++] = (short)val2;
+				}
+
+				continue;
 			}
-
-			continue;
 		}
-	}
-
-	if (i != pfir_mode_tap_lut[i_mode] && i != pfir_mode_tap_lut[q_mode]) {
-		dev_err(&phy->spi->dev, "Expected <%s:%d>,<%s:%d> coefficients got %d",
-			pfir_filter_modes[i_mode], pfir_mode_tap_lut[i_mode],
-			pfir_filter_modes[q_mode], pfir_mode_tap_lut[q_mode], i);
-
-		return -EINVAL;
 	}
 
 	ret = adi_ad9081_adc_pfir_hc_prog_delay_set(&phy->ad9081,
@@ -3506,7 +3405,11 @@ static int ad9081_parse_fir(struct ad9081_phy *phy,
 		ctl_pages, half_complex_delay);
 	if (ret)
 		return -EIO;
-
+	ret = adi_ad9081_adc_pfir_quad_mode_set(&phy->ad9081, ctl_pages,
+		(phy->chip_id.prod_id == CHIPID_AD9081 ||
+		phy->chip_id.prod_id == CHIPID_AD9988) ? 1 : 0);
+	if (ret)
+		return -EIO;
 	ret = adi_ad9081_adc_pfir_coeff_page_set(&phy->ad9081, coeff_pages);
 	if (ret)
 		return -EIO;
@@ -3516,31 +3419,57 @@ static int ad9081_parse_fir(struct ad9081_phy *phy,
 	ret = adi_ad9081_adc_pfir_coeff_clear_set(&phy->ad9081, ctl_pages, 0);
 	if (ret)
 		return -EIO;
-
-	if (i_mode == AD9081_ADC_PFIR_I_MODE_DISABLE && q_mode == AD9081_ADC_PFIR_Q_MODE_DISABLE) {
-		ret = adi_ad9081_adc_pfir_i_mode_set(&phy->ad9081, ctl_pages, i_mode);
-		if (ret)
-			return -EIO;
-		ret = adi_ad9081_adc_pfir_q_mode_set(&phy->ad9081, ctl_pages, q_mode);
-		if (ret)
-			return -EIO;
-
-		return size;
-	}
-
-	ret = adi_ad9081_adc_pfir_coeff_table_load_set(&phy->ad9081,
-			ctl_pages, coeff_pages, i_mode, q_mode, &pfir_gain,
-			phy->coeffs, 0);
-
-	dev_printk(ret ? KERN_ERR : KERN_INFO, &phy->spi->dev,
-		"%sFilter loading ADC<0x%X> on pages <0x%X> using <%s>,<%s> with <%d> tabs {%d, %d, %d, ...}\n",
-		ret ? "Failed: " : "", ctl_pages, coeff_pages,
-		pfir_filter_modes[i_mode], pfir_filter_modes[q_mode], i,
-		phy->coeffs[0], phy->coeffs[1], phy->coeffs[2]);
+	ret = adi_ad9081_adc_pfir_i_mode_set(&phy->ad9081, ctl_pages, i_mode);
+	if (ret)
+		return -EIO;
+	ret = adi_ad9081_adc_pfir_q_mode_set(&phy->ad9081, ctl_pages, q_mode);
+	if (ret)
+		return -EIO;
+	ret = adi_ad9081_adc_pfir_i_gain_set(&phy->ad9081, ctl_pages, ix_gain,
+					     iy_gain);
+	if (ret)
+		return -EIO;
+	ret = adi_ad9081_adc_pfir_q_gain_set(&phy->ad9081, ctl_pages, qx_gain,
+					     qy_gain);
 	if (ret)
 		return -EIO;
 
-	// adi_ad9081_adc_pfir_coeffs_get(&phy->ad9081, coeff_pages);
+	if (i_mode == AD9081_ADC_PFIR_I_MODE_COMPLEX_FULL) {
+		ret = ad9081_adc_pfir_prog(phy, ctl_pages, coeff_pages,
+			i_mode, COMPLEX_LOAD, phy->coeffs_i, i);
+	} else {
+		if (i_mode && i) {
+			ret = ad9081_adc_pfir_prog(phy, ctl_pages, coeff_pages,
+				i_mode, REAL_I_LOAD, phy->coeffs_i, i);
+
+			if (ret)
+				goto out;
+		}
+		if (q_mode && q) {
+			ret = ad9081_adc_pfir_prog(phy, ctl_pages, coeff_pages,
+				(adi_ad9081_adc_pfir_i_mode_e)q_mode, REAL_Q_LOAD,
+				phy->coeffs_q, q);
+
+			if (ret)
+				goto out;
+		}
+
+		if (i_mode == AD9081_ADC_PFIR_I_MODE_MATRIX) {
+			ret = ad9081_adc_pfir_prog(phy, ctl_pages, coeff_pages,
+				i_mode, REAL_CROSS_I_LOAD, &phy->coeffs_i[96], i);
+			if (ret)
+				goto out;
+			ret = ad9081_adc_pfir_prog(phy, ctl_pages, coeff_pages,
+				i_mode, REAL_CROSS_Q_LOAD, &phy->coeffs_q[96], q);
+			if (ret)
+				goto out;
+		}
+	}
+
+	//adi_ad9081_adc_pfir_coeffs_get(&phy->ad9081, coeff_pages);
+
+	if (ret != API_CMS_ERROR_OK)
+		dev_err(&phy->spi->dev, "Prgramming filter failed (%d)", ret);
 
 	return size;
 
@@ -3559,8 +3488,6 @@ ad9081_fir_bin_write(struct file *filp, struct kobject *kobj,
 	struct iio_dev *indio_dev = dev_to_iio_dev(kobj_to_dev(kobj));
 	struct axiadc_converter *conv = iio_device_get_drvdata(indio_dev);
 	struct ad9081_phy *phy = conv->phy;
-
-	guard(mutex)(&conv->lock);
 
 	return ad9081_parse_fir(phy, buf, count);
 }
@@ -3605,7 +3532,7 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 	struct ad9081_phy *phy = conv->phy;
 	adi_ad9081_deser_mode_e dmode;
 	adi_cms_jesd_prbs_pattern_e prbs;
-	s16 eye_data[195];
+	s16 eye_data[192];
 	u64 val = 0;
 	ssize_t len = 0;
 	int ret, i, j, spo_steps;
@@ -3614,8 +3541,6 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 
 	if (*ppos)
 		return 0;
-
-	guard(mutex)(&conv->lock);
 
 	if (entry->out_value) {
 		switch (entry->size) {
@@ -3635,12 +3560,13 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 			val = *(u64 *)entry->out_value;
 			break;
 		default:
-			return -EINVAL;
+			ret = -EINVAL;
 		}
 
 	} else if (entry->cmd) {
 		switch (entry->cmd) {
 		case DBGFS_BIST_PRBS_JRX_ERR:
+			mutex_lock(&conv->lock);
 			for (i = 0; i < phy->jrx_link_tx[0].jesd_param.jesd_l; i++) {
 				adi_ad9081_prbs_test_t prbs_rx_result;
 
@@ -3672,6 +3598,7 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 				}
 			}
 
+			mutex_unlock(&conv->lock);
 			len += snprintf(phy->dbuf + len, sizeof(phy->dbuf), "\n");
 			break;
 		case DBGFS_BIST_JRX_SPO_SWEEP:
@@ -3690,11 +3617,12 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 			prbs = (entry->val >> 8) & 0xFF;
 			duration = (entry->val >> 16) & 0xFFFF;
 
+			mutex_lock(&conv->lock);
 			entry->val = 0;
 
 			switch (dmode) {
 			case AD9081_QUART_RATE:
-				spo_steps = 33;
+				spo_steps = 32;
 
 				ret = adi_ad9081_jesd_cal_bg_cal_pause(&phy->ad9081);
 				if (ret)
@@ -3706,7 +3634,7 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 				ret = adi_ad9081_jesd_cal_bg_cal_start(&phy->ad9081);
 				break;
 			case AD9081_HALF_RATE:
-				spo_steps = 65;
+				spo_steps = 64;
 				ret = adi_ad9081_jesd_rx_hr_two_dim_eye_scan(&phy->ad9081,
 					lane, prbs, duration, eye_data);
 				break;
@@ -3717,6 +3645,7 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 			if (ret < 0) {
 				dev_err(&phy->spi->dev,
 					"JRX eye_scan lane%u failed (%d)", lane, ret);
+				mutex_unlock(&conv->lock);
 				return ret;
 			}
 
@@ -3725,12 +3654,13 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 				lane, spo_steps, phy->jrx_link_tx[0].lane_rate_kbps);
 
 			for (i = 0; i < (spo_steps * 3); i += 3)
-				if (eye_data[i + 1] || eye_data[i + 2])
+				if (eye_data[i])
 					len += snprintf(phy->dbuf + len,
 						sizeof(phy->dbuf),
 						"%d,%d,%d\n", eye_data[i],
 						eye_data[i + 1], eye_data[i + 2]);
 
+			mutex_unlock(&conv->lock);
 			break;
 		case DBGFS_DEV_API_INFO:
 			adi_ad9081_device_api_revision_get(&phy->ad9081,
@@ -3745,12 +3675,6 @@ static ssize_t ad9081_debugfs_read(struct file *file, char __user *userbuf,
 
 			len = snprintf(phy->dbuf, sizeof(phy->dbuf), "AD%X Rev. %u Grade %u\n",
 				conv->id, phy->chip_id.dev_revision, phy->chip_id.prod_grade);
-			break;
-		case DBGFS_JRX_LMFC_DELAY_LINK0:
-			val = phy->jrx_link_tx[0].jrx_tpl_phase_adjust;
-			break;
-		case DBGFS_JRX_LMFC_DELAY_LINK1:
-			val = phy->jrx_link_tx[1].jrx_tpl_phase_adjust;
 			break;
 		default:
 			val = entry->val;
@@ -3775,9 +3699,8 @@ static ssize_t ad9081_debugfs_write(struct file *file,
 	s64 val;
 	char buf[80];
 	u8 val_u8;
-	u8 lv, rv;
 
-	guard(mutex)(&conv->lock);
+	u8 lv, rv;
 
 	count = min_t(size_t, count, (sizeof(buf) - 1));
 	if (copy_from_user(buf, userbuf, count))
@@ -3796,22 +3719,21 @@ static ssize_t ad9081_debugfs_write(struct file *file,
 		if (ret == 1)
 			val2 = 1; /* 1 second */
 
+		mutex_lock(&conv->lock);
 		if (val == 0)
-			ret = adi_ad9081_jesd_rx_phy_prbs_test_disable_set(&phy->ad9081);
+			adi_ad9081_jesd_rx_phy_prbs_test_disable_set(&phy->ad9081);
 		else
-			ret = adi_ad9081_jesd_rx_phy_prbs_test(&phy->ad9081,
+			adi_ad9081_jesd_rx_phy_prbs_test(&phy->ad9081,
 				ad9081_val_to_prbs(val), val2);
-
-		if (ret)
-			return ret;
-
 		entry->val = val;
+		mutex_unlock(&conv->lock);
 
 		return count;
 	case DBGFS_BIST_PRBS_JTX:
 		if (ret < 1)
 			return -EINVAL;
 
+		mutex_lock(&conv->lock);
 		if (val == 0)
 			adi_ad9081_jesd_tx_gen_test(&phy->ad9081,
 				ad9081_link_sel(phy->jtx_link_rx),
@@ -3821,21 +3743,26 @@ static ssize_t ad9081_debugfs_write(struct file *file,
 			adi_ad9081_jesd_tx_phy_prbs_test(&phy->ad9081,
 				ad9081_link_sel(phy->jtx_link_rx), ad9081_val_to_prbs(val));
 		entry->val = val;
+		mutex_unlock(&conv->lock);
 
 		return count;
 	case DBGFS_BIST_JRX_SPO_SET:
 		if (ret < 2)
 			return -EINVAL;
 
-		ret = adi_ad9081_jesd_rx_gen_2s_comp(&phy->ad9081, val2, 7, &val_u8);
+		ret = adi_ad9081_jesd_rx_gen_2s_comp(&phy->ad9081, val2, 7,
+						     &val_u8);
 		if (ret)
 			return ret;
-
+		mutex_lock(&conv->lock);
 		ret = adi_ad9081_jesd_rx_spo_set(&phy->ad9081, val & 0x7, val_u8);
-		if (ret)
+		if (ret) {
+			mutex_unlock(&conv->lock);
 			return ret;
+		}
 
 		entry->val = val2;
+		mutex_unlock(&conv->lock);
 
 		return count;
 	case DBGFS_BIST_JRX_2D_EYE:
@@ -3875,108 +3802,37 @@ static ssize_t ad9081_debugfs_write(struct file *file,
 			return ret;
 
 		val2 = ret;
+		mutex_lock(&conv->lock);
 		/*           Time          PRBS                 Lane */
 		entry->val = val3 << 16 | (val2 & 0xFF) << 8 | (val & 0xFF);
+		mutex_unlock(&conv->lock);
 
 		return count;
-	case DBGFS_JESD_RX_RECAL_204C: {
-		adi_ad9081_jrx_fg_cal_result_t fg_cal_res;
-
-		if (val != 1)
-			return -EINVAL;
-
-		if (phy->jrx_link_tx[0].jesd_param.jesd_jesdv != JESD204_VERSION_C)
-			return -ENOTSUPP;
-
-		if (phy->jrx_link_tx[0].lane_rate_kbps <=
-		    (AD9081_JESDRX_204C_CAL_THRESH / 1000))
-			return -ERANGE;
-
-		ret = adi_ad9081_jesd_rx_link_enable_set(&phy->ad9081,
-			ad9081_link_sel(phy->jrx_link_tx), 1);
-		if (ret != 0)
-			return ret;
-
-		dev_info(&phy->spi->dev, "running jesd_rx_calibrate_204c, LR %lu kbps",
-			phy->jrx_link_tx[0].lane_rate_kbps);
-
-		ret = adi_ad9081_jesd_rx_calibrate_204c(&phy->ad9081, 1,
-			phy->ad9081.serdes_info.des_settings.boost_mask, 1);
-		if (ret < 0)
-			return ret;
-
-		ret = adi_ad9081_jesd_rx_calibrate_204c_status_get(
-			&phy->ad9081, &fg_cal_res);
-		if (ret < 0)
-			return ret;
-
-		if (!fg_cal_res.status) {
-			dev_err(&phy->spi->dev, "jesd_rx_calibrate_204c failed, failed lane mask 0x%02x\n",
-				fg_cal_res.failed_mask);
-		} else {
-			dev_info(&phy->spi->dev, "jesd_rx_calibrate_204c success, goodness %u, SPO L %u, SPO R %u\n",
-				fg_cal_res.goodness,
-				fg_cal_res.spo_left,
-				fg_cal_res.spo_right);
-		}
-
-		ret = adi_ad9081_jesd_rx_link_enable_set(&phy->ad9081,
-			ad9081_link_sel(phy->jrx_link_tx), 0);
-		if (ret != 0)
-			return ret;
-
-		msleep(10);
-
-		ret = adi_ad9081_jesd_rx_link_enable_set(&phy->ad9081,
-			ad9081_link_sel(phy->jrx_link_tx), 1);
-		if (ret != 0)
-			return ret;
-
-		if (!fg_cal_res.status)
-			return -EFAULT;
-
-		return count;
-	}
 	case DBGFS_BIST_JRX_SPO_SWEEP:
 		if (ret < 2)
 			return -EINVAL;
 		if (ret == 2)
 			val3 = 1; /* 1 second */
 
+		mutex_lock(&conv->lock);
 		ret = adi_ad9081_jesd_cal_bg_cal_pause(&phy->ad9081);
-		if (ret)
+		if (ret) {
+			mutex_unlock(&conv->lock);
 			return ret;
-
+		}
 		ret = adi_ad9081_jesd_rx_spo_sweep(&phy->ad9081, val & 0x7,
 				ad9081_val_to_prbs(val2),
 				ad9081_deserializer_mode_get(&phy->jrx_link_tx[0]),
 				val3, &lv, &rv);
 
 		adi_ad9081_jesd_cal_bg_cal_start(&phy->ad9081);
-		if (ret)
+		if (ret) {
+			mutex_unlock(&conv->lock);
 			return ret;
+		}
 
 		entry->val = lv << 16 | rv;
-
-		return count;
-	case DBGFS_JRX_LMFC_DELAY_LINK0:
-		if (ret < 1)
-			return -EINVAL;
-
-		phy->jrx_link_tx[0].jrx_tpl_phase_adjust = val;
-		ret = adi_ad9081_jesd_rx_lmfc_delay_set(&phy->ad9081, AD9081_LINK_0, val);
-		if (ret)
-			return ret;
-
-		return count;
-	case DBGFS_JRX_LMFC_DELAY_LINK1:
-		if (ret < 1)
-			return -EINVAL;
-
-		phy->jrx_link_tx[1].jrx_tpl_phase_adjust = val;
-		ret = adi_ad9081_jesd_rx_lmfc_delay_set(&phy->ad9081, AD9081_LINK_1, val);
-		if (ret)
-			return ret;
+		mutex_unlock(&conv->lock);
 
 		return count;
 	default:
@@ -4001,7 +3857,7 @@ static ssize_t ad9081_debugfs_write(struct file *file,
 			*(u64 *)entry->out_value = val;
 			break;
 		default:
-			return -EINVAL;
+			ret = -EINVAL;
 		}
 	}
 
@@ -4060,12 +3916,6 @@ static int ad9081_post_iio_register(struct iio_dev *indio_dev)
 			"api_version", DBGFS_DEV_API_INFO);
 		ad9081_add_debugfs_entry(indio_dev,
 			"chip_version", DBGFS_DEV_CHIP_INFO);
-		ad9081_add_debugfs_entry(indio_dev,
-			"jesd_rx_recalibrate_204c", DBGFS_JESD_RX_RECAL_204C);
-		ad9081_add_debugfs_entry(indio_dev,
-			"adi,tpl-phase-adjust-link0", DBGFS_JRX_LMFC_DELAY_LINK0);
-		ad9081_add_debugfs_entry(indio_dev,
-			"adi,tpl-phase-adjust-link1", DBGFS_JRX_LMFC_DELAY_LINK1);
 
 		for (i = 0; i < phy->ad9081_debugfs_entry_index; i++)
 			debugfs_create_file( phy->debugfs_entry[i].propname, 0644,
@@ -4080,43 +3930,6 @@ static int ad9081_post_iio_register(struct iio_dev *indio_dev)
 		debugfs_create_u8("adi,direct-loopback-mode-dac-adc-mapping",
 			0644, iio_get_debugfs_dentry(indio_dev),
 			&phy->direct_lb_map);
-
-		/* JRX (deserializer) settings */
-		debugfs_create_u8("adi,jrx-lane-invert-mask", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.invert_mask);
-		debugfs_create_u8("adi,jrx-lane-boost-mask", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.boost_mask);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane0", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[0]);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane1", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[1]);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane2", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[2]);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane3", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[3]);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane4", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[4]);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane5", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[5]);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane6", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[6]);
-		debugfs_create_u8("adi,jrx-ctle-filter-lane7", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.des_settings.ctle_filter[7]);
-
-		/* JTX (serializer) settings */
-		debugfs_create_u8("adi,jtx-lane-invert-mask", 0644,
-			iio_get_debugfs_dentry(indio_dev),
-			&phy->ad9081.serdes_info.ser_settings.invert_mask);
 	}
 
 	sysfs_bin_attr_init(&phy->bin);
@@ -4240,28 +4053,6 @@ static int ad9081_parse_jesd_link_dt(struct ad9081_phy *phy,
 	}
 
 	if (jtx) { /* JTX - for RX ADC path */
-		tmp = 0;
-		ret = of_property_read_u32(np, "adi,link-mode-s-sel", &tmp);
-
-		switch (phy->chip_id.prod_id) {
-		case CHIPID_AD9081:
-			if (phy->chip_id.prod_grade != 0xB) /* check for AD9081-4D4AB */
-				break;
-
-			fallthrough;
-		case CHIPID_AD9988:
-			fallthrough;
-		case CHIPID_AD9986:
-			if (ret) {
-				dev_err(&phy->spi->dev,
-					"Missing device tree property: adi,link-mode-s-sel");
-				return -EINVAL;
-			}
-			break;
-		}
-
-		link->jesd_param.jesd_mode_s_sel = tmp;
-
 		ret = ad9081_get_jesd_converter_selection(
 			phy, np, "adi,converter-select", link);
 
@@ -4305,13 +4096,9 @@ static void ad9081_dt_err(struct ad9081_phy *phy, const char *prop)
 
 static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 {
-	struct device_node *of_channels;
+	struct device_node *of_channels, *of_chan;
 	struct device_node *of_trx_path;
-	u32 reg, index, tmp, value;
-	bool has_long_time = false, has_long_thresh = false;
-	bool has_short_time = false, has_short_thresh = false;
-	bool has_dsa_code = false, has_dsa_cutover = false;
-	bool has_dsa_boost = false, has_dsa_gain = false;
+	u32 reg, index, tmp;
 	int i, ret;
 
 	of_trx_path = of_get_child_by_name(np, "adi,tx-dacs");
@@ -4329,16 +4116,6 @@ static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 
 	phy->tx_ffh_hopf_via_gpio_en =
 		of_property_read_bool(of_trx_path, "adi,ffh-hopf-via-gpio-enable");
-
-	/* Global PA protection settings */
-	phy->pa_protection_gpio_as_pa_en =
-		of_property_read_bool(of_trx_path, "adi,pa-protection-gpio-as-pa-enable");
-
-	ret = of_property_read_u32(of_trx_path, "adi,pa-protection-rotation-mode", &tmp);
-	if (!ret) {
-		phy->pa_protection_rotation_mode = tmp;
-		phy->pa_protection_rotation_mode_valid = true;
-	}
 
 	/* The 4 DAC Main Datapaths */
 
@@ -4358,7 +4135,7 @@ static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 		return ret;
 	}
 
-	for_each_child_of_node_scoped(of_channels, of_chan) {
+	for_each_child_of_node(of_channels, of_chan) {
 		ret = of_property_read_u32(of_chan, "reg", &reg);
 		if (!ret && (reg < ARRAY_SIZE(phy->tx_main_shift))) {
 			of_property_read_u64(of_chan,
@@ -4396,102 +4173,6 @@ static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 
 				phy->tx_dac_chan_xbar[reg] |= BIT(index);
 			}
-
-			/* PA Protection properties */
-			phy->pa_protection[reg].soft_off_enable =
-				of_property_read_bool(of_chan, "adi,pa-protection-soft-off-enable");
-			phy->pa_protection[reg].soft_off_new_gain_enable =
-				of_property_read_bool(of_chan, "adi,pa-protection-soft-off-new-gain-enable");
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-soft-off-ramp-rate", &value);
-			if (!ret) {
-				phy->pa_protection[reg].soft_off_ramp_rate = value;
-				phy->pa_protection[reg].soft_off_ramp_rate_valid = true;
-			}
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-soft-off-triggers", &value);
-			if (!ret) {
-				phy->pa_protection[reg].soft_off_triggers = value;
-				phy->pa_protection[reg].soft_off_triggers_valid = true;
-			}
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-soft-on-triggers", &value);
-			if (!ret) {
-				phy->pa_protection[reg].soft_on_triggers = value;
-				phy->pa_protection[reg].soft_on_triggers_valid = true;
-			}
-
-			/* Long averaging PA protection */
-			phy->pa_protection[reg].long_avg_enable =
-				of_property_read_bool(of_chan, "adi,pa-protection-long-avg-enable");
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-long-avg-time", &value);
-			if (!ret) {
-				phy->pa_protection[reg].long_avg_time = value;
-				has_long_time = true;
-			}
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-long-avg-threshold", &value);
-			if (!ret) {
-				phy->pa_protection[reg].long_avg_threshold = value;
-				has_long_thresh = true;
-			}
-
-			/* Mark long avg valid only if both parameters provided */
-			if (has_long_time && has_long_thresh)
-				phy->pa_protection[reg].long_avg_valid = true;
-
-			/* Short averaging PA protection */
-			phy->pa_protection[reg].short_avg_enable =
-				of_property_read_bool(of_chan, "adi,pa-protection-short-avg-enable");
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-short-avg-time", &value);
-			if (!ret) {
-				phy->pa_protection[reg].short_avg_time = value;
-				has_short_time = true;
-			}
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-short-avg-threshold", &value);
-			if (!ret) {
-				phy->pa_protection[reg].short_avg_threshold = value;
-				has_short_thresh = true;
-			}
-
-			/* Mark short avg valid only if both parameters provided */
-			if (has_short_time && has_short_thresh)
-				phy->pa_protection[reg].short_avg_valid = true;
-
-			/* DSA settings */
-			phy->pa_protection[reg].dsa_enable =
-				of_property_read_bool(of_chan, "adi,pa-protection-dsa-enable");
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-dsa-code", &value);
-			if (!ret) {
-				phy->pa_protection[reg].dsa_code = value;
-				has_dsa_code = true;
-			}
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-dsa-cutover", &value);
-			if (!ret) {
-				phy->pa_protection[reg].dsa_cutover = value;
-				has_dsa_cutover = true;
-			}
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-dsa-boost", &value);
-			if (!ret) {
-				phy->pa_protection[reg].dsa_boost = value;
-				has_dsa_boost = true;
-			}
-
-			ret = of_property_read_u32(of_chan, "adi,pa-protection-dsa-gain", &value);
-			if (!ret) {
-				phy->pa_protection[reg].dsa_gain = value;
-				has_dsa_gain = true;
-			}
-
-			/* Mark DSA params valid only if all parameters provided */
-			if (has_dsa_code && has_dsa_cutover && has_dsa_boost && has_dsa_gain)
-				phy->pa_protection[reg].dsa_params_valid = true;
 		}
 	}
 
@@ -4516,7 +4197,7 @@ static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 		return ret;
 	}
 
-	for_each_child_of_node_scoped(of_channels, of_chan) {
+	for_each_child_of_node(of_channels, of_chan) {
 		ret = of_property_read_u32(of_chan, "reg", &reg);
 		if (!ret && (reg < ARRAY_SIZE(phy->tx_chan_shift))) {
 			u32 val;
@@ -4557,7 +4238,7 @@ static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 	phy->jrx_link_watchdog_en = of_property_read_bool(of_channels,
 		"adi,jrx-link-watchdog-enable");
 
-	for_each_child_of_node_scoped(of_channels, of_chan) {
+	for_each_child_of_node(of_channels, of_chan) {
 		ret = of_property_read_u32(of_chan, "reg", &reg);
 		if (!ret && (reg < ARRAY_SIZE(phy->jrx_link_tx))) {
 			ad9081_parse_jesd_link_dt(phy, of_chan,
@@ -4566,6 +4247,7 @@ static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 			dev_err(&phy->spi->dev,
 				"Missing or invalid reg property in tx jesd-links node (%d)\n",
 				reg);
+			of_node_put(of_chan);
 			break;
 		}
 	}
@@ -4578,7 +4260,7 @@ static int ad9081_parse_dt_tx(struct ad9081_phy *phy, struct device_node *np)
 
 static int ad9081_parse_dt_rx(struct ad9081_phy *phy, struct device_node *np)
 {
-	struct device_node *of_channels;
+	struct device_node *of_channels, *of_chan;
 	struct device_node *of_trx_path;
 	u32 reg, tmp, nz;
 	int ret, i;
@@ -4615,7 +4297,7 @@ static int ad9081_parse_dt_rx(struct ad9081_phy *phy, struct device_node *np)
 		return -ENODEV;
 	}
 
-	for_each_child_of_node_scoped(of_channels, of_chan) {
+	for_each_child_of_node(of_channels, of_chan) {
 		ret = of_property_read_u32(of_chan, "reg", &reg);
 		if (!ret && (reg < ARRAY_SIZE(phy->tx_main_shift))) {
 			of_property_read_u64(of_chan,
@@ -4641,7 +4323,7 @@ static int ad9081_parse_dt_rx(struct ad9081_phy *phy, struct device_node *np)
 			phy->rx_cddc_gain_6db_en[reg] = of_property_read_bool(
 				of_chan, "adi,digital-gain-6db-enable");
 			phy->rx_cddc_select |= BIT(reg);
-			ret = of_property_read_u32(of_chan,
+			ret = of_property_read_u32(of_trx_path,
 				"adi,nyquist-zone", &tmp);
 			if (!ret)
 				phy->rx_nyquist_zone[reg] = tmp;
@@ -4661,7 +4343,7 @@ static int ad9081_parse_dt_rx(struct ad9081_phy *phy, struct device_node *np)
 		return -ENODEV;
 	}
 
-	for_each_child_of_node_scoped(of_channels, of_chan) {
+	for_each_child_of_node(of_channels, of_chan) {
 		ret = of_property_read_u32(of_chan, "reg", &reg);
 		if (!ret && (reg < ARRAY_SIZE(phy->rx_fddc_shift))) {
 			u32 mode;
@@ -4730,7 +4412,7 @@ static int ad9081_parse_dt_rx(struct ad9081_phy *phy, struct device_node *np)
 			phy->ad9081.serdes_info.ser_settings.lane_settings[i].post_emp_setting =
 				lane_cfg[i];
 
-	for_each_child_of_node_scoped(of_channels, of_chan) {
+	for_each_child_of_node(of_channels, of_chan) {
 		ret = of_property_read_u32(of_chan, "reg", &reg);
 		if (!ret && (reg < ARRAY_SIZE(phy->jtx_link_rx))) {
 			ad9081_parse_jesd_link_dt(phy, of_chan,
@@ -4739,6 +4421,7 @@ static int ad9081_parse_dt_rx(struct ad9081_phy *phy, struct device_node *np)
 			dev_err(&phy->spi->dev,
 				"Missing or invalid reg property in rx jesd-links node (%d)\n",
 				reg);
+			of_node_put(of_chan);
 			break;
 		}
 	}
@@ -4976,7 +4659,7 @@ static const struct iio_info ad9081_iio_info = {
 	.read_raw = &ad9081_read_raw,
 	.write_raw = &ad9081_write_raw,
 	.read_label = &ad9081_read_label,
-	.debugfs_reg_access = &ad9081_reg_access_locked,
+	.debugfs_reg_access = &ad9081_reg_access,
 	.attrs = &ad9081_phy_attribute_group,
 };
 
@@ -5110,8 +4793,6 @@ static int ad9081_jesd204_clks_enable(struct jesd204_dev *jdev,
 			phy->jrx_link_tx[0].lane_cal_rate_kbps !=
 			phy->jrx_link_tx[0].lane_rate_kbps) {
 
-			adi_ad9081_jrx_fg_cal_result_t fg_cal_res;
-
 			ret = adi_ad9081_jesd_rx_link_enable_set(&phy->ad9081,
 				ad9081_link_sel(phy->jrx_link_tx), 1);
 			if (ret != 0)
@@ -5120,26 +4801,9 @@ static int ad9081_jesd204_clks_enable(struct jesd204_dev *jdev,
 			dev_info(dev, "running jesd_rx_calibrate_204c, LR %lu kbps",
 				phy->jrx_link_tx[0].lane_rate_kbps);
 
-			ret = adi_ad9081_jesd_rx_calibrate_204c(&phy->ad9081, 1,
-				phy->ad9081.serdes_info.des_settings.boost_mask, 1);
+			ret = adi_ad9081_jesd_rx_calibrate_204c(&phy->ad9081, 1, 0, 1);
 			if (ret < 0)
 				return ret;
-
-			ret = adi_ad9081_jesd_rx_calibrate_204c_status_get(
-				&phy->ad9081, &fg_cal_res);
-			if (ret < 0)
-				return ret;
-
-			if (!fg_cal_res.status) {
-				dev_err(dev, "jesd_rx_calibrate_204c failed, failed lane mask 0x%02x\n",
-					fg_cal_res.failed_mask);
-				return -EFAULT;
-			} else {
-				dev_info(dev, "jesd_rx_calibrate_204c success, goodness %u, SPO L %u, SPO R %u\n",
-					fg_cal_res.goodness,
-					fg_cal_res.spo_left,
-					fg_cal_res.spo_right);
-			}
 
 			ret = adi_ad9081_jesd_rx_link_enable_set(&phy->ad9081,
 				ad9081_link_sel(phy->jrx_link_tx), 0);
@@ -5232,7 +4896,8 @@ static int ad9081_jesd204_link_running(struct jesd204_dev *jdev,
 	return JESD204_STATE_CHANGE_DONE;
 }
 
-static int ad9081_jesd204_uninit(struct jesd204_dev *jdev, enum jesd204_state_op_reason reason)
+int ad9081_jesd204_uninit(struct jesd204_dev *jdev,
+			    enum jesd204_state_op_reason reason)
 {
 	struct device *dev = jesd204_dev_to_device(jdev);
 
@@ -5708,7 +5373,7 @@ static int ad9081_probe(struct spi_device *spi)
 		 conv->id, phy->chip_id.dev_revision,
 		 phy->chip_id.prod_grade, api_rev[0], api_rev[1], api_rev[2]);
 
-	ret = devm_jesd204_fsm_start(&spi->dev, jdev, JESD204_LINKS_ALL);
+	ret = jesd204_fsm_start(jdev, JESD204_LINKS_ALL);
 	if (ret)
 		goto out_clk_del_provider;
 

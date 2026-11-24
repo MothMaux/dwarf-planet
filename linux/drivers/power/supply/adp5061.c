@@ -797,7 +797,8 @@ static const struct attribute_group adp5061_attr_group = {
 	.attrs = adp5061_attributes,
 };
 
-static int adp5061_probe(struct i2c_client *client)
+static int adp5061_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct power_supply_config psy_cfg = {};
 	struct adp5061_state *st;
@@ -837,7 +838,7 @@ static int adp5061_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id adp5061_id[] = {
-	{ "adp5061" },
+	{ "adp5061", 0},
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adp5061_id);

@@ -2,10 +2,9 @@
 /*
  * dts file for Xilinx ZynqMP ZCU100 revC
  *
- * (C) Copyright 2016 - 2022, Xilinx, Inc.
- * (C) Copyright 2022 - 2023, Advanced Micro Devices, Inc.
+ * (C) Copyright 2016 - 2021, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@amd.com>
+ * Michal Simek <michal.simek@xilinx.com>
  * Nathalie Chan King Choy
  */
 
@@ -123,28 +122,16 @@
 		io-channels = <&u35 0>, <&u35 1>, <&u35 2>, <&u35 3>;
 	};
 
-	si5335_0: si5335-0 { /* clk0_usb - u23 */
+	si5335_0: si5335_0 { /* clk0_usb - u23 */
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <26000000>;
 	};
 
-	si5335_1: si5335-1 { /* clk1_dp - u23 */
+	si5335_1: si5335_1 { /* clk1_dp - u23 */
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <27000000>;
-	};
-
-	dpcon {
-		compatible = "dp-connector";
-		label = "P11";
-		type = "full-size";
-
-		port {
-			dpcon_in: endpoint {
-				remote-endpoint = <&dpsub_dp_out>;
-			};
-		};
 	};
 };
 
@@ -287,7 +274,7 @@
 		};
 	};
 
-	pinctrl_i2c1_gpio: i2c1-gpio-grp {
+	pinctrl_i2c1_gpio: i2c1-gpio {
 		mux {
 			groups = "gpio0_4_grp", "gpio0_5_grp";
 			function = "gpio0";
@@ -521,9 +508,6 @@
 	xlnx,mio-bank = <0>;
 	non-removable;
 	disable-wp;
-	no-sd;
-	no-sdio;
-	cap-mmc-hw-reset;
 	cap-power-off-card;
 	mmc-pwrseq = <&sdio_pwrseq>;
 	vqmmc-supply = <&wmmcsdio_fixed>;
@@ -605,6 +589,10 @@
 	status = "okay";
 };
 
+&xilinx_ams {
+	status = "okay";
+};
+
 &ams_ps {
 	status = "okay";
 };
@@ -618,12 +606,4 @@
 	phy-names = "dp-phy0", "dp-phy1";
 	phys = <&psgtr 1 PHY_TYPE_DP 0 1>,
 	       <&psgtr 0 PHY_TYPE_DP 1 1>;
-
-	ports {
-		port@5 {
-			dpsub_dp_out: endpoint {
-				remote-endpoint = <&dpcon_in>;
-			};
-		};
-	};
 };

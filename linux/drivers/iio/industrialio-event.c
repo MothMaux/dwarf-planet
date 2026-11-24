@@ -198,7 +198,7 @@ static int iio_event_getfd(struct iio_dev *indio_dev)
 	if (ev_int == NULL)
 		return -ENODEV;
 
-	fd = mutex_lock_interruptible(&iio_dev_opaque->mlock);
+	fd = mutex_lock_interruptible(&indio_dev->mlock);
 	if (fd)
 		return fd;
 
@@ -219,7 +219,7 @@ static int iio_event_getfd(struct iio_dev *indio_dev)
 	}
 
 unlock:
-	mutex_unlock(&iio_dev_opaque->mlock);
+	mutex_unlock(&indio_dev->mlock);
 	return fd;
 }
 
@@ -232,7 +232,6 @@ static const char * const iio_ev_type_text[] = {
 	[IIO_EV_TYPE_CHANGE] = "change",
 	[IIO_EV_TYPE_MAG_REFERENCED] = "mag_referenced",
 	[IIO_EV_TYPE_GESTURE] = "gesture",
-	[IIO_EV_TYPE_FAULT] = "fault",
 };
 
 static const char * const iio_ev_dir_text[] = {
@@ -241,7 +240,6 @@ static const char * const iio_ev_dir_text[] = {
 	[IIO_EV_DIR_FALLING] = "falling",
 	[IIO_EV_DIR_SINGLETAP] = "singletap",
 	[IIO_EV_DIR_DOUBLETAP] = "doubletap",
-	[IIO_EV_DIR_FAULT_OPENWIRE] = "openwire",
 };
 
 static const char * const iio_ev_info_text[] = {
@@ -254,8 +252,6 @@ static const char * const iio_ev_info_text[] = {
 	[IIO_EV_INFO_TIMEOUT] = "timeout",
 	[IIO_EV_INFO_RESET_TIMEOUT] = "reset_timeout",
 	[IIO_EV_INFO_TAP2_MIN_DELAY] = "tap2_min_delay",
-	[IIO_EV_INFO_RUNNING_PERIOD] = "runningperiod",
-	[IIO_EV_INFO_RUNNING_COUNT] = "runningcount",
 };
 
 static enum iio_event_direction iio_ev_attr_dir(struct iio_dev_attr *attr)
@@ -287,9 +283,6 @@ static ssize_t iio_ev_state_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	if (!indio_dev->info->write_event_config)
-		return -EINVAL;
-
 	ret = indio_dev->info->write_event_config(indio_dev,
 		this_attr->c, iio_ev_attr_type(this_attr),
 		iio_ev_attr_dir(this_attr), val);
@@ -304,9 +297,6 @@ static ssize_t iio_ev_state_show(struct device *dev,
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
 	int val;
-
-	if (!indio_dev->info->read_event_config)
-		return -EINVAL;
 
 	val = indio_dev->info->read_event_config(indio_dev,
 		this_attr->c, iio_ev_attr_type(this_attr),
@@ -325,9 +315,6 @@ static ssize_t iio_ev_value_show(struct device *dev,
 	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
 	int val, val2, val_arr[2];
 	int ret;
-
-	if (!indio_dev->info->read_event_value)
-		return -EINVAL;
 
 	ret = indio_dev->info->read_event_value(indio_dev,
 		this_attr->c, iio_ev_attr_type(this_attr),
@@ -583,8 +570,8 @@ int iio_device_register_eventset(struct iio_dev *indio_dev)
 	      iio_check_for_dynamic_events(indio_dev)))
 		return 0;
 
-	ev_int = kzalloc(sizeof(*ev_int), GFP_KERNEL);
-	if (!ev_int)
+	ev_int = kzalloc(sizeof(struct iio_event_interface), GFP_KERNEL);
+	if (ev_int == NULL)
 		return -ENOMEM;
 
 	iio_dev_opaque->event_interface = ev_int;
@@ -624,7 +611,7 @@ int iio_device_register_eventset(struct iio_dev *indio_dev)
 
 	ret = iio_device_register_sysfs_group(indio_dev, &ev_int->group);
 	if (ret)
-		goto error_free_group_attrs;
+		goto error_free_setup_event_lines;
 
 	ev_int->ioctl_handler.ioctl = iio_event_ioctl;
 	iio_device_ioctl_handler_register(&iio_dev_opaque->indio_dev,
@@ -632,8 +619,6 @@ int iio_device_register_eventset(struct iio_dev *indio_dev)
 
 	return 0;
 
-error_free_group_attrs:
-	kfree(ev_int->group.attrs);
 error_free_setup_event_lines:
 	iio_free_chan_devattr_list(&ev_int->dev_attr_list);
 	kfree(ev_int);

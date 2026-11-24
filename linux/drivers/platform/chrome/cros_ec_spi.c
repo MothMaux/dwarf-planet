@@ -104,7 +104,13 @@ static void debug_packet(struct device *dev, const char *name, u8 *ptr,
 			 int len)
 {
 #ifdef DEBUG
-	dev_dbg(dev, "%s: %*ph\n", name, len, ptr);
+	int i;
+
+	dev_dbg(dev, "%s: ", name);
+	for (i = 0; i < len; i++)
+		pr_cont(" %02x", ptr[i]);
+
+	pr_cont("\n");
 #endif
 }
 
@@ -409,7 +415,7 @@ static int do_cros_ec_pkt_xfer_spi(struct cros_ec_device *ec_dev,
 	if (!rx_buf)
 		return -ENOMEM;
 
-	spi_bus_lock(ec_spi->spi->controller);
+	spi_bus_lock(ec_spi->spi->master);
 
 	/*
 	 * Leave a gap between CS assertion and clocking of data to allow the
@@ -469,7 +475,7 @@ static int do_cros_ec_pkt_xfer_spi(struct cros_ec_device *ec_dev,
 
 	final_ret = terminate_request(ec_dev);
 
-	spi_bus_unlock(ec_spi->spi->controller);
+	spi_bus_unlock(ec_spi->spi->master);
 
 	if (!ret)
 		ret = final_ret;
@@ -554,7 +560,7 @@ static int do_cros_ec_cmd_xfer_spi(struct cros_ec_device *ec_dev,
 	if (!rx_buf)
 		return -ENOMEM;
 
-	spi_bus_lock(ec_spi->spi->controller);
+	spi_bus_lock(ec_spi->spi->master);
 
 	/* Transmit phase - send our message */
 	debug_packet(ec_dev->dev, "out", ec_dev->dout, len);
@@ -590,7 +596,7 @@ static int do_cros_ec_cmd_xfer_spi(struct cros_ec_device *ec_dev,
 
 	final_ret = terminate_request(ec_dev);
 
-	spi_bus_unlock(ec_spi->spi->controller);
+	spi_bus_unlock(ec_spi->spi->master);
 
 	if (!ret)
 		ret = final_ret;
@@ -828,7 +834,6 @@ static struct spi_driver cros_ec_driver_spi = {
 		.name	= "cros-ec-spi",
 		.of_match_table = cros_ec_spi_of_match,
 		.pm	= &cros_ec_spi_pm_ops,
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe		= cros_ec_spi_probe,
 	.remove		= cros_ec_spi_remove,

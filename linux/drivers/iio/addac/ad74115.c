@@ -16,7 +16,7 @@
 #include <linux/spi/spi.h>
 #include <linux/units.h>
 
-#include <linux/unaligned.h>
+#include <asm/unaligned.h>
 
 #include <linux/iio/buffer.h>
 #include <linux/iio/iio.h>
@@ -190,6 +190,15 @@ enum ad74115_gpio_mode {
 	AD74115_GPIO_MODE_SPECIAL = 2,
 };
 
+enum ad74115_regulators {
+	AD74115_AVDD_REGULATOR,
+	AD74115_AVCC_REGULATOR,
+	AD74115_DVCC_REGULATOR,
+	AD74115_DOVDD_REGULATOR,
+	AD74115_REFIN_REGULATOR,
+	AD74115_REGULATORS_NUM
+};
+
 struct ad74115_channels {
 	struct iio_chan_spec		*channels;
 	unsigned int			num_channels;
@@ -205,6 +214,7 @@ struct ad74115_state {
 	 * conversion and when updating the ADC samples SPI message.
 	 */
 	struct mutex			lock;
+	struct regulator_bulk_data	regulators[AD74115_REGULATORS_NUM];
 	struct gpio_chip		gc;
 	struct gpio_chip		comp_gc;
 	int				irq;
@@ -1671,9 +1681,13 @@ static int ad74115_setup(struct iio_dev *indio_dev)
 	if (ret)
 		return ret;
 
-	if (val == AD74115_DIN_THRESHOLD_MODE_AVDD && !st->avdd_mv)
-		return dev_err_probe(dev, -EINVAL,
-				     "AVDD voltage is required for digital input threshold mode AVDD\n");
+	if (val == AD74115_DIN_THRESHOLD_MODE_AVDD) {
+		ret = regulator_get_voltage(st->regulators[AD74115_AVDD_REGULATOR].consumer);
+		if (ret < 0)
+			return ret;
+
+		st->avdd_mv = ret / 1000;
+	}
 
 	st->din_threshold_mode = val;
 
@@ -1783,6 +1797,13 @@ static int ad74115_reset(struct ad74115_state *st)
 	return 0;
 }
 
+static void ad74115_regulators_disable(void *data)
+{
+	struct ad74115_state *st = data;
+
+	regulator_bulk_disable(ARRAY_SIZE(st->regulators), st->regulators);
+}
+
 static int ad74115_setup_trigger(struct iio_dev *indio_dev)
 {
 	struct ad74115_state *st = iio_priv(indio_dev);
@@ -1810,6 +1831,8 @@ static int ad74115_setup_trigger(struct iio_dev *indio_dev)
 		return -ENOMEM;
 
 	st->trig->ops = &ad74115_trigger_ops;
+	/* dev.parent is already assigned by devm_iio_trigger_alloc on 5.12+ */
+	st->trig->dev.parent = dev;
 	iio_trigger_set_drvdata(st->trig, st);
 
 	ret = devm_iio_trigger_register(dev, st->trig);
@@ -1823,9 +1846,6 @@ static int ad74115_setup_trigger(struct iio_dev *indio_dev)
 
 static int ad74115_probe(struct spi_device *spi)
 {
-	static const char * const regulator_names[] = {
-		"avcc", "dvcc", "dovdd", "refin",
-	};
 	struct device *dev = &spi->dev;
 	struct ad74115_state *st;
 	struct iio_dev *indio_dev;
@@ -1845,22 +1865,23 @@ static int ad74115_probe(struct spi_device *spi)
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->info = &ad74115_info;
 
-	ret = devm_regulator_get_enable_read_voltage(dev, "avdd");
-	if (ret < 0) {
-		/*
-		 * Since this is both a power supply and only optionally a
-		 * reference voltage, make sure to enable it even when the
-		 * voltage is not available.
-		 */
-		ret = devm_regulator_get_enable(dev, "avdd");
-		if (ret)
-			return dev_err_probe(dev, ret, "failed to enable avdd\n");
-	} else {
-		st->avdd_mv = ret / 1000;
-	}
+	st->regulators[AD74115_AVDD_REGULATOR].supply = "avdd";
+	st->regulators[AD74115_AVCC_REGULATOR].supply = "avcc";
+	st->regulators[AD74115_DVCC_REGULATOR].supply = "dvcc";
+	st->regulators[AD74115_DOVDD_REGULATOR].supply = "dovdd";
+	st->regulators[AD74115_REFIN_REGULATOR].supply = "refin";
 
-	ret = devm_regulator_bulk_get_enable(dev, ARRAY_SIZE(regulator_names),
-					     regulator_names);
+	/* devm_regulator_bulk_get_enable is not available before 6.1 */
+	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(st->regulators),
+				      st->regulators);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to get regulators\n");
+
+	ret = regulator_bulk_enable(ARRAY_SIZE(st->regulators), st->regulators);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to enable regulators\n");
+
+	ret = devm_add_action_or_reset(dev, ad74115_regulators_disable, st);
 	if (ret)
 		return ret;
 

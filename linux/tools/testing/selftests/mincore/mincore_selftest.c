@@ -150,8 +150,8 @@ TEST(check_huge_pages)
 		MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
 		-1, 0);
 	if (addr == MAP_FAILED) {
-		if (errno == ENOMEM || errno == EINVAL)
-			SKIP(return, "No huge pages available or CONFIG_HUGETLB_PAGE disabled.");
+		if (errno == ENOMEM)
+			SKIP(return, "No huge pages available.");
 		else
 			TH_LOG("mmap error: %s", strerror(errno));
 	}
@@ -261,6 +261,9 @@ TEST(check_file_mmap)
 		TH_LOG("No read-ahead pages found in memory");
 	}
 
+	EXPECT_LT(i, vec_size) {
+		TH_LOG("Read-ahead pages reached the end of the file");
+	}
 	/*
 	 * End of the readahead window. The rest of the pages shouldn't
 	 * be in memory.

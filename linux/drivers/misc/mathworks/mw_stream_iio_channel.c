@@ -15,7 +15,6 @@
 #include <linux/idr.h>
 #include <linux/device.h>
 #include <linux/errno.h>
-#include <linux/mutex.h>
 
 #include <linux/string.h>
 #include <linux/mathworks/mathworks_ip.h>
@@ -60,7 +59,6 @@ enum mw_stream_iio_reset_ip_mode {
 struct mw_stream_iio_chandev {
 	struct mathworks_ipcore_dev 			*mwdev;
 	struct device							dev;
-	struct mutex lock;
 	enum iio_buffer_direction 				iio_direction;
 	const char								*dmaname;
 	enum mw_stream_iio_tlast_mode			tlast_mode;
@@ -167,9 +165,9 @@ static int mw_stream_iio_channel_set_reset_ip_mode(struct iio_dev *indio_dev,
 {
 	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
 
-	mutex_lock(&mwchan->lock);
+	mutex_lock(&indio_dev->mlock);
 	mwchan->reset_ip_mode = mode;
-	mutex_unlock(&mwchan->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return 0;
 }
@@ -199,9 +197,9 @@ static int mw_stream_iio_channel_set_reset_tlast_mode(struct iio_dev *indio_dev,
 {
 	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
 
-	mutex_lock(&mwchan->lock);
+	mutex_lock(&indio_dev->mlock);
 	mwchan->reset_tlast_mode = mode;
-	mutex_unlock(&mwchan->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return 0;
 }
@@ -231,9 +229,9 @@ static int mw_stream_iio_channel_set_tlast_mode(struct iio_dev *indio_dev,
 {
 	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
 
-	mutex_lock(&mwchan->lock);
+	mutex_lock(&indio_dev->mlock);
 	mwchan->tlast_mode = mode;
-	mutex_unlock(&mwchan->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return 0;
 }
@@ -267,13 +265,13 @@ static int mw_stream_iio_channel_reg_access(struct iio_dev *indio_dev,
 {
 	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
 
-	mutex_lock(&mwchan->lock);
+	mutex_lock(&indio_dev->mlock);
 	if (readval == NULL) {
 		mw_ip_write32(mwchan->mwdev->mw_ip_info, reg & 0xFFFF, writeval);
 	} else {
 		*readval = mw_ip_read32(mwchan->mwdev->mw_ip_info, reg & 0xFFFF);
 	}
-	mutex_unlock(&mwchan->lock);
+	mutex_unlock(&indio_dev->mlock);
 
 	return 0;
 }
@@ -287,8 +285,8 @@ static int devm_mw_stream_configure_buffer(struct iio_dev *indio_dev, enum iio_b
 	struct mw_stream_iio_chandev *mwchan = iio_priv(indio_dev);
 	int ret;
 
-	ret = devm_iio_dmaengine_buffer_setup_ext(indio_dev->dev.parent, indio_dev,
-						  mwchan->dmaname, direction);
+	ret = devm_iio_dmaengine_buffer_setup(indio_dev->dev.parent, indio_dev,
+					      mwchan->dmaname, direction);
 	if (ret) {
 		if (ret == -EPROBE_DEFER)
 			dev_info(&indio_dev->dev, "Deferring probe for DMA engine driver load\n");
@@ -513,7 +511,6 @@ static struct iio_dev *devm_mw_stream_iio_alloc(
 	mwchan = iio_priv(indio_dev);
 	mwchan->mwdev = mwdev;
 	mwchan->iio_direction = info->iio_direction;
-	mutex_init(&mwchan->lock);
 
 	/* Find the name of the DMA channel, there should only be one per node */
 	status = of_property_read_string_index(node, "dma-names", 0, &mwchan->dmaname);

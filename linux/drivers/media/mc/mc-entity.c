@@ -197,7 +197,6 @@ int media_entity_pads_init(struct media_entity *entity, u16 num_pads,
 	struct media_device *mdev = entity->graph_obj.mdev;
 	struct media_pad *iter;
 	unsigned int i = 0;
-	int ret = 0;
 
 	if (num_pads >= MEDIA_ENTITY_MAX_PADS)
 		return -E2BIG;
@@ -211,27 +210,15 @@ int media_entity_pads_init(struct media_entity *entity, u16 num_pads,
 	media_entity_for_each_pad(entity, iter) {
 		iter->entity = entity;
 		iter->index = i++;
-
-		if (hweight32(iter->flags & (MEDIA_PAD_FL_SINK |
-					     MEDIA_PAD_FL_SOURCE)) != 1) {
-			ret = -EINVAL;
-			break;
-		}
-
 		if (mdev)
 			media_gobj_create(mdev, MEDIA_GRAPH_PAD,
 					  &iter->graph_obj);
 	}
 
-	if (ret && mdev) {
-		media_entity_for_each_pad(entity, iter)
-			media_gobj_destroy(&iter->graph_obj);
-	}
-
 	if (mdev)
 		mutex_unlock(&mdev->graph_mutex);
 
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(media_entity_pads_init);
 
@@ -239,13 +226,7 @@ EXPORT_SYMBOL_GPL(media_entity_pads_init);
  * Graph traversal
  */
 
-/**
- * media_entity_has_pad_interdep - Check interdependency between two pads
- *
- * @entity: The entity
- * @pad0: The first pad index
- * @pad1: The second pad index
- *
+/*
  * This function checks the interdependency inside the entity between @pad0
  * and @pad1. If two pads are interdependent they are part of the same pipeline
  * and enabling one of the pads means that the other pad will become "locked"
@@ -255,13 +236,6 @@ EXPORT_SYMBOL_GPL(media_entity_pads_init);
  * to check the dependency inside the entity between @pad0 and @pad1. If the
  * has_pad_interdep operation is not implemented, all pads of the entity are
  * considered to be interdependent.
- *
- * One of @pad0 and @pad1 must be a sink pad and the other one a source pad.
- * The function returns false if both pads are sinks or sources.
- *
- * The caller must hold entity->graph_obj.mdev->mutex.
- *
- * Return: true if the pads are connected internally and false otherwise.
  */
 static bool media_entity_has_pad_interdep(struct media_entity *entity,
 					  unsigned int pad0, unsigned int pad1)
@@ -344,13 +318,13 @@ bool media_entity_has_route(struct media_entity *entity, unsigned int pad0,
 EXPORT_SYMBOL_GPL(media_entity_has_route);
 
 /**
- * media_graph_walk_init - Allocate resources for graph walk
+ * media_entity_graph_walk_init - Allocate resources for graph walk
  * @graph: Media graph structure that will be used to walk the graph
  * @mdev: Media device
  *
  * Reserve resources for graph walk in media device's current
  * state. The memory must be released using
- * media_graph_walk_cleanup().
+ * media_graph_walk_free().
  *
  * Returns error on failure, zero on success.
  */
@@ -564,15 +538,14 @@ static int media_pipeline_walk_push(struct media_pipeline_walk *walk,
 
 /*
  * Move the top entry link cursor to the next link. If all links of the entry
- * have been visited, pop the entry itself. Return true if the entry has been
- * popped.
+ * have been visited, pop the entry itself.
  */
-static bool media_pipeline_walk_pop(struct media_pipeline_walk *walk)
+static void media_pipeline_walk_pop(struct media_pipeline_walk *walk)
 {
 	struct media_pipeline_walk_entry *entry;
 
 	if (WARN_ON(walk->stack.top < 0))
-		return false;
+		return;
 
 	entry = media_pipeline_walk_top(walk);
 
@@ -582,7 +555,7 @@ static bool media_pipeline_walk_pop(struct media_pipeline_walk *walk)
 			walk->stack.top);
 
 		walk->stack.top--;
-		return true;
+		return;
 	}
 
 	entry->links = entry->links->next;
@@ -590,8 +563,6 @@ static bool media_pipeline_walk_pop(struct media_pipeline_walk *walk)
 	dev_dbg(walk->mdev->dev,
 		"media pipeline: moved entry %u to next link\n",
 		walk->stack.top);
-
-	return false;
 }
 
 /* Free all memory allocated while walking the pipeline. */
@@ -637,30 +608,30 @@ static int media_pipeline_explore_next_link(struct media_pipeline *pipe,
 					    struct media_pipeline_walk *walk)
 {
 	struct media_pipeline_walk_entry *entry = media_pipeline_walk_top(walk);
-	struct media_pad *origin;
+	struct media_pad *pad;
 	struct media_link *link;
 	struct media_pad *local;
 	struct media_pad *remote;
-	bool last_link;
 	int ret;
 
-	origin = entry->pad;
+	pad = entry->pad;
 	link = list_entry(entry->links, typeof(*link), list);
-	last_link = media_pipeline_walk_pop(walk);
-
-	if ((link->flags & MEDIA_LNK_FL_LINK_TYPE) != MEDIA_LNK_FL_DATA_LINK) {
-		dev_dbg(walk->mdev->dev,
-			"media pipeline: skipping link (not data-link)\n");
-		return 0;
-	}
+	media_pipeline_walk_pop(walk);
 
 	dev_dbg(walk->mdev->dev,
 		"media pipeline: exploring link '%s':%u -> '%s':%u\n",
 		link->source->entity->name, link->source->index,
 		link->sink->entity->name, link->sink->index);
 
+	/* Skip links that are not enabled. */
+	if (!(link->flags & MEDIA_LNK_FL_ENABLED)) {
+		dev_dbg(walk->mdev->dev,
+			"media pipeline: skipping link (disabled)\n");
+		return 0;
+	}
+
 	/* Get the local pad and remote pad. */
-	if (link->source->entity == origin->entity) {
+	if (link->source->entity == pad->entity) {
 		local = link->source;
 		remote = link->sink;
 	} else {
@@ -672,63 +643,24 @@ static int media_pipeline_explore_next_link(struct media_pipeline *pipe,
 	 * Skip links that originate from a different pad than the incoming pad
 	 * that is not connected internally in the entity to the incoming pad.
 	 */
-	if (origin != local &&
-	    !media_entity_has_pad_interdep(origin->entity, origin->index,
-					   local->index)) {
+	if (pad != local &&
+	    !media_entity_has_pad_interdep(pad->entity, pad->index, local->index)) {
 		dev_dbg(walk->mdev->dev,
 			"media pipeline: skipping link (no route)\n");
-		goto done;
+		return 0;
 	}
 
 	/*
-	 * Add the local pad of the link to the pipeline and push it to the
-	 * stack, if not already present.
+	 * Add the local and remote pads of the link to the pipeline and push
+	 * them to the stack, if they're not already present.
 	 */
 	ret = media_pipeline_add_pad(pipe, walk, local);
 	if (ret)
 		return ret;
 
-	/* Similarly, add the remote pad, but only if the link is enabled. */
-	if (!(link->flags & MEDIA_LNK_FL_ENABLED)) {
-		dev_dbg(walk->mdev->dev,
-			"media pipeline: skipping link (disabled)\n");
-		goto done;
-	}
-
 	ret = media_pipeline_add_pad(pipe, walk, remote);
 	if (ret)
 		return ret;
-
-done:
-	/*
-	 * If we're done iterating over links, iterate over pads of the entity.
-	 * This is necessary to discover pads that are not connected with any
-	 * link. Those are dead ends from a pipeline exploration point of view,
-	 * but are still part of the pipeline and need to be added to enable
-	 * proper validation.
-	 */
-	if (!last_link)
-		return 0;
-
-	dev_dbg(walk->mdev->dev,
-		"media pipeline: adding unconnected pads of '%s'\n",
-		local->entity->name);
-
-	media_entity_for_each_pad(origin->entity, local) {
-		/*
-		 * Skip the origin pad (already handled), pad that have links
-		 * (already discovered through iterating over links) and pads
-		 * not internally connected.
-		 */
-		if (origin == local || local->num_links ||
-		    !media_entity_has_pad_interdep(origin->entity, origin->index,
-						   local->index))
-			continue;
-
-		ret = media_pipeline_add_pad(pipe, walk, local);
-		if (ret)
-			return ret;
-	}
 
 	return 0;
 }
@@ -800,7 +732,7 @@ done:
 __must_check int __media_pipeline_start(struct media_pad *pad,
 					struct media_pipeline *pipe)
 {
-	struct media_device *mdev = pad->graph_obj.mdev;
+	struct media_device *mdev = pad->entity->graph_obj.mdev;
 	struct media_pipeline_pad *err_ppad;
 	struct media_pipeline_pad *ppad;
 	int ret;
@@ -808,8 +740,8 @@ __must_check int __media_pipeline_start(struct media_pad *pad,
 	lockdep_assert_held(&mdev->graph_mutex);
 
 	/*
-	 * If the pad is already part of a pipeline, that pipeline must be the
-	 * same as the pipe given to media_pipeline_start().
+	 * If the entity is already part of a pipeline, that pipeline must
+	 * be the same as the pipe given to media_pipeline_start().
 	 */
 	if (WARN_ON(pad->pipe && pad->pipe != pipe))
 		return -EINVAL;
@@ -841,6 +773,7 @@ __must_check int __media_pipeline_start(struct media_pad *pad,
 		struct media_pad *pad = ppad->pad;
 		struct media_entity *entity = pad->entity;
 		bool has_enabled_link = false;
+		bool has_link = false;
 		struct media_link *link;
 
 		dev_dbg(mdev->dev, "Validating pad '%s':%u\n", pad->entity->name,
@@ -870,6 +803,7 @@ __must_check int __media_pipeline_start(struct media_pad *pad,
 			/* Record if the pad has links and enabled links. */
 			if (link->flags & MEDIA_LNK_FL_ENABLED)
 				has_enabled_link = true;
+			has_link = true;
 
 			/*
 			 * Validate the link if it's enabled and has the
@@ -907,7 +841,7 @@ __must_check int __media_pipeline_start(struct media_pad *pad,
 		 * 3. If the pad has the MEDIA_PAD_FL_MUST_CONNECT flag set,
 		 * ensure that it has either no link or an enabled link.
 		 */
-		if ((pad->flags & MEDIA_PAD_FL_MUST_CONNECT) &&
+		if ((pad->flags & MEDIA_PAD_FL_MUST_CONNECT) && has_link &&
 		    !has_enabled_link) {
 			dev_dbg(mdev->dev,
 				"Pad '%s':%u must be connected by an enabled link\n",
@@ -946,7 +880,7 @@ EXPORT_SYMBOL_GPL(__media_pipeline_start);
 __must_check int media_pipeline_start(struct media_pad *pad,
 				      struct media_pipeline *pipe)
 {
-	struct media_device *mdev = pad->graph_obj.mdev;
+	struct media_device *mdev = pad->entity->graph_obj.mdev;
 	int ret;
 
 	mutex_lock(&mdev->graph_mutex);
@@ -983,7 +917,7 @@ EXPORT_SYMBOL_GPL(__media_pipeline_stop);
 
 void media_pipeline_stop(struct media_pad *pad)
 {
-	struct media_device *mdev = pad->graph_obj.mdev;
+	struct media_device *mdev = pad->entity->graph_obj.mdev;
 
 	mutex_lock(&mdev->graph_mutex);
 	__media_pipeline_stop(pad);
@@ -993,7 +927,7 @@ EXPORT_SYMBOL_GPL(media_pipeline_stop);
 
 __must_check int media_pipeline_alloc_start(struct media_pad *pad)
 {
-	struct media_device *mdev = pad->graph_obj.mdev;
+	struct media_device *mdev = pad->entity->graph_obj.mdev;
 	struct media_pipeline *new_pipe = NULL;
 	struct media_pipeline *pipe;
 	int ret;
@@ -1001,7 +935,7 @@ __must_check int media_pipeline_alloc_start(struct media_pad *pad)
 	mutex_lock(&mdev->graph_mutex);
 
 	/*
-	 * Is the pad already part of a pipeline? If not, we need to allocate
+	 * Is the entity already part of a pipeline? If not, we need to allocate
 	 * a pipe.
 	 */
 	pipe = media_pad_pipeline(pad);
@@ -1026,61 +960,6 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(media_pipeline_alloc_start);
-
-struct media_pad *
-__media_pipeline_pad_iter_next(struct media_pipeline *pipe,
-			       struct media_pipeline_pad_iter *iter,
-			       struct media_pad *pad)
-{
-	if (!pad)
-		iter->cursor = pipe->pads.next;
-
-	if (iter->cursor == &pipe->pads)
-		return NULL;
-
-	pad = list_entry(iter->cursor, struct media_pipeline_pad, list)->pad;
-	iter->cursor = iter->cursor->next;
-
-	return pad;
-}
-EXPORT_SYMBOL_GPL(__media_pipeline_pad_iter_next);
-
-int media_pipeline_entity_iter_init(struct media_pipeline *pipe,
-				    struct media_pipeline_entity_iter *iter)
-{
-	return media_entity_enum_init(&iter->ent_enum, pipe->mdev);
-}
-EXPORT_SYMBOL_GPL(media_pipeline_entity_iter_init);
-
-void media_pipeline_entity_iter_cleanup(struct media_pipeline_entity_iter *iter)
-{
-	media_entity_enum_cleanup(&iter->ent_enum);
-}
-EXPORT_SYMBOL_GPL(media_pipeline_entity_iter_cleanup);
-
-struct media_entity *
-__media_pipeline_entity_iter_next(struct media_pipeline *pipe,
-				  struct media_pipeline_entity_iter *iter,
-				  struct media_entity *entity)
-{
-	if (!entity)
-		iter->cursor = pipe->pads.next;
-
-	while (iter->cursor != &pipe->pads) {
-		struct media_pipeline_pad *ppad;
-		struct media_entity *entity;
-
-		ppad = list_entry(iter->cursor, struct media_pipeline_pad, list);
-		entity = ppad->pad->entity;
-		iter->cursor = iter->cursor->next;
-
-		if (!media_entity_enum_test_and_set(&iter->ent_enum, entity))
-			return entity;
-	}
-
-	return NULL;
-}
-EXPORT_SYMBOL_GPL(__media_pipeline_entity_iter_next);
 
 /* -----------------------------------------------------------------------------
  * Links management
@@ -1107,9 +986,6 @@ static void __media_entity_remove_link(struct media_entity *entity,
 
 	/* Remove the reverse links for a data link. */
 	if ((link->flags & MEDIA_LNK_FL_LINK_TYPE) == MEDIA_LNK_FL_DATA_LINK) {
-		link->source->num_links--;
-		link->sink->num_links--;
-
 		if (link->source->entity == entity)
 			remote = link->sink->entity;
 		else
@@ -1137,19 +1013,25 @@ static void __media_entity_remove_link(struct media_entity *entity,
 	kfree(link);
 }
 
-int media_get_pad_index(struct media_entity *entity, u32 pad_type,
+int media_get_pad_index(struct media_entity *entity, bool is_sink,
 			enum media_pad_signal_type sig_type)
 {
-	unsigned int i;
+	int i;
+	bool pad_is_sink;
 
 	if (!entity)
 		return -EINVAL;
 
 	for (i = 0; i < entity->num_pads; i++) {
-		if ((entity->pads[i].flags &
-		     (MEDIA_PAD_FL_SINK | MEDIA_PAD_FL_SOURCE)) != pad_type)
-			continue;
+		if (entity->pads[i].flags & MEDIA_PAD_FL_SINK)
+			pad_is_sink = true;
+		else if (entity->pads[i].flags & MEDIA_PAD_FL_SOURCE)
+			pad_is_sink = false;
+		else
+			continue;	/* This is an error! */
 
+		if (pad_is_sink != is_sink)
+			continue;
 		if (entity->pads[i].sig_type == sig_type)
 			return i;
 	}
@@ -1163,11 +1045,6 @@ media_create_pad_link(struct media_entity *source, u16 source_pad,
 {
 	struct media_link *link;
 	struct media_link *backlink;
-
-	if (flags & MEDIA_LNK_FL_LINK_TYPE)
-		return -EINVAL;
-
-	flags |= MEDIA_LNK_FL_DATA_LINK;
 
 	if (WARN_ON(!source || !sink) ||
 	    WARN_ON(source_pad >= source->num_pads) ||
@@ -1184,7 +1061,7 @@ media_create_pad_link(struct media_entity *source, u16 source_pad,
 
 	link->source = &source->pads[source_pad];
 	link->sink = &sink->pads[sink_pad];
-	link->flags = flags;
+	link->flags = flags & ~MEDIA_LNK_FL_INTERFACE_LINK;
 
 	/* Initialize graph object embedded at the new link */
 	media_gobj_create(source->graph_obj.mdev, MEDIA_GRAPH_LINK,
@@ -1214,9 +1091,6 @@ media_create_pad_link(struct media_entity *source, u16 source_pad,
 	sink->num_backlinks++;
 	sink->num_links++;
 	source->num_links++;
-
-	link->source->num_links++;
-	link->sink->num_links++;
 
 	return 0;
 }
@@ -1503,7 +1377,7 @@ struct media_pad *media_pad_remote_pad_unique(const struct media_pad *pad)
 EXPORT_SYMBOL_GPL(media_pad_remote_pad_unique);
 
 int media_entity_get_fwnode_pad(struct media_entity *entity,
-				const struct fwnode_handle *fwnode,
+				struct fwnode_handle *fwnode,
 				unsigned long direction_flags)
 {
 	struct fwnode_endpoint endpoint;

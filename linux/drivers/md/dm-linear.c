@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2001-2003 Sistina Software (UK) Limited.
  *
@@ -62,18 +61,17 @@ static int linear_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	ti->num_discard_bios = 1;
 	ti->num_secure_erase_bios = 1;
 	ti->num_write_zeroes_bios = 1;
-	ti->flush_bypasses_map = true;
 	ti->private = lc;
 	return 0;
 
-bad:
+      bad:
 	kfree(lc);
 	return ret;
 }
 
 static void linear_dtr(struct dm_target *ti)
 {
-	struct linear_c *lc = ti->private;
+	struct linear_c *lc = (struct linear_c *) ti->private;
 
 	dm_put_device(ti, lc->dev);
 	kfree(lc);
@@ -86,7 +84,7 @@ static sector_t linear_map_sector(struct dm_target *ti, sector_t bi_sector)
 	return lc->start + dm_target_offset(ti, bi_sector);
 }
 
-int linear_map(struct dm_target *ti, struct bio *bio)
+static int linear_map(struct dm_target *ti, struct bio *bio)
 {
 	struct linear_c *lc = ti->private;
 
@@ -97,9 +95,9 @@ int linear_map(struct dm_target *ti, struct bio *bio)
 }
 
 static void linear_status(struct dm_target *ti, status_type_t type,
-			  unsigned int status_flags, char *result, unsigned int maxlen)
+			  unsigned status_flags, char *result, unsigned maxlen)
 {
-	struct linear_c *lc = ti->private;
+	struct linear_c *lc = (struct linear_c *) ti->private;
 	size_t sz = 0;
 
 	switch (type) {
@@ -121,7 +119,7 @@ static void linear_status(struct dm_target *ti, status_type_t type,
 
 static int linear_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
 {
-	struct linear_c *lc = ti->private;
+	struct linear_c *lc = (struct linear_c *) ti->private;
 	struct dm_dev *dev = lc->dev;
 
 	*bdev = dev->bdev;

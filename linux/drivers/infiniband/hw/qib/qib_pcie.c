@@ -35,6 +35,7 @@
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/vmalloc.h>
+#include <linux/aer.h>
 #include <linux/module.h>
 
 #include "qib.h"
@@ -104,6 +105,13 @@ int qib_pcie_init(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	pci_set_master(pdev);
+	ret = pci_enable_pcie_error_reporting(pdev);
+	if (ret) {
+		qib_early_err(&pdev->dev,
+			      "Unable to enable pcie error reporting: %d\n",
+			      ret);
+		ret = 0;
+	}
 	goto done;
 
 bail:
@@ -210,7 +218,7 @@ int qib_pcie_params(struct qib_devdata *dd, u32 minw, u32 *nent)
 	}
 
 	if (dd->flags & QIB_HAS_INTX)
-		flags |= PCI_IRQ_INTX;
+		flags |= PCI_IRQ_LEGACY;
 	maxvec = (nent && *nent) ? *nent : 1;
 	nvec = pci_alloc_irq_vectors(dd->pcidev, 1, maxvec, flags);
 	if (nvec < 0)

@@ -18,7 +18,6 @@
 #define CCU_FEATURE_MMC_TIMING_SWITCH	BIT(6)
 #define CCU_FEATURE_SIGMA_DELTA_MOD	BIT(7)
 #define CCU_FEATURE_KEY_FIELD		BIT(8)
-#define CCU_FEATURE_CLOSEST_RATE	BIT(9)
 
 /* MMC timing mode switch bit */
 #define CCU_MMC_NEW_TIMING_MODE		BIT(30)
@@ -30,9 +29,6 @@ struct ccu_common {
 	u16		reg;
 	u16		lock_reg;
 	u32		prediv;
-
-	unsigned long	min_rate;
-	unsigned long	max_rate;
 
 	unsigned long	features;
 	spinlock_t	*lock;
@@ -55,11 +51,6 @@ struct sunxi_ccu_desc {
 };
 
 void ccu_helper_wait_for_lock(struct ccu_common *common, u32 lock);
-
-bool ccu_is_better_rate(struct ccu_common *common,
-			unsigned long target_rate,
-			unsigned long current_rate,
-			unsigned long best_rate);
 
 struct ccu_pll_nb {
 	struct notifier_block	clk_nb;

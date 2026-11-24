@@ -681,6 +681,7 @@ static int __fuse_dax_break_layouts(struct inode *inode, bool *retry,
 			0, 0, fuse_wait_dax_page(inode));
 }
 
+/* dmap_end == 0 leads to unmapping of whole file */
 int fuse_dax_break_layouts(struct inode *inode, u64 dmap_start,
 				  u64 dmap_end)
 {
@@ -783,8 +784,8 @@ static int fuse_dax_writepages(struct address_space *mapping,
 	return dax_writeback_mapping_range(mapping, fc->dax->dev, wbc);
 }
 
-static vm_fault_t __fuse_dax_fault(struct vm_fault *vmf, unsigned int order,
-		bool write)
+static vm_fault_t __fuse_dax_fault(struct vm_fault *vmf,
+				   enum page_entry_size pe_size, bool write)
 {
 	vm_fault_t ret;
 	struct inode *inode = file_inode(vmf->vma->vm_file);
@@ -808,7 +809,7 @@ retry:
 	 * to populate page cache or access memory we are trying to free.
 	 */
 	filemap_invalidate_lock_shared(inode->i_mapping);
-	ret = dax_iomap_fault(vmf, order, &pfn, &error, &fuse_iomap_ops);
+	ret = dax_iomap_fault(vmf, pe_size, &pfn, &error, &fuse_iomap_ops);
 	if ((ret & VM_FAULT_ERROR) && error == -EAGAIN) {
 		error = 0;
 		retry = true;
@@ -817,7 +818,7 @@ retry:
 	}
 
 	if (ret & VM_FAULT_NEEDDSYNC)
-		ret = dax_finish_sync_fault(vmf, order, pfn);
+		ret = dax_finish_sync_fault(vmf, pe_size, pfn);
 	filemap_invalidate_unlock_shared(inode->i_mapping);
 
 	if (write)
@@ -828,22 +829,24 @@ retry:
 
 static vm_fault_t fuse_dax_fault(struct vm_fault *vmf)
 {
-	return __fuse_dax_fault(vmf, 0, vmf->flags & FAULT_FLAG_WRITE);
+	return __fuse_dax_fault(vmf, PE_SIZE_PTE,
+				vmf->flags & FAULT_FLAG_WRITE);
 }
 
-static vm_fault_t fuse_dax_huge_fault(struct vm_fault *vmf, unsigned int order)
+static vm_fault_t fuse_dax_huge_fault(struct vm_fault *vmf,
+			       enum page_entry_size pe_size)
 {
-	return __fuse_dax_fault(vmf, order, vmf->flags & FAULT_FLAG_WRITE);
+	return __fuse_dax_fault(vmf, pe_size, vmf->flags & FAULT_FLAG_WRITE);
 }
 
 static vm_fault_t fuse_dax_page_mkwrite(struct vm_fault *vmf)
 {
-	return __fuse_dax_fault(vmf, 0, true);
+	return __fuse_dax_fault(vmf, PE_SIZE_PTE, true);
 }
 
 static vm_fault_t fuse_dax_pfn_mkwrite(struct vm_fault *vmf)
 {
-	return __fuse_dax_fault(vmf, 0, true);
+	return __fuse_dax_fault(vmf, PE_SIZE_PTE, true);
 }
 
 static const struct vm_operations_struct fuse_dax_vm_ops = {
@@ -857,7 +860,7 @@ int fuse_dax_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	file_accessed(file);
 	vma->vm_ops = &fuse_dax_vm_ops;
-	vm_flags_set(vma, VM_MIXEDMAP | VM_HUGEPAGE);
+	vma->vm_flags |= VM_MIXEDMAP | VM_HUGEPAGE;
 	return 0;
 }
 
@@ -1221,7 +1224,6 @@ void fuse_dax_conn_free(struct fuse_conn *fc)
 	if (fc->dax) {
 		fuse_free_dax_mem_ranges(&fc->dax->free_ranges);
 		kfree(fc->dax);
-		fc->dax = NULL;
 	}
 }
 

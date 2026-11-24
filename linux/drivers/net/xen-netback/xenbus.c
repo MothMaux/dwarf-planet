@@ -200,7 +200,7 @@ static void xenvif_debugfs_delif(struct xenvif *vif)
  * and vif variables to the environment, for the benefit of the vif-* hotplug
  * scripts.
  */
-static int netback_uevent(const struct xenbus_device *xdev,
+static int netback_uevent(struct xenbus_device *xdev,
 			  struct kobj_uevent_env *env)
 {
 	struct backend_info *be = dev_get_drvdata(&xdev->dev);
@@ -735,11 +735,10 @@ static void connect(struct backend_info *be)
 	 */
 	requested_num_queues = xenbus_read_unsigned(dev->otherend,
 					"multi-queue-num-queues", 1);
-	if (requested_num_queues > xenvif_max_queues ||
-	    requested_num_queues == 0) {
+	if (requested_num_queues > xenvif_max_queues) {
 		/* buggy or malicious guest */
 		xenbus_dev_fatal(dev, -EINVAL,
-				 "guest requested %u queues, but valid range is 1 - %u.",
+				 "guest requested %u queues, exceeding the maximum of %u.",
 				 requested_num_queues, xenvif_max_queues);
 		return;
 	}
@@ -978,7 +977,7 @@ static int read_xenbus_vif_flags(struct backend_info *be)
 	return 0;
 }
 
-static void netback_remove(struct xenbus_device *dev)
+static int netback_remove(struct xenbus_device *dev)
 {
 	struct backend_info *be = dev_get_drvdata(&dev->dev);
 
@@ -993,6 +992,7 @@ static void netback_remove(struct xenbus_device *dev)
 	kfree(be->hotplug_script);
 	kfree(be);
 	dev_set_drvdata(&dev->dev, NULL);
+	return 0;
 }
 
 /*

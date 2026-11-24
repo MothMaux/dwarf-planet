@@ -97,9 +97,9 @@ static inline int __memcpy_toio_inuser(void __iomem *dst,
 		return -EINVAL;
 
 	while (n > 0) {
-		size = zpci_get_max_io_size((u64 __force) dst,
-					    (u64 __force) src, n,
-					    ZPCI_MAX_WRITE_SIZE);
+		size = zpci_get_max_write_size((u64 __force) dst,
+					       (u64 __force) src, n,
+					       ZPCI_MAX_WRITE_SIZE);
 		if (size > 8) /* main path */
 			rc = __pcistb_mio_inuser(dst, src, size, &status);
 		else
@@ -118,11 +118,12 @@ static inline int __memcpy_toio_inuser(void __iomem *dst,
 SYSCALL_DEFINE3(s390_pci_mmio_write, unsigned long, mmio_addr,
 		const void __user *, user_buffer, size_t, length)
 {
-	struct follow_pfnmap_args args = { };
 	u8 local_buf[64];
 	void __iomem *io_addr;
 	void *buf;
 	struct vm_area_struct *vma;
+	pte_t *ptep;
+	spinlock_t *ptl;
 	long ret;
 
 	if (!zpci_is_enabled())
@@ -168,17 +169,11 @@ SYSCALL_DEFINE3(s390_pci_mmio_write, unsigned long, mmio_addr,
 	if (!(vma->vm_flags & VM_WRITE))
 		goto out_unlock_mmap;
 
-	args.address = mmio_addr;
-	args.vma = vma;
-	ret = follow_pfnmap_start(&args);
-	if (ret) {
-		fixup_user_fault(current->mm, mmio_addr, FAULT_FLAG_WRITE, NULL);
-		ret = follow_pfnmap_start(&args);
-		if (ret)
-			goto out_unlock_mmap;
-	}
+	ret = follow_pte(vma->vm_mm, mmio_addr, &ptep, &ptl);
+	if (ret)
+		goto out_unlock_mmap;
 
-	io_addr = (void __iomem *)((args.pfn << PAGE_SHIFT) |
+	io_addr = (void __iomem *)((pte_pfn(*ptep) << PAGE_SHIFT) |
 			(mmio_addr & ~PAGE_MASK));
 
 	if ((unsigned long) io_addr < ZPCI_IOMAP_ADDR_BASE)
@@ -186,7 +181,7 @@ SYSCALL_DEFINE3(s390_pci_mmio_write, unsigned long, mmio_addr,
 
 	ret = zpci_memcpy_toio(io_addr, buf, length);
 out_unlock_pt:
-	follow_pfnmap_end(&args);
+	pte_unmap_unlock(ptep, ptl);
 out_unlock_mmap:
 	mmap_read_unlock(current->mm);
 out_free:
@@ -228,7 +223,7 @@ static inline int __pcilg_mio_inuser(
 		[ioaddr_len] "+&d" (ioaddr_len.pair),
 		[cc] "+d" (cc), [val] "=d" (val),
 		[dst] "+a" (dst), [cnt] "+d" (cnt), [tmp] "=d" (tmp),
-		[shift] "+a" (shift)
+		[shift] "+d" (shift)
 		:: "cc", "memory");
 
 	/* did we write everything to the user space buffer? */
@@ -247,9 +242,9 @@ static inline int __memcpy_fromio_inuser(void __user *dst,
 	u8 status;
 
 	while (n > 0) {
-		size = zpci_get_max_io_size((u64 __force) src,
-					    (u64 __force) dst, n,
-					    ZPCI_MAX_READ_SIZE);
+		size = zpci_get_max_write_size((u64 __force) src,
+					       (u64 __force) dst, n,
+					       ZPCI_MAX_READ_SIZE);
 		rc = __pcilg_mio_inuser(dst, src, size, &status);
 		if (rc)
 			break;
@@ -265,11 +260,12 @@ static inline int __memcpy_fromio_inuser(void __user *dst,
 SYSCALL_DEFINE3(s390_pci_mmio_read, unsigned long, mmio_addr,
 		void __user *, user_buffer, size_t, length)
 {
-	struct follow_pfnmap_args args = { };
 	u8 local_buf[64];
 	void __iomem *io_addr;
 	void *buf;
 	struct vm_area_struct *vma;
+	pte_t *ptep;
+	spinlock_t *ptl;
 	long ret;
 
 	if (!zpci_is_enabled())
@@ -309,20 +305,14 @@ SYSCALL_DEFINE3(s390_pci_mmio_read, unsigned long, mmio_addr,
 	if (!(vma->vm_flags & (VM_IO | VM_PFNMAP)))
 		goto out_unlock_mmap;
 	ret = -EACCES;
-	if (!(vma->vm_flags & VM_READ))
+	if (!(vma->vm_flags & VM_WRITE))
 		goto out_unlock_mmap;
 
-	args.vma = vma;
-	args.address = mmio_addr;
-	ret = follow_pfnmap_start(&args);
-	if (ret) {
-		fixup_user_fault(current->mm, mmio_addr, 0, NULL);
-		ret = follow_pfnmap_start(&args);
-		if (ret)
-			goto out_unlock_mmap;
-	}
+	ret = follow_pte(vma->vm_mm, mmio_addr, &ptep, &ptl);
+	if (ret)
+		goto out_unlock_mmap;
 
-	io_addr = (void __iomem *)((args.pfn << PAGE_SHIFT) |
+	io_addr = (void __iomem *)((pte_pfn(*ptep) << PAGE_SHIFT) |
 			(mmio_addr & ~PAGE_MASK));
 
 	if ((unsigned long) io_addr < ZPCI_IOMAP_ADDR_BASE) {
@@ -332,7 +322,7 @@ SYSCALL_DEFINE3(s390_pci_mmio_read, unsigned long, mmio_addr,
 	ret = zpci_memcpy_fromio(buf, io_addr, length);
 
 out_unlock_pt:
-	follow_pfnmap_end(&args);
+	pte_unmap_unlock(ptep, ptl);
 out_unlock_mmap:
 	mmap_read_unlock(current->mm);
 

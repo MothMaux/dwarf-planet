@@ -25,6 +25,14 @@
 #define MAX77503_AD_ENABLED			0x1
 #define MAX77503_AD_DISABLED		0x0
 
+struct max77503_dev {
+	struct device *dev;
+	struct device_node *of_node;
+	struct regulator_desc desc;
+	struct regulator_dev *rdev;
+	struct regmap *regmap;
+};
+
 static const struct regmap_config max77503_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
@@ -113,12 +121,13 @@ static const struct i2c_device_id max77503_regulator_id[] = {
 
 MODULE_DEVICE_TABLE(i2c, max77503_regulator_id);
 
+/* [BACKPORT] i2c probe_new() was still not moved into probe() in 6.1 */
 static struct i2c_driver max77503_regulator_driver = {
 	.driver = {
 		.name = "max77503",
 		.of_match_table = of_max77503_match_tbl
 	},
-	.probe = max77503_regulator_probe,
+	.probe_new = max77503_regulator_probe,
 	.id_table = max77503_regulator_id,
 };
 

@@ -167,75 +167,12 @@ enable_on_exec=0
 read_format=15
 optional=1
 
-# PERF_TYPE_RAW / INT_MISC.UOP_DROPPING
-[event20:base-stat]
-fd=20
-type=4
-config=4109
-optional=1
-
-# PERF_TYPE_RAW / cpu/INT_MISC.RECOVERY_CYCLES,cmask=1,edge/
-[event21:base-stat]
-fd=21
-type=4
-config=17039629
-optional=1
-
-# PERF_TYPE_RAW / CPU_CLK_UNHALTED.THREAD
-[event22:base-stat]
-fd=22
-type=4
-config=60
-optional=1
-
-# PERF_TYPE_RAW / INT_MISC.RECOVERY_CYCLES_ANY
-[event23:base-stat]
-fd=23
-type=4
-config=2097421
-optional=1
-
-# PERF_TYPE_RAW / CPU_CLK_UNHALTED.REF_XCLK
-[event24:base-stat]
-fd=24
-type=4
-config=316
-optional=1
-
-# PERF_TYPE_RAW / IDQ_UOPS_NOT_DELIVERED.CORE
-[event25:base-stat]
-fd=25
-type=4
-config=412
-optional=1
-
-# PERF_TYPE_RAW / CPU_CLK_UNHALTED.ONE_THREAD_ACTIVE
-[event26:base-stat]
-fd=26
-type=4
-config=572
-optional=1
-
-# PERF_TYPE_RAW / UOPS_RETIRED.RETIRE_SLOTS
-[event27:base-stat]
-fd=27
-type=4
-config=706
-optional=1
-
-# PERF_TYPE_RAW / UOPS_ISSUED.ANY
-[event28:base-stat]
-fd=28
-type=4
-config=270
-optional=1
-
 # PERF_TYPE_HW_CACHE /
 #  PERF_COUNT_HW_CACHE_L1D                <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_ACCESS      << 16)
-[event29:base-stat]
-fd=29
+[event20:base-stat]
+fd=20
 type=3
 config=0
 optional=1
@@ -244,8 +181,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_L1D                <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_MISS        << 16)
-[event30:base-stat]
-fd=30
+[event21:base-stat]
+fd=21
 type=3
 config=65536
 optional=1
@@ -254,8 +191,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_LL                 <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_ACCESS      << 16)
-[event31:base-stat]
-fd=31
+[event22:base-stat]
+fd=22
 type=3
 config=2
 optional=1
@@ -264,8 +201,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_LL                 <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_MISS        << 16)
-[event32:base-stat]
-fd=32
+[event23:base-stat]
+fd=23
 type=3
 config=65538
 optional=1
@@ -274,8 +211,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_L1I                <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_ACCESS      << 16)
-[event33:base-stat]
-fd=33
+[event24:base-stat]
+fd=24
 type=3
 config=1
 optional=1
@@ -284,8 +221,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_L1I                <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_MISS        << 16)
-[event34:base-stat]
-fd=34
+[event25:base-stat]
+fd=25
 type=3
 config=65537
 optional=1
@@ -294,8 +231,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_DTLB               <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_ACCESS      << 16)
-[event35:base-stat]
-fd=35
+[event26:base-stat]
+fd=26
 type=3
 config=3
 optional=1
@@ -304,8 +241,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_DTLB               <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_MISS        << 16)
-[event36:base-stat]
-fd=36
+[event27:base-stat]
+fd=27
 type=3
 config=65539
 optional=1
@@ -314,8 +251,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_ITLB               <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_ACCESS      << 16)
-[event37:base-stat]
-fd=37
+[event28:base-stat]
+fd=28
 type=3
 config=4
 optional=1
@@ -324,8 +261,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_ITLB               <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_READ            <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_MISS        << 16)
-[event38:base-stat]
-fd=38
+[event29:base-stat]
+fd=29
 type=3
 config=65540
 optional=1
@@ -334,8 +271,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_L1D                <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_PREFETCH        <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_ACCESS      << 16)
-[event39:base-stat]
-fd=39
+[event30:base-stat]
+fd=30
 type=3
 config=512
 optional=1
@@ -344,8 +281,8 @@ optional=1
 #  PERF_COUNT_HW_CACHE_L1D                <<  0  |
 # (PERF_COUNT_HW_CACHE_OP_PREFETCH        <<  8) |
 # (PERF_COUNT_HW_CACHE_RESULT_MISS        << 16)
-[event40:base-stat]
-fd=40
+[event31:base-stat]
+fd=31
 type=3
 config=66048
 optional=1

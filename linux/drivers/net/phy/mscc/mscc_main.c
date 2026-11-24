@@ -107,9 +107,6 @@ static const struct vsc8531_edge_rate_table edge_table[] = {
 };
 #endif
 
-static const int vsc85xx_internal_delay[] = {200, 800, 1100, 1700, 2000, 2300,
-					     2600, 3400};
-
 static int vsc85xx_phy_read_page(struct phy_device *phydev)
 {
 	return __phy_read(phydev, MSCC_EXT_PAGE_ACCESS);
@@ -283,9 +280,12 @@ static int vsc85xx_wol_set(struct phy_device *phydev,
 	u16 pwd[3] = {0, 0, 0};
 	struct ethtool_wolinfo *wol_conf = wol;
 
+	mutex_lock(&phydev->lock);
 	rc = phy_select_page(phydev, MSCC_PHY_PAGE_EXTENDED_2);
-	if (rc < 0)
-		return phy_restore_page(phydev, rc, rc);
+	if (rc < 0) {
+		rc = phy_restore_page(phydev, rc, rc);
+		goto out_unlock;
+	}
 
 	if (wol->wolopts & WAKE_MAGIC) {
 		/* Store the device address for the magic packet */
@@ -323,7 +323,7 @@ static int vsc85xx_wol_set(struct phy_device *phydev,
 
 	rc = phy_restore_page(phydev, rc, rc > 0 ? 0 : rc);
 	if (rc < 0)
-		return rc;
+		goto out_unlock;
 
 	if (wol->wolopts & WAKE_MAGIC) {
 		/* Enable the WOL interrupt */
@@ -331,19 +331,22 @@ static int vsc85xx_wol_set(struct phy_device *phydev,
 		reg_val |= MII_VSC85XX_INT_MASK_WOL;
 		rc = phy_write(phydev, MII_VSC85XX_INT_MASK, reg_val);
 		if (rc)
-			return rc;
+			goto out_unlock;
 	} else {
 		/* Disable the WOL interrupt */
 		reg_val = phy_read(phydev, MII_VSC85XX_INT_MASK);
 		reg_val &= (~MII_VSC85XX_INT_MASK_WOL);
 		rc = phy_write(phydev, MII_VSC85XX_INT_MASK, reg_val);
 		if (rc)
-			return rc;
+			goto out_unlock;
 	}
 	/* Clear WOL iterrupt status */
 	reg_val = phy_read(phydev, MII_VSC85XX_INT_STATUS);
 
-	return 0;
+out_unlock:
+	mutex_unlock(&phydev->lock);
+
+	return rc;
 }
 
 static void vsc85xx_wol_get(struct phy_device *phydev,
@@ -355,9 +358,10 @@ static void vsc85xx_wol_get(struct phy_device *phydev,
 	u16 pwd[3] = {0, 0, 0};
 	struct ethtool_wolinfo *wol_conf = wol;
 
+	mutex_lock(&phydev->lock);
 	rc = phy_select_page(phydev, MSCC_PHY_PAGE_EXTENDED_2);
 	if (rc < 0)
-		goto out_restore_page;
+		goto out_unlock;
 
 	reg_val = __phy_read(phydev, MSCC_PHY_WOL_MAC_CONTROL);
 	if (reg_val & SECURE_ON_ENABLE)
@@ -373,8 +377,9 @@ static void vsc85xx_wol_get(struct phy_device *phydev,
 		}
 	}
 
-out_restore_page:
+out_unlock:
 	phy_restore_page(phydev, rc, rc > 0 ? 0 : rc);
+	mutex_unlock(&phydev->lock);
 }
 
 #if IS_ENABLED(CONFIG_OF_MDIO)
@@ -522,69 +527,53 @@ out_unlock:
  *  * 2.0 ns (which causes the data to be sampled at exactly half way between
  *    clock transitions at 1000 Mbps) if delays should be enabled
  */
-static int vsc85xx_update_rgmii_cntl(struct phy_device *phydev, u32 rgmii_cntl,
-				     u16 rgmii_rx_delay_mask,
-				     u16 rgmii_tx_delay_mask)
+static int vsc85xx_rgmii_set_skews(struct phy_device *phydev, u32 rgmii_cntl,
+				   u16 rgmii_rx_delay_mask,
+				   u16 rgmii_tx_delay_mask)
 {
 	u16 rgmii_rx_delay_pos = ffs(rgmii_rx_delay_mask) - 1;
 	u16 rgmii_tx_delay_pos = ffs(rgmii_tx_delay_mask) - 1;
-	int delay_size = ARRAY_SIZE(vsc85xx_internal_delay);
-	struct device *dev = &phydev->mdio.dev;
 	u16 reg_val = 0;
-	u16 mask = 0;
-	s32 rx_delay;
-	s32 tx_delay;
-	int rc = 0;
+	int rc;
+	struct vsc8531_private *vsc8531 = phydev->priv;
 
-	/* For traffic to pass, the VSC8502 family needs the RX_CLK disable bit
-	 * to be unset for all PHY modes, so do that as part of the paged
-	 * register modification.
-	 * For some family members (like VSC8530/31/40/41) this bit is reserved
-	 * and read-only, and the RX clock is enabled by default.
-	 */
-	if (rgmii_cntl == VSC8502_RGMII_CNTL)
-		mask |= VSC8502_RGMII_RX_CLK_DISABLE;
+	mutex_lock(&phydev->lock);
 
-	if (phy_interface_is_rgmii(phydev))
-		mask |= rgmii_rx_delay_mask | rgmii_tx_delay_mask;
+	reg_val = (vsc8531->rx_delay << VSC8502_RGMII_RX_CLK_DELAY_POS) |
+		  vsc8531->tx_delay;
 
-	rx_delay = phy_get_internal_delay(phydev, dev, vsc85xx_internal_delay,
-					  delay_size, true);
-	if (rx_delay < 0) {
-		if (phydev->interface == PHY_INTERFACE_MODE_RGMII_RXID ||
-		    phydev->interface == PHY_INTERFACE_MODE_RGMII_ID)
-			rx_delay = RGMII_CLK_DELAY_2_0_NS;
-		else
-			rx_delay = RGMII_CLK_DELAY_0_2_NS;
-	}
+	if (phydev->interface == PHY_INTERFACE_MODE_RGMII_RXID ||
+	    phydev->interface == PHY_INTERFACE_MODE_RGMII_ID)
+		reg_val |= RGMII_CLK_DELAY_2_0_NS << rgmii_rx_delay_pos;
+	if (phydev->interface == PHY_INTERFACE_MODE_RGMII_TXID ||
+	    phydev->interface == PHY_INTERFACE_MODE_RGMII_ID)
+		reg_val |= RGMII_CLK_DELAY_2_0_NS << rgmii_tx_delay_pos;
 
-	tx_delay = phy_get_internal_delay(phydev, dev, vsc85xx_internal_delay,
-					  delay_size, false);
-	if (tx_delay < 0) {
-		if (phydev->interface == PHY_INTERFACE_MODE_RGMII_TXID ||
-		    phydev->interface == PHY_INTERFACE_MODE_RGMII_ID)
-			tx_delay = RGMII_CLK_DELAY_2_0_NS;
-		else
-			tx_delay = RGMII_CLK_DELAY_0_2_NS;
-	}
+	rc = phy_modify_paged(phydev, MSCC_PHY_PAGE_EXTENDED_2,
+			      rgmii_cntl,
+			      rgmii_rx_delay_mask | rgmii_tx_delay_mask,
+			      reg_val);
 
-	reg_val |= rx_delay << rgmii_rx_delay_pos;
-	reg_val |= tx_delay << rgmii_tx_delay_pos;
-
-	if (mask)
-		rc = phy_modify_paged(phydev, MSCC_PHY_PAGE_EXTENDED_2,
-				      rgmii_cntl, mask, reg_val);
+	mutex_unlock(&phydev->lock);
 
 	return rc;
 }
 
 static int vsc85xx_default_config(struct phy_device *phydev)
 {
+	int rc;
+
 	phydev->mdix_ctrl = ETH_TP_MDI_AUTO;
 
-	return vsc85xx_update_rgmii_cntl(phydev, VSC8502_RGMII_CNTL,
-					 VSC8502_RGMII_RX_DELAY_MASK,
-					 VSC8502_RGMII_TX_DELAY_MASK);
+	if (phy_interface_mode_is_rgmii(phydev->interface)) {
+		rc = vsc85xx_rgmii_set_skews(phydev, VSC8502_RGMII_CNTL,
+					     VSC8502_RGMII_RX_DELAY_MASK,
+					     VSC8502_RGMII_TX_DELAY_MASK);
+		if (rc)
+			return rc;
+	}
+
+	return 0;
 }
 
 static int vsc85xx_get_tunable(struct phy_device *phydev,
@@ -711,7 +700,7 @@ int phy_base_write(struct phy_device *phydev, u32 regnum, u16 val)
 		dump_stack();
 	}
 
-	return __phy_package_write(phydev, VSC88XX_BASE_ADDR, regnum, val);
+	return __phy_package_write(phydev, regnum, val);
 }
 
 /* phydev->bus->mdio_lock should be locked when using this function */
@@ -722,7 +711,7 @@ int phy_base_read(struct phy_device *phydev, u32 regnum)
 		dump_stack();
 	}
 
-	return __phy_package_read(phydev, VSC88XX_BASE_ADDR, regnum);
+	return __phy_package_read(phydev, regnum);
 }
 
 u32 vsc85xx_csr_read(struct phy_device *phydev,
@@ -1781,11 +1770,13 @@ static int vsc8584_config_init(struct phy_device *phydev)
 	if (ret)
 		return ret;
 
-	ret = vsc85xx_update_rgmii_cntl(phydev, VSC8572_RGMII_CNTL,
-					VSC8572_RGMII_RX_DELAY_MASK,
-					VSC8572_RGMII_TX_DELAY_MASK);
-	if (ret)
-		return ret;
+	if (phy_interface_is_rgmii(phydev)) {
+		ret = vsc85xx_rgmii_set_skews(phydev, VSC8572_RGMII_CNTL,
+					      VSC8572_RGMII_RX_DELAY_MASK,
+					      VSC8572_RGMII_TX_DELAY_MASK);
+		if (ret)
+			return ret;
+	}
 
 	ret = genphy_soft_reset(phydev);
 	if (ret)
@@ -1833,6 +1824,17 @@ static int vsc85xx_config_init(struct phy_device *phydev)
 {
 	int rc, i, phy_id;
 	struct vsc8531_private *vsc8531 = phydev->priv;
+	struct device_node *of_node = phydev->mdio.dev.of_node;
+
+	rc = of_property_read_u32(of_node, "vsc8531,rx-delay",
+				  &vsc8531->rx_delay);
+	if (rc < 0)
+		vsc8531->rx_delay = VSC8531_RGMII_CLK_DELAY_1_1_NS;
+
+	rc = of_property_read_u32(of_node, "vsc8531,tx-delay",
+				  &vsc8531->tx_delay);
+	if (rc < 0)
+		vsc8531->tx_delay = VSC8531_RGMII_CLK_DELAY_0_2_NS;
 
 	rc = vsc85xx_default_config(phydev);
 	if (rc)
@@ -2335,37 +2337,8 @@ static int vsc85xx_probe(struct phy_device *phydev)
 	return vsc85xx_dt_led_modes_get(phydev, default_mode);
 }
 
-static void vsc85xx_remove(struct phy_device *phydev)
-{
-	vsc8584_ptp_deinit(phydev);
-}
-
 /* Microsemi VSC85xx PHYs */
 static struct phy_driver vsc85xx_driver[] = {
-{
-	.phy_id		= PHY_ID_VSC8501,
-	.name		= "Microsemi GE VSC8501 SyncE",
-	.phy_id_mask	= 0xfffffff0,
-	/* PHY_BASIC_FEATURES */
-	.soft_reset	= &genphy_soft_reset,
-	.config_init	= &vsc85xx_config_init,
-	.config_aneg    = &vsc85xx_config_aneg,
-	.read_status	= &vsc85xx_read_status,
-	.handle_interrupt = vsc85xx_handle_interrupt,
-	.config_intr	= &vsc85xx_config_intr,
-	.suspend	= &genphy_suspend,
-	.resume		= &genphy_resume,
-	.probe		= &vsc85xx_probe,
-	.set_wol	= &vsc85xx_wol_set,
-	.get_wol	= &vsc85xx_wol_get,
-	.get_tunable	= &vsc85xx_get_tunable,
-	.set_tunable	= &vsc85xx_set_tunable,
-	.read_page	= &vsc85xx_phy_read_page,
-	.write_page	= &vsc85xx_phy_write_page,
-	.get_sset_count = &vsc85xx_get_sset_count,
-	.get_strings    = &vsc85xx_get_strings,
-	.get_stats      = &vsc85xx_get_stats,
-},
 {
 	.phy_id		= PHY_ID_VSC8502,
 	.name		= "Microsemi GE VSC8502 SyncE",
@@ -2487,6 +2460,30 @@ static struct phy_driver vsc85xx_driver[] = {
 	.get_stats      = &vsc85xx_get_stats,
 },
 {
+	.phy_id		= PHY_ID_VSC8531_02,
+	.name		= "Microsemi VSC8531-02",
+	.phy_id_mask	= 0xfffffff0,
+	/* PHY_GBIT_FEATURES */
+	.soft_reset	= &genphy_soft_reset,
+	.config_init	= &vsc85xx_config_init,
+	.config_aneg	= &vsc85xx_config_aneg,
+	.aneg_done	= &genphy_aneg_done,
+	.read_status	= &vsc85xx_read_status,
+	.config_intr	= &vsc85xx_config_intr,
+	.suspend	= &genphy_suspend,
+	.resume		= &genphy_resume,
+	.probe		= &vsc85xx_probe,
+	.set_wol	= &vsc85xx_wol_set,
+	.get_wol	= &vsc85xx_wol_get,
+	.get_tunable	= &vsc85xx_get_tunable,
+	.set_tunable	= &vsc85xx_set_tunable,
+	.read_page	= &vsc85xx_phy_read_page,
+	.write_page	= &vsc85xx_phy_write_page,
+	.get_sset_count = &vsc85xx_get_sset_count,
+	.get_strings	= &vsc85xx_get_strings,
+	.get_stats	= &vsc85xx_get_stats,
+},
+{
 	.phy_id		= PHY_ID_VSC8540,
 	.name		= "Microsemi FE VSC8540 SyncE",
 	.phy_id_mask	= 0xfffffff0,
@@ -2594,8 +2591,7 @@ static struct phy_driver vsc85xx_driver[] = {
 	.config_intr    = &vsc85xx_config_intr,
 	.suspend	= &genphy_suspend,
 	.resume		= &genphy_resume,
-	.remove		= &vsc85xx_remove,
-	.probe		= &vsc8584_probe,
+	.probe		= &vsc8574_probe,
 	.set_wol	= &vsc85xx_wol_set,
 	.get_wol	= &vsc85xx_wol_get,
 	.get_tunable	= &vsc85xx_get_tunable,
@@ -2616,12 +2612,11 @@ static struct phy_driver vsc85xx_driver[] = {
 	.config_aneg    = &vsc85xx_config_aneg,
 	.aneg_done	= &genphy_aneg_done,
 	.read_status	= &vsc85xx_read_status,
-	.handle_interrupt = vsc8584_handle_interrupt,
+	.handle_interrupt = vsc85xx_handle_interrupt,
 	.config_intr    = &vsc85xx_config_intr,
 	.suspend	= &genphy_suspend,
 	.resume		= &genphy_resume,
-	.remove		= &vsc85xx_remove,
-	.probe		= &vsc8584_probe,
+	.probe		= &vsc8574_probe,
 	.set_wol	= &vsc85xx_wol_set,
 	.get_wol	= &vsc85xx_wol_get,
 	.get_tunable	= &vsc85xx_get_tunable,
@@ -2646,7 +2641,6 @@ static struct phy_driver vsc85xx_driver[] = {
 	.config_intr    = &vsc85xx_config_intr,
 	.suspend	= &genphy_suspend,
 	.resume		= &genphy_resume,
-	.remove		= &vsc85xx_remove,
 	.probe		= &vsc8584_probe,
 	.get_tunable	= &vsc85xx_get_tunable,
 	.set_tunable	= &vsc85xx_set_tunable,
@@ -2670,7 +2664,6 @@ static struct phy_driver vsc85xx_driver[] = {
 	.config_intr    = &vsc85xx_config_intr,
 	.suspend	= &genphy_suspend,
 	.resume		= &genphy_resume,
-	.remove		= &vsc85xx_remove,
 	.probe		= &vsc8584_probe,
 	.get_tunable	= &vsc85xx_get_tunable,
 	.set_tunable	= &vsc85xx_set_tunable,
@@ -2694,7 +2687,6 @@ static struct phy_driver vsc85xx_driver[] = {
 	.config_intr    = &vsc85xx_config_intr,
 	.suspend	= &genphy_suspend,
 	.resume		= &genphy_resume,
-	.remove		= &vsc85xx_remove,
 	.probe		= &vsc8584_probe,
 	.get_tunable	= &vsc85xx_get_tunable,
 	.set_tunable	= &vsc85xx_set_tunable,
@@ -2711,7 +2703,20 @@ static struct phy_driver vsc85xx_driver[] = {
 module_phy_driver(vsc85xx_driver);
 
 static struct mdio_device_id __maybe_unused vsc85xx_tbl[] = {
-	{ PHY_ID_MATCH_VENDOR(PHY_VENDOR_MSCC) },
+	{ PHY_ID_VSC8504, 0xfffffff0, },
+	{ PHY_ID_VSC8514, 0xfffffff0, },
+	{ PHY_ID_VSC8530, 0xfffffff0, },
+	{ PHY_ID_VSC8531, 0xfffffff0, },
+	{ PHY_ID_VSC8531_02, 0xfffffff0, },
+	{ PHY_ID_VSC8540, 0xfffffff0, },
+	{ PHY_ID_VSC8541, 0xfffffff0, },
+	{ PHY_ID_VSC8552, 0xfffffff0, },
+	{ PHY_ID_VSC856X, 0xfffffff0, },
+	{ PHY_ID_VSC8572, 0xfffffff0, },
+	{ PHY_ID_VSC8574, 0xfffffff0, },
+	{ PHY_ID_VSC8575, 0xfffffff0, },
+	{ PHY_ID_VSC8582, 0xfffffff0, },
+	{ PHY_ID_VSC8584, 0xfffffff0, },
 	{ }
 };
 

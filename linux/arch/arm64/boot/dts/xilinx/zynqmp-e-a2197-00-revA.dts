@@ -5,7 +5,7 @@
  * (C) Copyright 2019 - 2022, Xilinx, Inc.
  * (C) Copyright 2022 - 2023, Advanced Micro Devices, Inc.
  *
- * Michal Simek <michal.simek@amd.com>
+ * Michal Simek <michal.simek@xilinx.com>
  */
 /dts-v1/;
 
@@ -43,49 +43,49 @@
 		reg = <0x0 0x0 0x0 0x80000000>;
 	};
 
-	ref_clk: ref-clk {
+	ref_clk: ref_clk {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_ref_clk>;
 	};
 
-	si570_ddrdimm1_clk: si570-ddrdimm1-clk {
+	si570_ddrdimm1_clk: si570_ddrdimm1_clk {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_ddr_dimm1>;
 	};
 
-	si570_lpddr4_clk2: si570-lpddr4-clk2 {
+	si570_lpddr4_clk2: si570_lpddr4_clk2 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_lpddr4clk2>;
 	};
 
-	si570_lpddr4_clk1: si570-lpddr4-clk1 {
+	si570_lpddr4_clk1: si570_lpddr4_clk1 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_lpddr4clk1>;
 	};
 
-	si570_hsdp_clk: si570-hsdp-clk {
+	si570_hsdp_clk: si570_hsdp_clk {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_hsdp>;
 	};
 
-	si570_zsfp_clk: si570-zsfp-clk {
+	si570_zsfp_clk: si570_zsfp_clk {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_zsfp>;
 	};
 
-	si570_user1_clk: si570-user1-clk {
+	si570_user1_clk: si570_user1_clk {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_user1>;
 	};
 
-	si5332_1: si5332-1 { /* u142 - GEM0 */
+	si5332_1: si5332_1 { /* u142 - GEM0 */
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <125000000>;
@@ -197,6 +197,7 @@
 	phys = <&psgtr 0 PHY_TYPE_SGMII 0 0>;
 	phy-handle = <&phy0>;
 	phy-mode = "sgmii";
+	is-internal-pcspma;
 	mdio: mdio {
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -352,7 +353,13 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <2>;
-			/* u39 8T49N240 */
+			clock_8t49n287: clock-generator@6c { /* u39 8T49N240 */
+				#clock-cells = <1>; /* author David Cater <david.cater@idt.com>*/
+				compatible = "idt,8t49n240", "idt,8t49n241"; /* FIXME no driver for 240 */
+				reg = <0x6c>;
+				/* Documentation/devicetree/bindings/clock/idt,idt8t49n24x.txt */
+				/* FIXME there input via J241 Samtec CLK1 and CLK0 from U38 - selection PIN */
+			};
 		};
 		i2c@3 { /* PMBUS2_INA226 */
 			#address-cells = <1>;
@@ -490,7 +497,6 @@
 				factory-fout = <156250000>;
 				clock-frequency = <156250000>;
 				clock-output-names = "si570_zsfp_clk";
-				silabs,skip-recall;
 			};
 		};
 		i2c@6 { /* USER_SI570_1 */
@@ -505,7 +511,6 @@
 				factory-fout = <100000000>;
 				clock-frequency = <100000000>;
 				clock-output-names = "si570_user1";
-				silabs,skip-recall;
 			};
 
 		};
@@ -536,7 +541,6 @@
 			/* Use for storing information about SC board */
 			eeprom: eeprom@54 { /* u34 - m24128 16kB */
 				compatible = "st,24c128", "atmel,24c128";
-				label = "eeprom_cc";
 				reg = <0x54>; /* 0x5c too */
 			};
 			si570_ref_clk: clock-generator@5d { /* u32 */
@@ -552,7 +556,6 @@
 			/* and connector J212D */
 			eeprom_ebm: eeprom@52 { /* x-ebm module */
 				compatible = "st,24c128", "atmel,24c128";
-				label = "eeprom_ebm";
 				reg = <0x52>;
 			};
 		};
@@ -564,7 +567,6 @@
 			/* expected eeprom 0x50 FMC cards */
 			eeprom_fmc1: eeprom@50 {
 				compatible = "st,24c128", "atmel,24c128";
-				label = "eeprom_fmc1";
 				reg = <0x50>;
 			};
 		};
@@ -576,7 +578,6 @@
 			/* expected eeprom 0x50 FMC cards */
 			eeprom_fmc2: eeprom@50 {
 				compatible = "st,24c128", "atmel,24c128";
-				label = "eeprom_fmc2";
 				reg = <0x50>;
 			};
 		};
@@ -607,7 +608,6 @@
 				factory-fout = <200000000>;
 				clock-frequency = <200000000>;
 				clock-output-names = "si570_lpddr4_clk2";
-				silabs,skip-recall;
 			};
 		};
 		i2c@5 { /* LPDDR4_SI570_CLK1 */
@@ -622,7 +622,6 @@
 				factory-fout = <200000000>;
 				clock-frequency = <200000000>;
 				clock-output-names = "si570_lpddr4_clk1";
-				silabs,skip-recall;
 			};
 		};
 		i2c@6 { /* HSDP_SI570 */
@@ -637,7 +636,6 @@
 				factory-fout = <156250000>;
 				clock-frequency = <156250000>;
 				clock-output-names = "si570_hsdp_clk";
-				silabs,skip-recall;
 			};
 		};
 		i2c@7 { /* 8A34001 - U219B and J310 connector */

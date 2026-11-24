@@ -403,9 +403,9 @@ static bool xgbe_ecc_ded(struct xgbe_prv_data *pdata, unsigned long *period,
 	return false;
 }
 
-static void xgbe_ecc_isr_bh_work(struct work_struct *work)
+static void xgbe_ecc_isr_task(struct tasklet_struct *t)
 {
-	struct xgbe_prv_data *pdata = from_work(pdata, work, ecc_bh_work);
+	struct xgbe_prv_data *pdata = from_tasklet(pdata, t, tasklet_ecc);
 	unsigned int ecc_isr;
 	bool stop = false;
 
@@ -465,17 +465,17 @@ static irqreturn_t xgbe_ecc_isr(int irq, void *data)
 {
 	struct xgbe_prv_data *pdata = data;
 
-	if (pdata->isr_as_bh_work)
-		queue_work(system_bh_wq, &pdata->ecc_bh_work);
+	if (pdata->isr_as_tasklet)
+		tasklet_schedule(&pdata->tasklet_ecc);
 	else
-		xgbe_ecc_isr_bh_work(&pdata->ecc_bh_work);
+		xgbe_ecc_isr_task(&pdata->tasklet_ecc);
 
 	return IRQ_HANDLED;
 }
 
-static void xgbe_isr_bh_work(struct work_struct *work)
+static void xgbe_isr_task(struct tasklet_struct *t)
 {
-	struct xgbe_prv_data *pdata = from_work(pdata, work, dev_bh_work);
+	struct xgbe_prv_data *pdata = from_tasklet(pdata, t, tasklet_dev);
 	struct xgbe_hw_if *hw_if = &pdata->hw_if;
 	struct xgbe_channel *channel;
 	unsigned int dma_isr, dma_ch_isr;
@@ -582,7 +582,7 @@ isr_done:
 
 	/* If there is not a separate ECC irq, handle it here */
 	if (pdata->vdata->ecc_support && (pdata->dev_irq == pdata->ecc_irq))
-		xgbe_ecc_isr_bh_work(&pdata->ecc_bh_work);
+		xgbe_ecc_isr_task(&pdata->tasklet_ecc);
 
 	/* If there is not a separate I2C irq, handle it here */
 	if (pdata->vdata->i2c_support && (pdata->dev_irq == pdata->i2c_irq))
@@ -604,10 +604,10 @@ static irqreturn_t xgbe_isr(int irq, void *data)
 {
 	struct xgbe_prv_data *pdata = data;
 
-	if (pdata->isr_as_bh_work)
-		queue_work(system_bh_wq, &pdata->dev_bh_work);
+	if (pdata->isr_as_tasklet)
+		tasklet_schedule(&pdata->tasklet_dev);
 	else
-		xgbe_isr_bh_work(&pdata->dev_bh_work);
+		xgbe_isr_task(&pdata->tasklet_dev);
 
 	return IRQ_HANDLED;
 }
@@ -682,24 +682,10 @@ static void xgbe_service(struct work_struct *work)
 static void xgbe_service_timer(struct timer_list *t)
 {
 	struct xgbe_prv_data *pdata = from_timer(pdata, t, service_timer);
-	struct xgbe_channel *channel;
-	unsigned int i;
 
 	queue_work(pdata->dev_workqueue, &pdata->service_work);
 
 	mod_timer(&pdata->service_timer, jiffies + HZ);
-
-	if (!pdata->tx_usecs)
-		return;
-
-	for (i = 0; i < pdata->channel_count; i++) {
-		channel = pdata->channel[i];
-		if (!channel->tx_ring || channel->tx_timer_active)
-			break;
-		channel->tx_timer_active = 1;
-		mod_timer(&channel->tx_timer,
-			  jiffies + usecs_to_jiffies(pdata->tx_usecs));
-	}
 }
 
 static void xgbe_init_timers(struct xgbe_prv_data *pdata)
@@ -1007,8 +993,8 @@ static int xgbe_request_irqs(struct xgbe_prv_data *pdata)
 	unsigned int i;
 	int ret;
 
-	INIT_WORK(&pdata->dev_bh_work, xgbe_isr_bh_work);
-	INIT_WORK(&pdata->ecc_bh_work, xgbe_ecc_isr_bh_work);
+	tasklet_setup(&pdata->tasklet_dev, xgbe_isr_task);
+	tasklet_setup(&pdata->tasklet_ecc, xgbe_ecc_isr_task);
 
 	ret = devm_request_irq(pdata->dev, pdata->dev_irq, xgbe_isr, 0,
 			       netdev_name(netdev), pdata);
@@ -1077,9 +1063,6 @@ static void xgbe_free_irqs(struct xgbe_prv_data *pdata)
 	unsigned int i;
 
 	devm_free_irq(pdata->dev, pdata->dev_irq, pdata);
-
-	cancel_work_sync(&pdata->dev_bh_work);
-	cancel_work_sync(&pdata->ecc_bh_work);
 
 	if (pdata->vdata->ecc_support && (pdata->dev_irq != pdata->ecc_irq))
 		devm_free_irq(pdata->dev, pdata->ecc_irq, pdata);
@@ -1172,6 +1155,7 @@ static void xgbe_free_rx_data(struct xgbe_prv_data *pdata)
 
 static int xgbe_phy_reset(struct xgbe_prv_data *pdata)
 {
+	pdata->phy_link = -1;
 	pdata->phy_speed = SPEED_UNKNOWN;
 
 	return pdata->phy_if.phy_reset(pdata);
@@ -1181,6 +1165,7 @@ int xgbe_powerdown(struct net_device *netdev, unsigned int caller)
 {
 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
 	struct xgbe_hw_if *hw_if = &pdata->hw_if;
+	unsigned long flags;
 
 	DBGPR("-->xgbe_powerdown\n");
 
@@ -1190,6 +1175,8 @@ int xgbe_powerdown(struct net_device *netdev, unsigned int caller)
 		DBGPR("<--xgbe_powerdown\n");
 		return -EINVAL;
 	}
+
+	spin_lock_irqsave(&pdata->lock, flags);
 
 	if (caller == XGMAC_DRIVER_CONTEXT)
 		netif_device_detach(netdev);
@@ -1206,6 +1193,8 @@ int xgbe_powerdown(struct net_device *netdev, unsigned int caller)
 
 	pdata->power_down = 1;
 
+	spin_unlock_irqrestore(&pdata->lock, flags);
+
 	DBGPR("<--xgbe_powerdown\n");
 
 	return 0;
@@ -1215,6 +1204,7 @@ int xgbe_powerup(struct net_device *netdev, unsigned int caller)
 {
 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
 	struct xgbe_hw_if *hw_if = &pdata->hw_if;
+	unsigned long flags;
 
 	DBGPR("-->xgbe_powerup\n");
 
@@ -1224,6 +1214,8 @@ int xgbe_powerup(struct net_device *netdev, unsigned int caller)
 		DBGPR("<--xgbe_powerup\n");
 		return -EINVAL;
 	}
+
+	spin_lock_irqsave(&pdata->lock, flags);
 
 	pdata->power_down = 0;
 
@@ -1238,6 +1230,8 @@ int xgbe_powerup(struct net_device *netdev, unsigned int caller)
 	netif_tx_start_all_queues(netdev);
 
 	xgbe_start_timers(pdata);
+
+	spin_unlock_irqrestore(&pdata->lock, flags);
 
 	DBGPR("<--xgbe_powerup\n");
 
@@ -2059,7 +2053,7 @@ static int xgbe_change_mtu(struct net_device *netdev, int mtu)
 		return ret;
 
 	pdata->rx_buf_size = ret;
-	WRITE_ONCE(netdev->mtu, mtu);
+	netdev->mtu = mtu;
 
 	xgbe_restart_dev(pdata);
 
@@ -2095,7 +2089,7 @@ static void xgbe_get_stats64(struct net_device *netdev,
 	s->multicast = pstats->rxmulticastframes_g;
 	s->rx_length_errors = pstats->rxlengtherror;
 	s->rx_crc_errors = pstats->rxcrcerror;
-	s->rx_over_errors = pstats->rxfifooverflow;
+	s->rx_fifo_errors = pstats->rxfifooverflow;
 
 	s->tx_packets = pstats->txframecount_gb;
 	s->tx_bytes = pstats->txoctetcount_gb;
@@ -2246,17 +2240,10 @@ static int xgbe_set_features(struct net_device *netdev,
 	if (ret)
 		return ret;
 
-	if ((features & NETIF_F_RXCSUM) && !rxcsum) {
-		hw_if->enable_sph(pdata);
-		hw_if->enable_vxlan(pdata);
+	if ((features & NETIF_F_RXCSUM) && !rxcsum)
 		hw_if->enable_rx_csum(pdata);
-		schedule_work(&pdata->restart_work);
-	} else if (!(features & NETIF_F_RXCSUM) && rxcsum) {
-		hw_if->disable_sph(pdata);
-		hw_if->disable_vxlan(pdata);
+	else if (!(features & NETIF_F_RXCSUM) && rxcsum)
 		hw_if->disable_rx_csum(pdata);
-		schedule_work(&pdata->restart_work);
-	}
 
 	if ((features & NETIF_F_HW_VLAN_CTAG_RX) && !rxvlan)
 		hw_if->enable_rx_vlan_stripping(pdata);
@@ -2549,6 +2536,9 @@ read_again:
 			goto read_again;
 
 		if (error || packet->errors) {
+			if (packet->errors)
+				netif_err(pdata, rx_err, netdev,
+					  "error in received packet\n");
 			dev_kfree_skb(skb);
 			goto next_packet;
 		}

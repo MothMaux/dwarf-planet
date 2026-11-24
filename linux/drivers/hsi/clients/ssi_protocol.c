@@ -14,6 +14,7 @@
 #include <linux/clk.h>
 #include <linux/device.h>
 #include <linux/err.h>
+#include <linux/gpio.h>
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
 #include <linux/if_phonet.h>
@@ -30,6 +31,8 @@
 #include <linux/timer.h>
 #include <linux/hsi/hsi.h>
 #include <linux/hsi/ssi_protocol.h>
+
+void ssi_waketest(struct hsi_client *cl, unsigned int enable);
 
 #define SSIP_TXQUEUE_LEN	100
 #define SSIP_MAX_MTU		65535
@@ -113,10 +116,9 @@ enum {
  * @netdev: Phonet network device
  * @txqueue: TX data queue
  * @cmdqueue: Queue of free commands
- * @work: &struct work_struct for scheduled work
  * @cl: HSI client own reference
  * @link: Link for ssip_list
- * @tx_usecnt: Refcount to keep track the slaves that use the wake line
+ * @tx_usecount: Refcount to keep track the slaves that use the wake line
  * @channel_id_cmd: HSI channel id for command stream
  * @channel_id_data: HSI channel id for data stream
  */
@@ -401,7 +403,6 @@ static void ssip_reset(struct hsi_client *cl)
 	del_timer(&ssi->rx_wd);
 	del_timer(&ssi->tx_wd);
 	del_timer(&ssi->keep_alive);
-	cancel_work_sync(&ssi->work);
 	ssi->main_state = 0;
 	ssi->send_state = 0;
 	ssi->recv_state = 0;
@@ -967,7 +968,7 @@ static void ssip_xmit_work(struct work_struct *work)
 	ssip_xmit(cl);
 }
 
-static netdev_tx_t ssip_pn_xmit(struct sk_buff *skb, struct net_device *dev)
+static int ssip_pn_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct hsi_client *cl = to_hsi_client(dev->dev.parent);
 	struct ssi_protocol *ssi = hsi_client_drvdata(cl);
@@ -1026,7 +1027,7 @@ static netdev_tx_t ssip_pn_xmit(struct sk_buff *skb, struct net_device *dev)
 	dev->stats.tx_packets++;
 	dev->stats.tx_bytes += skb->len;
 
-	return NETDEV_TX_OK;
+	return 0;
 drop2:
 	hsi_free_msg(msg);
 drop:
@@ -1034,7 +1035,7 @@ drop:
 inc_dropped:
 	dev->stats.tx_dropped++;
 
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 /* CMT reset event handler */

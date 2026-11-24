@@ -52,8 +52,7 @@ int xhdcp1x_rx_set_keyselect(void *ref, u8 keyselect);
 int xhdcp1x_rx_load_bksv(void *ref);
 #else
 static inline void *xhdcp1x_rx_init(struct device *dev, void *interface_ref,
-				    void __iomem *interface_base, bool is_repeater,
-				    enum xhdcp1x_rx_protocol protocol)
+				    void __iomem *interface_base, bool is_repeater)
 {
 	return ERR_PTR(-EINVAL);
 }

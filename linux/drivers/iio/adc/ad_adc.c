@@ -37,37 +37,13 @@
 #include <linux/iio/buffer-dmaengine.h>
 #include <linux/jesd204/adi-common.h>
 
-
-#define ADI_REG_CONFIG 			0x000C
-#define ADI_IQCORRECTION_DISABLE	(1 << 0)
-#define ADI_DCFILTER_DISABLE		(1 << 1)
-#define ADI_DATAFORMAT_DISABLE		(1 << 2)
-#define ADI_USERPORTS_DISABLE		(1 << 3)
-#define ADI_MODE_1R1T			(1 << 4)
-#define ADI_DELAY_CONTROL_DISABLE 	(1 << 5)
-#define ADI_CMOS_OR_LVDS_N		(1 << 7)
-#define ADI_PPS_RECEIVER_ENABLE		(1 << 8)
-#define ADI_SCALECORRECTION_ONLY	(1 << 9)
-#define ADI_EXT_SYNC			(1 << 12)
-
 /* ADC Common */
 #define ADI_REG_RSTN			0x0040
 #define ADI_RSTN			(1 << 0)
 
-#define ADI_REG_CNTRL			0x0044
-#define ADI_SYNC			(1 << 3)
-
-#define ADI_REG_CNTRL_2			0x0048
-#define ADI_EXT_SYNC_ARM		(1 << 1)
-#define ADI_EXT_SYNC_DISARM		(1 << 2)
-#define ADI_MANUAL_SYNC_REQUEST		(1 << 8)
-
 #define ADI_REG_STATUS			0x005C
 #define ADI_REG_DMA_STATUS		0x0088
 #define ADI_REG_USR_CNTRL_1		0x00A0
-
-#define ADI_REG_SYNC_STATUS		0x0068
-#define ADI_ADC_SYNC_STATUS		(1 << 0)
 
 /* ADC Channel */
 #define ADI_REG_CHAN_CNTRL(c)		(0x0400 + (c) * 0x40)
@@ -125,7 +101,6 @@ struct axiadc_state {
 	unsigned int			adc_calibbias[2];
 	unsigned int			adc_calibscale[2][2];
 	bool				calibrate;
-	bool				ext_sync_avail;
 };
 
 #define CN0363_CHANNEL(_address, _type, _ch, _mod, _rb) { \
@@ -368,6 +343,44 @@ static int axiadc_hw_consumer_postenable(struct iio_dev *indio_dev)
 	return iio_hw_consumer_enable(st->frontend);
 }
 
+static int axiadc_hw_submit_block(struct iio_dma_buffer_queue *queue,
+	struct iio_dma_buffer_block *block)
+{
+	struct iio_dev *indio_dev = queue->driver_data;
+	struct axiadc_state *st = iio_priv(indio_dev);
+
+	iio_dmaengine_buffer_submit_block(queue, block);
+
+	axiadc_write(st, ADI_REG_STATUS, ~0);
+	axiadc_write(st, ADI_REG_DMA_STATUS, ~0);
+
+	return 0;
+}
+
+static const struct iio_dma_buffer_ops axiadc_dma_buffer_ops = {
+	.submit = axiadc_hw_submit_block,
+	.abort = iio_dmaengine_buffer_abort,
+};
+
+static int axiadc_configure_ring_stream(struct iio_dev *indio_dev,
+	const char *dma_name)
+{
+	struct iio_buffer *buffer;
+
+	if (dma_name == NULL)
+		dma_name = "rx";
+
+	buffer = devm_iio_dmaengine_buffer_alloc(indio_dev->dev.parent, dma_name,
+						 &axiadc_dma_buffer_ops, indio_dev);
+	if (IS_ERR(buffer))
+		return PTR_ERR(buffer);
+
+	indio_dev->modes |= INDIO_BUFFER_HARDWARE;
+	iio_device_attach_buffer(indio_dev, buffer);
+
+	return 0;
+}
+
 static int axiadc_hw_consumer_predisable(struct iio_dev *indio_dev)
 {
 	struct axiadc_state *st = iio_priv(indio_dev);
@@ -387,7 +400,7 @@ static int axiadc_update_scan_mode(struct iio_dev *indio_dev,
 	struct axiadc_state *st = iio_priv(indio_dev);
 	unsigned int i, ctrl;
 
-	for (i = 0; i < iio_get_masklength(indio_dev); i++) {
+	for (i = 0; i < indio_dev->masklength; i++) {
 		ctrl = axiadc_read(st, ADI_REG_CHAN_CNTRL(i));
 
 		if (test_bit(i, scan_mask))
@@ -636,103 +649,12 @@ static int adc_reg_access(struct iio_dev *indio_dev,
 	return 0;
 }
 
-static const char * const axiadc_sync_ctrls[] = {
-	"arm", "disarm", "trigger_manual",
-};
-
-static ssize_t axiadc_sync_start_store(struct device *dev,
-				 struct device_attribute *attr,
-				 const char *buf, size_t len)
-{
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct axiadc_state *st = iio_priv(indio_dev);
-	int ret;
-
-	ret = sysfs_match_string(axiadc_sync_ctrls, buf);
-	if (ret < 0)
-		return ret;
-
-	mutex_lock(&st->lock);
-	if (st->ext_sync_avail) {
-		switch (ret) {
-		case 0:
-			axiadc_write(st, ADI_REG_CNTRL_2, ADI_EXT_SYNC_ARM);
-			break;
-		case 1:
-			axiadc_write(st, ADI_REG_CNTRL_2, ADI_EXT_SYNC_DISARM);
-			break;
-		case 2:
-			axiadc_write(st, ADI_REG_CNTRL_2, ADI_MANUAL_SYNC_REQUEST);
-			break;
-		default:
-			ret = -EINVAL;
-		}
-	} else if (ret == 0) {
-		u32 reg;
-
-		reg = axiadc_read(st, ADI_REG_CNTRL);
-		axiadc_write(st, ADI_REG_CNTRL, reg | ADI_SYNC);
-	}
-	mutex_unlock(&st->lock);
-
-	return ret < 0 ? ret : len;
-}
-
-static ssize_t axiadc_sync_start_show(struct device *dev,
-				      struct device_attribute *attr,
-				      char *buf)
-{
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
-	struct axiadc_state *st = iio_priv(indio_dev);
-	u32 reg;
-
-	switch ((u32)this_attr->address) {
-	case 0:
-		reg = axiadc_read(st, ADI_REG_SYNC_STATUS);
-
-		return sprintf(buf, "%s\n", reg & ADI_ADC_SYNC_STATUS ?
-			axiadc_sync_ctrls[0] : axiadc_sync_ctrls[1]);
-	case 1:
-		if (st->ext_sync_avail)
-			return sprintf(buf, "arm disarm trigger_manual\n");
-		else
-			return sprintf(buf, "arm\n");
-	default:
-		return -EINVAL;
-	}
-
-	return -EINVAL;
-}
-
-static IIO_DEVICE_ATTR(sync_start_enable, 0644,
-		       axiadc_sync_start_show,
-		       axiadc_sync_start_store,
-		       0);
-
-static IIO_DEVICE_ATTR(sync_start_enable_available, 0444,
-		       axiadc_sync_start_show,
-		       NULL,
-		       1);
-
-static struct attribute *axiadc_attributes[] = {
-	&iio_dev_attr_sync_start_enable.dev_attr.attr,
-	&iio_dev_attr_sync_start_enable_available.dev_attr.attr,
-	NULL,
-};
-
-static const struct attribute_group axiadc_attribute_group = {
-	.attrs = axiadc_attributes,
-};
-
 static const struct iio_info adc_info = {
 	.read_raw = axiadc_read_raw,
 	.write_raw = axiadc_write_raw,
 	.debugfs_reg_access = &adc_reg_access,
 	.update_scan_mode = axiadc_update_scan_mode,
-	.attrs = &axiadc_attribute_group,
 };
-
 
 static const struct of_device_id adc_of_match[] = {
 	{ .compatible = "adi,cn0363-adc-1.00.a", .data = &cn0363_chip_info },
@@ -743,15 +665,7 @@ static const struct of_device_id adc_of_match[] = {
 				.data = &obs_rx_chip_info },
 	{ .compatible = "adi,axi-adrv9009-obs-single-1.0",
 				.data = &obs_rx_chip_info },
-	{ .compatible = "adi,axi-adrv9025-obs-1.0",
-				.data = &obs_rx_chip_info },
 	{ .compatible = "adi,axi-adrv9002-rx2-1.0",
-				.data = &adrv9002_rx_chip_info },
-	{ .compatible = "adi,axi-adrv9003-rx2-1.0",
-				.data = &adrv9002_rx_chip_info },
-	{ .compatible = "adi,axi-adrv9004-rx2-1.0",
-				.data = &adrv9002_rx_chip_info },
-	{ .compatible = "adi,axi-adrv9006-rx2-1.0",
 				.data = &adrv9002_rx_chip_info },
 	{ .compatible = "adi,axi-adc-tpl-so-10.0.a",
 		.data = &obs_rx_chip_info },
@@ -819,7 +733,6 @@ static int adc_probe(struct platform_device *pdev)
 	struct axiadc_state *st;
 	struct resource *mem;
 	int ret;
-	u32 config;
 
 	id = of_match_node(adc_of_match, pdev->dev.of_node);
 	if (!id)
@@ -864,9 +777,6 @@ static int adc_probe(struct platform_device *pdev)
 	axiadc_write(st, ADI_REG_RSTN, 0);
 	axiadc_write(st, ADI_REG_RSTN, ADI_RSTN);
 
-	config = axiadc_read(st, ADI_REG_CONFIG);
-	st->ext_sync_avail = !!(config & ADI_EXT_SYNC);
-
 	if (info->has_frontend) {
 		st->frontend = devm_iio_hw_consumer_alloc(&pdev->dev);
 		if (IS_ERR(st->frontend))
@@ -883,7 +793,7 @@ static int adc_probe(struct platform_device *pdev)
 		indio_dev->num_channels = info->num_channels;
 	}
 
-	ret = devm_iio_dmaengine_buffer_setup(&pdev->dev, indio_dev, "rx");
+	ret = axiadc_configure_ring_stream(indio_dev, "rx");
 	if (ret)
 		return ret;
 

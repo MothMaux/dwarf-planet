@@ -496,11 +496,11 @@ static int ip6gre_rcv(struct sk_buff *skb, const struct tnl_ptk_info *tpi)
 				      tpi->proto);
 	if (tunnel) {
 		if (tunnel->parms.collect_md) {
-			IP_TUNNEL_DECLARE_FLAGS(flags);
 			struct metadata_dst *tun_dst;
 			__be64 tun_id;
+			__be16 flags;
 
-			ip_tunnel_flags_copy(flags, tpi->flags);
+			flags = tpi->flags;
 			tun_id = key32_to_tunnel_id(tpi->key);
 
 			tun_dst = ipv6_tun_rx_dst(skb, flags, tun_id, 0);
@@ -528,9 +528,6 @@ static int ip6erspan_rcv(struct sk_buff *skb,
 	struct ip6_tnl *tunnel;
 	u8 ver;
 
-	if (unlikely(!pskb_may_pull(skb, sizeof(*ershdr))))
-		return PACKET_REJECT;
-
 	ipv6h = ipv6_hdr(skb);
 	ershdr = (struct erspan_base_hdr *)skb->data;
 	ver = ershdr->ver;
@@ -551,14 +548,14 @@ static int ip6erspan_rcv(struct sk_buff *skb,
 
 		if (tunnel->parms.collect_md) {
 			struct erspan_metadata *pkt_md, *md;
-			IP_TUNNEL_DECLARE_FLAGS(flags);
 			struct metadata_dst *tun_dst;
 			struct ip_tunnel_info *info;
 			unsigned char *gh;
 			__be64 tun_id;
+			__be16 flags;
 
-			__set_bit(IP_TUNNEL_KEY_BIT, tpi->flags);
-			ip_tunnel_flags_copy(flags, tpi->flags);
+			tpi->flags |= TUNNEL_KEY;
+			flags = tpi->flags;
 			tun_id = key32_to_tunnel_id(tpi->key);
 
 			tun_dst = ipv6_tun_rx_dst(skb, flags, tun_id,
@@ -580,8 +577,7 @@ static int ip6erspan_rcv(struct sk_buff *skb,
 			md2 = &md->u.md2;
 			memcpy(md2, pkt_md, ver == 1 ? ERSPAN_V1_MDSIZE :
 						       ERSPAN_V2_MDSIZE);
-			__set_bit(IP_TUNNEL_ERSPAN_OPT_BIT,
-				  info->key.tun_flags);
+			info->key.tun_flags |= TUNNEL_ERSPAN_OPT;
 			info->options_len = sizeof(*md);
 
 			ip6_tnl_rcv(tunnel, skb, tpi, tun_dst, log_ecn_error);
@@ -749,8 +745,8 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 			       __u32 *pmtu, __be16 proto)
 {
 	struct ip6_tnl *tunnel = netdev_priv(dev);
-	IP_TUNNEL_DECLARE_FLAGS(flags);
 	__be16 protocol;
+	__be16 flags;
 
 	if (dev->type == ARPHRD_ETHER)
 		IPCB(skb)->flags = 0;
@@ -782,11 +778,8 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 		fl6->fl6_gre_key = tunnel_id_to_key32(key->tun_id);
 
 		dsfield = key->tos;
-		ip_tunnel_flags_zero(flags);
-		__set_bit(IP_TUNNEL_CSUM_BIT, flags);
-		__set_bit(IP_TUNNEL_KEY_BIT, flags);
-		__set_bit(IP_TUNNEL_SEQ_BIT, flags);
-		ip_tunnel_flags_and(flags, flags, key->tun_flags);
+		flags = key->tun_flags &
+			(TUNNEL_CSUM | TUNNEL_KEY | TUNNEL_SEQ);
 		tun_hlen = gre_calc_hlen(flags);
 
 		if (skb_cow_head(skb, dev->needed_headroom ?: tun_hlen + tunnel->encap_hlen))
@@ -795,21 +788,19 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 		gre_build_header(skb, tun_hlen,
 				 flags, protocol,
 				 tunnel_id_to_key32(tun_info->key.tun_id),
-				 test_bit(IP_TUNNEL_SEQ_BIT, flags) ?
-				 htonl(atomic_fetch_inc(&tunnel->o_seqno)) :
-				 0);
+				 (flags & TUNNEL_SEQ) ? htonl(atomic_fetch_inc(&tunnel->o_seqno))
+						      : 0);
 
 	} else {
 		if (skb_cow_head(skb, dev->needed_headroom ?: tunnel->hlen))
 			return -ENOMEM;
 
-		ip_tunnel_flags_copy(flags, tunnel->parms.o_flags);
+		flags = tunnel->parms.o_flags;
 
 		gre_build_header(skb, tunnel->tun_hlen, flags,
 				 protocol, tunnel->parms.o_key,
-				 test_bit(IP_TUNNEL_SEQ_BIT, flags) ?
-				 htonl(atomic_fetch_inc(&tunnel->o_seqno)) :
-				 0);
+				 (flags & TUNNEL_SEQ) ? htonl(atomic_fetch_inc(&tunnel->o_seqno))
+						      : 0);
 	}
 
 	return ip6_tnl_xmit(skb, dev, dsfield, fl6, encap_limit, pmtu,
@@ -831,8 +822,7 @@ static inline int ip6gre_xmit_ipv4(struct sk_buff *skb, struct net_device *dev)
 		prepare_ip6gre_xmit_ipv4(skb, dev, &fl6,
 					 &dsfield, &encap_limit);
 
-	err = gre_handle_offloads(skb, test_bit(IP_TUNNEL_CSUM_BIT,
-						t->parms.o_flags));
+	err = gre_handle_offloads(skb, !!(t->parms.o_flags & TUNNEL_CSUM));
 	if (err)
 		return -1;
 
@@ -866,8 +856,7 @@ static inline int ip6gre_xmit_ipv6(struct sk_buff *skb, struct net_device *dev)
 	    prepare_ip6gre_xmit_ipv6(skb, dev, &fl6, &dsfield, &encap_limit))
 		return -1;
 
-	if (gre_handle_offloads(skb, test_bit(IP_TUNNEL_CSUM_BIT,
-					      t->parms.o_flags)))
+	if (gre_handle_offloads(skb, !!(t->parms.o_flags & TUNNEL_CSUM)))
 		return -1;
 
 	err = __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit,
@@ -879,6 +868,26 @@ static inline int ip6gre_xmit_ipv6(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	return 0;
+}
+
+/**
+ * ip6gre_tnl_addr_conflict - compare packet addresses to tunnel's own
+ *   @t: the outgoing tunnel device
+ *   @hdr: IPv6 header from the incoming packet
+ *
+ * Description:
+ *   Avoid trivial tunneling loop by checking that tunnel exit-point
+ *   doesn't match source of incoming packet.
+ *
+ * Return:
+ *   1 if conflict,
+ *   0 else
+ **/
+
+static inline bool ip6gre_tnl_addr_conflict(const struct ip6_tnl *t,
+	const struct ipv6hdr *hdr)
+{
+	return ipv6_addr_equal(&t->parms.raddr, &hdr->saddr);
 }
 
 static int ip6gre_xmit_other(struct sk_buff *skb, struct net_device *dev)
@@ -894,8 +903,7 @@ static int ip6gre_xmit_other(struct sk_buff *skb, struct net_device *dev)
 	    prepare_ip6gre_xmit_other(skb, dev, &fl6, &dsfield, &encap_limit))
 		return -1;
 
-	err = gre_handle_offloads(skb, test_bit(IP_TUNNEL_CSUM_BIT,
-						t->parms.o_flags));
+	err = gre_handle_offloads(skb, !!(t->parms.o_flags & TUNNEL_CSUM));
 	if (err)
 		return err;
 	err = __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu, skb->protocol);
@@ -907,6 +915,7 @@ static netdev_tx_t ip6gre_tunnel_xmit(struct sk_buff *skb,
 	struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
+	struct net_device_stats *stats = &t->dev->stats;
 	__be16 payload_protocol;
 	int ret;
 
@@ -936,8 +945,8 @@ static netdev_tx_t ip6gre_tunnel_xmit(struct sk_buff *skb,
 
 tx_err:
 	if (!t->parms.collect_md || !IS_ERR(skb_tunnel_info_txcheck(skb)))
-		DEV_STATS_INC(dev, tx_errors);
-	DEV_STATS_INC(dev, tx_dropped);
+		stats->tx_errors++;
+	stats->tx_dropped++;
 	kfree_skb(skb);
 	return NETDEV_TX_OK;
 }
@@ -948,7 +957,7 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 	struct ip_tunnel_info *tun_info = NULL;
 	struct ip6_tnl *t = netdev_priv(dev);
 	struct dst_entry *dst = skb_dst(skb);
-	IP_TUNNEL_DECLARE_FLAGS(flags) = { };
+	struct net_device_stats *stats;
 	bool truncate = false;
 	int encap_limit = -1;
 	__u8 dsfield = false;
@@ -968,12 +977,11 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 		goto tx_err;
 
 	if (skb->len > dev->mtu + dev->hard_header_len) {
-		if (pskb_trim(skb, dev->mtu + dev->hard_header_len))
-			goto tx_err;
+		pskb_trim(skb, dev->mtu + dev->hard_header_len);
 		truncate = true;
 	}
 
-	nhoff = skb_network_offset(skb);
+	nhoff = skb_network_header(skb) - skb_mac_header(skb);
 	if (skb->protocol == htons(ETH_P_IP) &&
 	    (ntohs(ip_hdr(skb)->tot_len) > skb->len - nhoff))
 		truncate = true;
@@ -982,7 +990,7 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 		int thoff;
 
 		if (skb_transport_header_was_set(skb))
-			thoff = skb_transport_offset(skb);
+			thoff = skb_transport_header(skb) - skb_mac_header(skb);
 		else
 			thoff = nhoff + sizeof(struct ipv6hdr);
 		if (ntohs(ipv6_hdr(skb)->payload_len) > skb->len - thoff)
@@ -992,7 +1000,7 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 	if (skb_cow_head(skb, dev->needed_headroom ?: t->hlen))
 		goto tx_err;
 
-	__clear_bit(IP_TUNNEL_KEY_BIT, t->parms.o_flags);
+	t->parms.o_flags &= ~TUNNEL_KEY;
 	IPCB(skb)->flags = 0;
 
 	/* For collect_md mode, derive fl6 from the tunnel key,
@@ -1017,8 +1025,7 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 		fl6.fl6_gre_key = tunnel_id_to_key32(key->tun_id);
 
 		dsfield = key->tos;
-		if (!test_bit(IP_TUNNEL_ERSPAN_OPT_BIT,
-			      tun_info->key.tun_flags))
+		if (!(tun_info->key.tun_flags & TUNNEL_ERSPAN_OPT))
 			goto tx_err;
 		if (tun_info->options_len < sizeof(*md))
 			goto tx_err;
@@ -1030,14 +1037,12 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 					    ntohl(tun_id),
 					    ntohl(md->u.index), truncate,
 					    false);
-			proto = htons(ETH_P_ERSPAN);
 		} else if (md->version == 2) {
 			erspan_build_header_v2(skb,
 					       ntohl(tun_id),
 					       md->u.md2.dir,
 					       get_hwid(&md->u.md2),
 					       truncate, false);
-			proto = htons(ETH_P_ERSPAN2);
 		} else {
 			goto tx_err;
 		}
@@ -1060,35 +1065,30 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 			break;
 		}
 
-		if (t->parms.erspan_ver == 1) {
+		if (t->parms.erspan_ver == 1)
 			erspan_build_header(skb, ntohl(t->parms.o_key),
 					    t->parms.index,
 					    truncate, false);
-			proto = htons(ETH_P_ERSPAN);
-		} else if (t->parms.erspan_ver == 2) {
+		else if (t->parms.erspan_ver == 2)
 			erspan_build_header_v2(skb, ntohl(t->parms.o_key),
 					       t->parms.dir,
 					       t->parms.hwid,
 					       truncate, false);
-			proto = htons(ETH_P_ERSPAN2);
-		} else {
+		else
 			goto tx_err;
-		}
 
 		fl6.daddr = t->parms.raddr;
 	}
 
 	/* Push GRE header. */
-	__set_bit(IP_TUNNEL_SEQ_BIT, flags);
-	gre_build_header(skb, 8, flags, proto, 0,
-			 htonl(atomic_fetch_inc(&t->o_seqno)));
+	proto = (t->parms.erspan_ver == 1) ? htons(ETH_P_ERSPAN)
+					   : htons(ETH_P_ERSPAN2);
+	gre_build_header(skb, 8, TUNNEL_SEQ, proto, 0, htonl(atomic_fetch_inc(&t->o_seqno)));
 
 	/* TooBig packet may have updated dst->dev's mtu */
-	if (!t->parms.collect_md && dst) {
-		mtu = READ_ONCE(dst_dev(dst)->mtu);
-		if (dst_mtu(dst) > mtu)
-			dst->ops->update_pmtu(dst, NULL, skb, mtu, false);
-	}
+	if (!t->parms.collect_md && dst && dst_mtu(dst) > dst->dev->mtu)
+		dst->ops->update_pmtu(dst, NULL, skb, dst->dev->mtu, false);
+
 	err = ip6_tnl_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
 			   NEXTHDR_GRE);
 	if (err != 0) {
@@ -1106,9 +1106,10 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 	return NETDEV_TX_OK;
 
 tx_err:
+	stats = &t->dev->stats;
 	if (!IS_ERR(tun_info))
-		DEV_STATS_INC(dev, tx_errors);
-	DEV_STATS_INC(dev, tx_dropped);
+		stats->tx_errors++;
+	stats->tx_dropped++;
 	kfree_skb(skb);
 	return NETDEV_TX_OK;
 }
@@ -1226,8 +1227,8 @@ static void ip6gre_tnl_copy_tnl_parm(struct ip6_tnl *t,
 	t->parms.proto = p->proto;
 	t->parms.i_key = p->i_key;
 	t->parms.o_key = p->o_key;
-	ip_tunnel_flags_copy(t->parms.i_flags, p->i_flags);
-	ip_tunnel_flags_copy(t->parms.o_flags, p->o_flags);
+	t->parms.i_flags = p->i_flags;
+	t->parms.o_flags = p->o_flags;
 	t->parms.fwmark = p->fwmark;
 	t->parms.erspan_ver = p->erspan_ver;
 	t->parms.index = p->index;
@@ -1256,8 +1257,8 @@ static void ip6gre_tnl_parm_from_user(struct __ip6_tnl_parm *p,
 	p->link = u->link;
 	p->i_key = u->i_key;
 	p->o_key = u->o_key;
-	gre_flags_to_tnl_flags(p->i_flags, u->i_flags);
-	gre_flags_to_tnl_flags(p->o_flags, u->o_flags);
+	p->i_flags = gre_flags_to_tnl_flags(u->i_flags);
+	p->o_flags = gre_flags_to_tnl_flags(u->o_flags);
 	memcpy(p->name, u->name, sizeof(u->name));
 }
 
@@ -1397,16 +1398,9 @@ static int ip6gre_header(struct sk_buff *skb, struct net_device *dev,
 {
 	struct ip6_tnl *t = netdev_priv(dev);
 	struct ipv6hdr *ipv6h;
-	int needed;
 	__be16 *p;
 
-	needed = t->hlen + sizeof(*ipv6h);
-	if (skb_headroom(skb) < needed &&
-	    pskb_expand_head(skb, HH_DATA_ALIGN(needed - skb_headroom(skb)),
-			     0, GFP_ATOMIC))
-		return -needed;
-
-	ipv6h = skb_push(skb, needed);
+	ipv6h = skb_push(skb, t->hlen + sizeof(*ipv6h));
 	ip6_flow_hdr(ipv6h, 0, ip6_make_flowlabel(dev_net(dev), skb,
 						  t->fl.u.ip6.flowlabel,
 						  true, &t->fl.u.ip6));
@@ -1416,7 +1410,7 @@ static int ip6gre_header(struct sk_buff *skb, struct net_device *dev,
 	ipv6h->daddr = t->parms.raddr;
 
 	p = (__be16 *)(ipv6h + 1);
-	p[0] = ip_tunnel_flags_to_be16(t->parms.o_flags);
+	p[0] = t->parms.o_flags;
 	p[1] = htons(type);
 
 	/*
@@ -1443,6 +1437,7 @@ static const struct net_device_ops ip6gre_netdev_ops = {
 	.ndo_start_xmit		= ip6gre_tunnel_xmit,
 	.ndo_siocdevprivate	= ip6gre_tunnel_siocdevprivate,
 	.ndo_change_mtu		= ip6_tnl_change_mtu,
+	.ndo_get_stats64	= dev_get_tstats64,
 	.ndo_get_iflink		= ip6_tnl_get_iflink,
 };
 
@@ -1452,6 +1447,7 @@ static void ip6gre_dev_free(struct net_device *dev)
 
 	gro_cells_destroy(&t->gro_cells);
 	dst_cache_destroy(&t->dst_cache);
+	free_percpu(dev->tstats);
 }
 
 static void ip6gre_tunnel_setup(struct net_device *dev)
@@ -1460,7 +1456,6 @@ static void ip6gre_tunnel_setup(struct net_device *dev)
 	dev->needs_free_netdev = true;
 	dev->priv_destructor = ip6gre_dev_free;
 
-	dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
 	dev->type = ARPHRD_IP6GRE;
 
 	dev->flags |= IFF_NOARP;
@@ -1479,23 +1474,23 @@ static void ip6gre_tunnel_setup(struct net_device *dev)
 static void ip6gre_tnl_init_features(struct net_device *dev)
 {
 	struct ip6_tnl *nt = netdev_priv(dev);
+	__be16 flags;
 
-	dev->features		|= GRE6_FEATURES;
+	dev->features		|= GRE6_FEATURES | NETIF_F_LLTX;
 	dev->hw_features	|= GRE6_FEATURES;
+
+	flags = nt->parms.o_flags;
 
 	/* TCP offload with GRE SEQ is not supported, nor can we support 2
 	 * levels of outer headers requiring an update.
 	 */
-	if (test_bit(IP_TUNNEL_SEQ_BIT, nt->parms.o_flags))
+	if (flags & TUNNEL_SEQ)
 		return;
-	if (test_bit(IP_TUNNEL_CSUM_BIT, nt->parms.o_flags) &&
-	    nt->encap.type != TUNNEL_ENCAP_NONE)
+	if (flags & TUNNEL_CSUM && nt->encap.type != TUNNEL_ENCAP_NONE)
 		return;
 
 	dev->features |= NETIF_F_GSO_SOFTWARE;
 	dev->hw_features |= NETIF_F_GSO_SOFTWARE;
-
-	dev->lltx = true;
 }
 
 static int ip6gre_tunnel_init_common(struct net_device *dev)
@@ -1507,11 +1502,16 @@ static int ip6gre_tunnel_init_common(struct net_device *dev)
 	tunnel = netdev_priv(dev);
 
 	tunnel->dev = dev;
+	tunnel->net = dev_net(dev);
 	strcpy(tunnel->parms.name, dev->name);
+
+	dev->tstats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);
+	if (!dev->tstats)
+		return -ENOMEM;
 
 	ret = dst_cache_init(&tunnel->dst_cache, GFP_KERNEL);
 	if (ret)
-		return ret;
+		goto cleanup_alloc_pcpu_stats;
 
 	ret = gro_cells_init(&tunnel->gro_cells, dev);
 	if (ret)
@@ -1530,11 +1530,13 @@ static int ip6gre_tunnel_init_common(struct net_device *dev)
 	ip6gre_tnl_init_features(dev);
 
 	netdev_hold(dev, &tunnel->dev_tracker, GFP_KERNEL);
-	netdev_lockdep_set_classes(dev);
 	return 0;
 
 cleanup_dst_cache_init:
 	dst_cache_destroy(&tunnel->dst_cache);
+cleanup_alloc_pcpu_stats:
+	free_percpu(dev->tstats);
+	dev->tstats = NULL;
 	return ret;
 }
 
@@ -1629,7 +1631,8 @@ static int __net_init ip6gre_init_net(struct net *net)
 	/* FB netdevice is special: we have one, and only one per netns.
 	 * Allowing to move it to another netns is clearly unsafe.
 	 */
-	ign->fb_tunnel_dev->netns_local = true;
+	ign->fb_tunnel_dev->features |= NETIF_F_NETNS_LOCAL;
+
 
 	ip6gre_fb_tunnel_init(ign->fb_tunnel_dev);
 	ign->fb_tunnel_dev->rtnl_link_ops = &ip6gre_link_ops;
@@ -1648,19 +1651,21 @@ err_alloc_dev:
 	return err;
 }
 
-static void __net_exit ip6gre_exit_batch_rtnl(struct list_head *net_list,
-					      struct list_head *dev_to_kill)
+static void __net_exit ip6gre_exit_batch_net(struct list_head *net_list)
 {
 	struct net *net;
+	LIST_HEAD(list);
 
-	ASSERT_RTNL();
+	rtnl_lock();
 	list_for_each_entry(net, net_list, exit_list)
-		ip6gre_destroy_tunnels(net, dev_to_kill);
+		ip6gre_destroy_tunnels(net, &list);
+	unregister_netdevice_many(&list);
+	rtnl_unlock();
 }
 
 static struct pernet_operations ip6gre_net_ops = {
 	.init = ip6gre_init_net,
-	.exit_batch_rtnl = ip6gre_exit_batch_rtnl,
+	.exit_batch = ip6gre_exit_batch_net,
 	.id   = &ip6gre_net_id,
 	.size = sizeof(struct ip6gre_net),
 };
@@ -1807,12 +1812,12 @@ static void ip6gre_netlink_parms(struct nlattr *data[],
 		parms->link = nla_get_u32(data[IFLA_GRE_LINK]);
 
 	if (data[IFLA_GRE_IFLAGS])
-		gre_flags_to_tnl_flags(parms->i_flags,
-				       nla_get_be16(data[IFLA_GRE_IFLAGS]));
+		parms->i_flags = gre_flags_to_tnl_flags(
+				nla_get_be16(data[IFLA_GRE_IFLAGS]));
 
 	if (data[IFLA_GRE_OFLAGS])
-		gre_flags_to_tnl_flags(parms->o_flags,
-				       nla_get_be16(data[IFLA_GRE_OFLAGS]));
+		parms->o_flags = gre_flags_to_tnl_flags(
+				nla_get_be16(data[IFLA_GRE_OFLAGS]));
 
 	if (data[IFLA_GRE_IKEY])
 		parms->i_key = nla_get_be32(data[IFLA_GRE_IKEY]);
@@ -1865,6 +1870,7 @@ static const struct net_device_ops ip6gre_tap_netdev_ops = {
 	.ndo_set_mac_address = eth_mac_addr,
 	.ndo_validate_addr = eth_validate_addr,
 	.ndo_change_mtu = ip6_tnl_change_mtu,
+	.ndo_get_stats64 = dev_get_tstats64,
 	.ndo_get_iflink = ip6_tnl_get_iflink,
 };
 
@@ -1890,11 +1896,16 @@ static int ip6erspan_tap_init(struct net_device *dev)
 	tunnel = netdev_priv(dev);
 
 	tunnel->dev = dev;
+	tunnel->net = dev_net(dev);
 	strcpy(tunnel->parms.name, dev->name);
+
+	dev->tstats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);
+	if (!dev->tstats)
+		return -ENOMEM;
 
 	ret = dst_cache_init(&tunnel->dst_cache, GFP_KERNEL);
 	if (ret)
-		return ret;
+		goto cleanup_alloc_pcpu_stats;
 
 	ret = gro_cells_init(&tunnel->gro_cells, dev);
 	if (ret)
@@ -1911,11 +1922,13 @@ static int ip6erspan_tap_init(struct net_device *dev)
 	ip6erspan_tnl_link_config(tunnel, 1);
 
 	netdev_hold(dev, &tunnel->dev_tracker, GFP_KERNEL);
-	netdev_lockdep_set_classes(dev);
 	return 0;
 
 cleanup_dst_cache_init:
 	dst_cache_destroy(&tunnel->dst_cache);
+cleanup_alloc_pcpu_stats:
+	free_percpu(dev->tstats);
+	dev->tstats = NULL;
 	return ret;
 }
 
@@ -1926,6 +1939,7 @@ static const struct net_device_ops ip6erspan_netdev_ops = {
 	.ndo_set_mac_address =	eth_mac_addr,
 	.ndo_validate_addr =	eth_validate_addr,
 	.ndo_change_mtu =	ip6_tnl_change_mtu,
+	.ndo_get_stats64 =	dev_get_tstats64,
 	.ndo_get_iflink =	ip6_tnl_get_iflink,
 };
 
@@ -1939,7 +1953,6 @@ static void ip6gre_tap_setup(struct net_device *dev)
 	dev->needs_free_netdev = true;
 	dev->priv_destructor = ip6gre_dev_free;
 
-	dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
 	dev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 	netif_keep_dst(dev);
@@ -2150,13 +2163,11 @@ static int ip6gre_fill_info(struct sk_buff *skb, const struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
 	struct __ip6_tnl_parm *p = &t->parms;
-	IP_TUNNEL_DECLARE_FLAGS(o_flags);
-
-	ip_tunnel_flags_copy(o_flags, p->o_flags);
+	__be16 o_flags = p->o_flags;
 
 	if (p->erspan_ver == 1 || p->erspan_ver == 2) {
 		if (!p->collect_md)
-			__set_bit(IP_TUNNEL_KEY_BIT, o_flags);
+			o_flags |= TUNNEL_KEY;
 
 		if (nla_put_u8(skb, IFLA_GRE_ERSPAN_VER, p->erspan_ver))
 			goto nla_put_failure;
@@ -2242,7 +2253,6 @@ static void ip6erspan_tap_setup(struct net_device *dev)
 	dev->needs_free_netdev = true;
 	dev->priv_destructor = ip6gre_dev_free;
 
-	dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
 	dev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	dev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 	netif_keep_dst(dev);
@@ -2414,7 +2424,7 @@ static void __exit ip6gre_fini(void)
 module_init(ip6gre_init);
 module_exit(ip6gre_fini);
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("D. Kozlov <xeb@mail.ru>");
+MODULE_AUTHOR("D. Kozlov (xeb@mail.ru)");
 MODULE_DESCRIPTION("GRE over IPv6 tunneling device");
 MODULE_ALIAS_RTNL_LINK("ip6gre");
 MODULE_ALIAS_RTNL_LINK("ip6gretap");

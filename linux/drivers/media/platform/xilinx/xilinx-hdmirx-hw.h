@@ -490,8 +490,6 @@
 /* DDC Status HDCP 2.2 read message buffer empty mask */
 #define HDMIRX_DDC_STA_HDCP_RMSG_EP_MASK	BIT(27)
 
-#define HDMIRX_DDC_STA_HDCP_WMSG_WORDS_SHIFT     0
-
 /* AUX peripheral Control register masks */
 /* AUX Control Run mask */
 #define HDMIRX_AUX_CTRL_RUN_MASK		BIT(0)

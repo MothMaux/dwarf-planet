@@ -212,7 +212,8 @@ static int ssc_probe(struct platform_device *pdev)
 			of_property_read_bool(np, "atmel,clk-from-rk-pin");
 	}
 
-	ssc->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &regs);
+	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	ssc->regs = devm_ioremap_resource(&pdev->dev, regs);
 	if (IS_ERR(ssc->regs))
 		return PTR_ERR(ssc->regs);
 
@@ -251,7 +252,7 @@ static int ssc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static void ssc_remove(struct platform_device *pdev)
+static int ssc_remove(struct platform_device *pdev)
 {
 	struct ssc_device *ssc = platform_get_drvdata(pdev);
 
@@ -260,6 +261,8 @@ static void ssc_remove(struct platform_device *pdev)
 	mutex_lock(&user_lock);
 	list_del(&ssc->list);
 	mutex_unlock(&user_lock);
+
+	return 0;
 }
 
 static struct platform_driver ssc_driver = {
@@ -269,7 +272,7 @@ static struct platform_driver ssc_driver = {
 	},
 	.id_table	= atmel_ssc_devtypes,
 	.probe		= ssc_probe,
-	.remove_new	= ssc_remove,
+	.remove		= ssc_remove,
 };
 module_platform_driver(ssc_driver);
 

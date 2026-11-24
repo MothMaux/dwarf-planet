@@ -24,7 +24,6 @@
 #include "adrv9001_reg_addr_macros.h"
 #include "adrv9001_arm_macros.h"
 #include "object_ids.h"
-#include "adrv9001_bf.h"
 
 int32_t adi_adrv9001_HwOpen(adi_adrv9001_Device_t *device, adi_adrv9001_SpiSettings_t *spiSettings)
 {
@@ -157,9 +156,6 @@ static void cacheInitInfo(adi_adrv9001_Device_t *adrv9001, adi_adrv9001_Init_t *
     
     /* Save whether we are in FH mode to state */
     adrv9001->devStateInfo.frequencyHoppingEnabled = init->sysConfig.fhModeOn;
-
-	adrv9001->devStateInfo.txSsiRefClockEnabled[0] = init->tx.txProfile[0].txSsiConfig.txRefClockPin;
-	adrv9001->devStateInfo.txSsiRefClockEnabled[1] = init->tx.txProfile[1].txSsiConfig.txRefClockPin;
 }
 
 int32_t adi_adrv9001_InitAnalog(adi_adrv9001_Device_t *device,
@@ -531,71 +527,45 @@ int32_t adi_adrv9001_Profiles_Verify(adi_adrv9001_Device_t *device, adi_adrv9001
 }
 
 static __maybe_unused int32_t __maybe_unused adrv9001_TemperatureGetValidate(adi_adrv9001_Device_t *device,
-	                                                                         adi_adrv9001_TempReadMode_e tempReadMode,
-                                                                             int16_t *temperature_C)
+                                                              int16_t *temperature_C)
 {
     ADI_NULL_PTR_RETURN(&device->common, temperature_C);
-	ADI_RANGE_CHECK(device, tempReadMode, ADI_ADRV9001_TEMPERATURE_READ_MAILBOX, ADI_ADRV9001_TEMPERATURE_READ_SPI);
+
     ADI_API_RETURN(device);
 }
 
-int32_t adi_adrv9001_Temperature_Get(adi_adrv9001_Device_t *device, adi_adrv9001_TempReadMode_e tempReadMode, int16_t *temperature_C)
+int32_t adi_adrv9001_Temperature_Get(adi_adrv9001_Device_t *device, int16_t *temperature_C)
 {
     uint8_t channelMask = 0;
     uint8_t armExtData[2] = {0};
     uint8_t armReadBack[2] = {0};
-	uint16_t temperatureSenseResult = 0;
-	const uint8_t  TEMP_SENSOR_DFL_OFFSET_CODE_VALUE = 0x10;
-	const uint16_t  KELVIN_TO_CELSIUS = 0x111;
 
-	ADI_PERFORM_VALIDATION(adrv9001_TemperatureGetValidate, device, tempReadMode, temperature_C);
+    ADI_PERFORM_VALIDATION(adrv9001_TemperatureGetValidate, device, temperature_C);
 
     *temperature_C = 0;
 
-	if (tempReadMode == ADI_ADRV9001_TEMPERATURE_READ_MAILBOX)
-	{
+    /* Channel mask is not used */
+    armExtData[0] = channelMask;
+    armExtData[1] = OBJID_GO_TEMP_SENSOR;
 
-		/* Channel mask is not used */
-		armExtData[0] = channelMask;
-		armExtData[1] = OBJID_GO_TEMP_SENSOR;
+    /* send ARM GET opcode */
+    ADI_EXPECT(adi_adrv9001_arm_Cmd_Write, device, (uint8_t)ADRV9001_ARM_GET_OPCODE, armExtData, sizeof(armExtData));
 
-		/* send ARM GET opcode */
-		ADI_EXPECT(adi_adrv9001_arm_Cmd_Write, device, (uint8_t)ADRV9001_ARM_GET_OPCODE, armExtData, sizeof(armExtData));
+    /* Wait for command to finish executing */
+    ADRV9001_ARM_CMD_STATUS_WAIT_EXPECT(device,
+                                        ADRV9001_ARM_GET_OPCODE,
+                                        armExtData[1],
+                                        ADI_ADRV9001_READ_TEMP_SENSOR_TIMEOUT_US,
+                                        ADI_ADRV9001_READ_TEMP_SENSOR_INTERVAL_US);
 
-		/* Wait for command to finish executing */
-		ADRV9001_ARM_CMD_STATUS_WAIT_EXPECT(device,
-			ADRV9001_ARM_GET_OPCODE,
-			armExtData[1],
-			ADI_ADRV9001_READ_TEMP_SENSOR_TIMEOUT_US,
-			ADI_ADRV9001_READ_TEMP_SENSOR_INTERVAL_US);
+    /* read the ARM memory to get temperature */
+    /* TODO: Enable auto increment if it works with non multiples of 4 */
+    ADI_EXPECT(adi_adrv9001_arm_Memory_Read, device, ADRV9001_ADDR_ARM_MAILBOX_GET, armReadBack,
+        sizeof(armReadBack), false)
 
-		/* read the ARM memory to get temperature */
-		/* TODO: Enable auto increment if it works with non multiples of 4 */
-		ADI_EXPECT(adi_adrv9001_arm_Memory_Read,
-			device,
-			ADRV9001_ADDR_ARM_MAILBOX_GET,
-			armReadBack,
-			sizeof(armReadBack),
-			false)
-
-		/* Reconstruct temperature */
-		*temperature_C = (int16_t)(((int16_t)armReadBack[0] << 0) |
-		                           ((int16_t)armReadBack[1] << 8));
-	}
-	else if (tempReadMode == ADI_ADRV9001_TEMPERATURE_READ_SPI)
-	{
-		uint32_t numBytes = 2;
-		const uint16_t address[2] = { ADRV9001_ADDR_CORE_MSB_TDEGC_READBACK, ADRV9001_ADDR_CORE_LSB_TDEGC_READBACK };
-		uint8_t readData[2] = { 0 };
-
-		/* Readback from the aux adc temperature sense result */
-        ADI_EXPECT(adi_adrv9001_spi_Bytes_Read, device, address, readData, numBytes);
-
-		temperatureSenseResult = ((readData[0] & 0x0F) << 8) | (readData[1] << 0);
-
-		/* Retrieve temperature in Celsius */
-		*temperature_C = temperatureSenseResult - (TEMP_SENSOR_DFL_OFFSET_CODE_VALUE + KELVIN_TO_CELSIUS);
-	}
+    /* Reconstruct temperature */
+    *temperature_C = (int16_t)(((int16_t)armReadBack[0] << 0) |
+                               ((int16_t)armReadBack[1] << 8));
 
     ADI_API_RETURN(device);
 }

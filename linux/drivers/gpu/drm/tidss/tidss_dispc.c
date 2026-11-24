@@ -15,6 +15,8 @@
 #include <linux/module.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of.h>
+#include <linux/of_graph.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
@@ -271,109 +273,6 @@ const struct dispc_features dispc_j721e_feats = {
 	.vid_name = { "vid1", "vidl1", "vid2", "vidl2" },
 	.vid_lite = { 0, 1, 0, 1, },
 	.vid_order = { 1, 3, 0, 2 },
-};
-
-const struct dispc_features dispc_am625_feats = {
-	.max_pclk_khz = {
-		[DISPC_VP_DPI] = 165000,
-		[DISPC_VP_INTERNAL] = 170000,
-	},
-
-	.scaling = {
-		.in_width_max_5tap_rgb = 1280,
-		.in_width_max_3tap_rgb = 2560,
-		.in_width_max_5tap_yuv = 2560,
-		.in_width_max_3tap_yuv = 4096,
-		.upscale_limit = 16,
-		.downscale_limit_5tap = 4,
-		.downscale_limit_3tap = 2,
-		/*
-		 * The max supported pixel inc value is 255. The value
-		 * of pixel inc is calculated like this: 1+(xinc-1)*bpp.
-		 * The maximum bpp of all formats supported by the HW
-		 * is 8. So the maximum supported xinc value is 32,
-		 * because 1+(32-1)*8 < 255 < 1+(33-1)*4.
-		 */
-		.xinc_max = 32,
-	},
-
-	.subrev = DISPC_AM625,
-
-	.common = "common",
-	.common_regs = tidss_am65x_common_regs,
-
-	.num_vps = 2,
-	.vp_name = { "vp1", "vp2" },
-	.ovr_name = { "ovr1", "ovr2" },
-	.vpclk_name =  { "vp1", "vp2" },
-	.vp_bus_type = { DISPC_VP_INTERNAL, DISPC_VP_DPI },
-
-	.vp_feat = { .color = {
-			.has_ctm = true,
-			.gamma_size = 256,
-			.gamma_type = TIDSS_GAMMA_8BIT,
-		},
-	},
-
-	.num_planes = 2,
-	/* note: vid is plane_id 0 and vidl1 is plane_id 1 */
-	.vid_name = { "vid", "vidl1" },
-	.vid_lite = { false, true, },
-	.vid_order = { 1, 0 },
-};
-
-const struct dispc_features dispc_am62a7_feats = {
-	/*
-	 * if the code reaches dispc_mode_valid with VP1,
-	 * it should return MODE_BAD.
-	 */
-	.max_pclk_khz = {
-		[DISPC_VP_TIED_OFF] = 0,
-		[DISPC_VP_DPI] = 165000,
-	},
-
-	.scaling = {
-		.in_width_max_5tap_rgb = 1280,
-		.in_width_max_3tap_rgb = 2560,
-		.in_width_max_5tap_yuv = 2560,
-		.in_width_max_3tap_yuv = 4096,
-		.upscale_limit = 16,
-		.downscale_limit_5tap = 4,
-		.downscale_limit_3tap = 2,
-		/*
-		 * The max supported pixel inc value is 255. The value
-		 * of pixel inc is calculated like this: 1+(xinc-1)*bpp.
-		 * The maximum bpp of all formats supported by the HW
-		 * is 8. So the maximum supported xinc value is 32,
-		 * because 1+(32-1)*8 < 255 < 1+(33-1)*4.
-		 */
-		.xinc_max = 32,
-	},
-
-	.subrev = DISPC_AM62A7,
-
-	.common = "common",
-	.common_regs = tidss_am65x_common_regs,
-
-	.num_vps = 2,
-	.vp_name = { "vp1", "vp2" },
-	.ovr_name = { "ovr1", "ovr2" },
-	.vpclk_name =  { "vp1", "vp2" },
-	/* VP1 of the DSS in AM62A7 SoC is tied off internally */
-	.vp_bus_type = { DISPC_VP_TIED_OFF, DISPC_VP_DPI },
-
-	.vp_feat = { .color = {
-			.has_ctm = true,
-			.gamma_size = 256,
-			.gamma_type = TIDSS_GAMMA_8BIT,
-		},
-	},
-
-	.num_planes = 2,
-	/* note: vid is plane_id 0 and vidl1 is plane_id 1 */
-	.vid_name = { "vid", "vidl1" },
-	.vid_lite = { false, true, },
-	.vid_order = { 1, 0 },
 };
 
 static const u16 *dispc_common_regmap;
@@ -700,16 +599,13 @@ void dispc_k2g_set_irqenable(struct dispc_device *dispc, dispc_irq_t mask)
 {
 	dispc_irq_t old_mask = dispc_k2g_read_irqenable(dispc);
 
-	/* clear the irqstatus for irqs that will be enabled */
+	/* clear the irqstatus for newly enabled irqs */
 	dispc_k2g_clear_irqstatus(dispc, (mask ^ old_mask) & mask);
 
 	dispc_k2g_vp_set_irqenable(dispc, 0, mask);
 	dispc_k2g_vid_set_irqenable(dispc, 0, mask);
 
 	dispc_write(dispc, DISPC_IRQENABLE_SET, (1 << 0) | (1 << 7));
-
-	/* clear the irqstatus for irqs that were disabled */
-	dispc_k2g_clear_irqstatus(dispc, (mask ^ old_mask) & old_mask);
 
 	/* flush posted write */
 	dispc_k2g_read_irqenable(dispc);
@@ -783,20 +679,24 @@ static
 void dispc_k3_clear_irqstatus(struct dispc_device *dispc, dispc_irq_t clearmask)
 {
 	unsigned int i;
+	u32 top_clear = 0;
 
 	for (i = 0; i < dispc->feat->num_vps; ++i) {
-		if (clearmask & DSS_IRQ_VP_MASK(i))
+		if (clearmask & DSS_IRQ_VP_MASK(i)) {
 			dispc_k3_vp_write_irqstatus(dispc, i, clearmask);
+			top_clear |= BIT(i);
+		}
 	}
 	for (i = 0; i < dispc->feat->num_planes; ++i) {
-		if (clearmask & DSS_IRQ_PLANE_MASK(i))
+		if (clearmask & DSS_IRQ_PLANE_MASK(i)) {
 			dispc_k3_vid_write_irqstatus(dispc, i, clearmask);
+			top_clear |= BIT(4 + i);
+		}
 	}
 	if (dispc->feat->subrev == DISPC_K2G)
 		return;
 
-	/* always clear the top level irqstatus */
-	dispc_write(dispc, DISPC_IRQSTATUS, dispc_read(dispc, DISPC_IRQSTATUS));
+	dispc_write(dispc, DISPC_IRQSTATUS, top_clear);
 
 	/* Flush posted writes */
 	dispc_read(dispc, DISPC_IRQSTATUS);
@@ -842,7 +742,7 @@ static void dispc_k3_set_irqenable(struct dispc_device *dispc,
 
 	old_mask = dispc_k3_read_irqenable(dispc);
 
-	/* clear the irqstatus for irqs that will be enabled */
+	/* clear the irqstatus for newly enabled irqs */
 	dispc_k3_clear_irqstatus(dispc, (old_mask ^ mask) & mask);
 
 	for (i = 0; i < dispc->feat->num_vps; ++i) {
@@ -867,9 +767,6 @@ static void dispc_k3_set_irqenable(struct dispc_device *dispc,
 	if (main_disable)
 		dispc_write(dispc, DISPC_IRQENABLE_CLR, main_disable);
 
-	/* clear the irqstatus for irqs that were disabled */
-	dispc_k3_clear_irqstatus(dispc, (old_mask ^ mask) & old_mask);
-
 	/* Flush posted writes */
 	dispc_read(dispc, DISPC_IRQENABLE_SET);
 }
@@ -879,8 +776,6 @@ dispc_irq_t dispc_read_and_clear_irqstatus(struct dispc_device *dispc)
 	switch (dispc->feat->subrev) {
 	case DISPC_K2G:
 		return dispc_k2g_read_and_clear_irqstatus(dispc);
-	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM65X:
 	case DISPC_J721E:
 		return dispc_k3_read_and_clear_irqstatus(dispc);
@@ -896,8 +791,6 @@ void dispc_set_irqenable(struct dispc_device *dispc, dispc_irq_t mask)
 	case DISPC_K2G:
 		dispc_k2g_set_irqenable(dispc, mask);
 		break;
-	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM65X:
 	case DISPC_J721E:
 		dispc_k3_set_irqenable(dispc, mask);
@@ -1086,13 +979,13 @@ void dispc_vp_enable(struct dispc_device *dispc, u32 hw_videoport,
 
 	dispc_set_num_datalines(dispc, hw_videoport, fmt->data_width);
 
-	hfp = mode->crtc_hsync_start - mode->crtc_hdisplay;
-	hsw = mode->crtc_hsync_end - mode->crtc_hsync_start;
-	hbp = mode->crtc_htotal - mode->crtc_hsync_end;
+	hfp = mode->hsync_start - mode->hdisplay;
+	hsw = mode->hsync_end - mode->hsync_start;
+	hbp = mode->htotal - mode->hsync_end;
 
-	vfp = mode->crtc_vsync_start - mode->crtc_vdisplay;
-	vsw = mode->crtc_vsync_end - mode->crtc_vsync_start;
-	vbp = mode->crtc_vtotal - mode->crtc_vsync_end;
+	vfp = mode->vsync_start - mode->vdisplay;
+	vsw = mode->vsync_end - mode->vsync_start;
+	vbp = mode->vtotal - mode->vsync_end;
 
 	dispc_vp_write(dispc, hw_videoport, DISPC_VP_TIMING_H,
 		       FLD_VAL(hsw - 1, 7, 0) |
@@ -1134,8 +1027,8 @@ void dispc_vp_enable(struct dispc_device *dispc, u32 hw_videoport,
 		       FLD_VAL(ivs, 12, 12));
 
 	dispc_vp_write(dispc, hw_videoport, DISPC_VP_SIZE_SCREEN,
-		       FLD_VAL(mode->crtc_hdisplay - 1, 11, 0) |
-		       FLD_VAL(mode->crtc_vdisplay - 1, 27, 16));
+		       FLD_VAL(mode->hdisplay - 1, 11, 0) |
+		       FLD_VAL(mode->vdisplay - 1, 27, 16));
 
 	VP_REG_FLD_MOD(dispc, hw_videoport, DISPC_VP_CONTROL, 1, 0, 0);
 }
@@ -1388,8 +1281,6 @@ void dispc_ovr_set_plane(struct dispc_device *dispc, u32 hw_plane,
 		dispc_k2g_ovr_set_plane(dispc, hw_plane, hw_videoport,
 					x, y, layer);
 		break;
-	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM65X:
 		dispc_am65x_ovr_set_plane(dispc, hw_plane, hw_videoport,
 					  x, y, layer);
@@ -1967,8 +1858,8 @@ static const struct {
 	{ DRM_FORMAT_XBGR4444, 0x21, },
 	{ DRM_FORMAT_RGBX4444, 0x22, },
 
-	{ DRM_FORMAT_XRGB1555, 0x25, },
-	{ DRM_FORMAT_XBGR1555, 0x26, },
+	{ DRM_FORMAT_ARGB1555, 0x25, },
+	{ DRM_FORMAT_ABGR1555, 0x26, },
 
 	{ DRM_FORMAT_XRGB8888, 0x27, },
 	{ DRM_FORMAT_XBGR8888, 0x28, },
@@ -2094,9 +1985,9 @@ dma_addr_t dispc_plane_state_p_uv_addr(const struct drm_plane_state *state)
 		(y * fb->pitches[1] / fb->format->vsub);
 }
 
-void dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
-		       const struct drm_plane_state *state,
-		       u32 hw_videoport)
+int dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
+		      const struct drm_plane_state *state,
+		      u32 hw_videoport)
 {
 	bool lite = dispc->feat->vid_lite[hw_plane];
 	u32 fourcc = state->fb->format->format;
@@ -2175,11 +2066,15 @@ void dispc_plane_setup(struct dispc_device *dispc, u32 hw_plane,
 	else
 		VID_REG_FLD_MOD(dispc, hw_plane, DISPC_VID_ATTRIBUTES, 0,
 				28, 28);
+
+	return 0;
 }
 
-void dispc_plane_enable(struct dispc_device *dispc, u32 hw_plane, bool enable)
+int dispc_plane_enable(struct dispc_device *dispc, u32 hw_plane, bool enable)
 {
 	VID_REG_FLD_MOD(dispc, hw_plane, DISPC_VID_ATTRIBUTES, !!enable, 0, 0);
+
+	return 0;
 }
 
 static u32 dispc_vid_get_fifo_size(struct dispc_device *dispc, u32 hw_plane)
@@ -2308,8 +2203,6 @@ static void dispc_plane_init(struct dispc_device *dispc)
 	case DISPC_K2G:
 		dispc_k2g_plane_init(dispc);
 		break;
-	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM65X:
 	case DISPC_J721E:
 		dispc_k3_plane_init(dispc);
@@ -2416,8 +2309,6 @@ static void dispc_vp_write_gamma_table(struct dispc_device *dispc,
 	case DISPC_K2G:
 		dispc_k2g_vp_write_gamma_table(dispc, hw_videoport);
 		break;
-	case DISPC_AM625:
-	case DISPC_AM62A7:
 	case DISPC_AM65X:
 		dispc_am65x_vp_write_gamma_table(dispc, hw_videoport);
 		break;
@@ -2692,8 +2583,7 @@ int dispc_runtime_resume(struct dispc_device *dispc)
 		REG_GET(dispc, DSS_SYSSTATUS, 2, 2),
 		REG_GET(dispc, DSS_SYSSTATUS, 3, 3));
 
-	if (dispc->feat->subrev == DISPC_AM625 ||
-	    dispc->feat->subrev == DISPC_AM65X)
+	if (dispc->feat->subrev == DISPC_AM65X)
 		dev_dbg(dispc->dev, "OLDI RESETDONE %d,%d,%d\n",
 			REG_GET(dispc, DSS_SYSSTATUS, 5, 5),
 			REG_GET(dispc, DSS_SYSSTATUS, 6, 6),
@@ -2763,87 +2653,18 @@ static void dispc_init_errata(struct dispc_device *dispc)
 	}
 }
 
-/*
- * K2G display controller does not support soft reset, so we do a basic manual
- * reset here: make sure the IRQs are masked and VPs are disabled.
- */
-static void dispc_softreset_k2g(struct dispc_device *dispc)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&dispc->tidss->wait_lock, flags);
-	dispc_set_irqenable(dispc, 0);
-	dispc_read_and_clear_irqstatus(dispc);
-	spin_unlock_irqrestore(&dispc->tidss->wait_lock, flags);
-
-	for (unsigned int vp_idx = 0; vp_idx < dispc->feat->num_vps; ++vp_idx)
-		VP_REG_FLD_MOD(dispc, vp_idx, DISPC_VP_CONTROL, 0, 0, 0);
-}
-
-static int dispc_softreset(struct dispc_device *dispc)
+static void dispc_softreset(struct dispc_device *dispc)
 {
 	u32 val;
-	int ret;
-
-	if (dispc->feat->subrev == DISPC_K2G) {
-		dispc_softreset_k2g(dispc);
-		return 0;
-	}
+	int ret = 0;
 
 	/* Soft reset */
 	REG_FLD_MOD(dispc, DSS_SYSCONFIG, 1, 1, 1);
 	/* Wait for reset to complete */
 	ret = readl_poll_timeout(dispc->base_common + DSS_SYSSTATUS,
 				 val, val & 1, 100, 5000);
-	if (ret) {
-		dev_err(dispc->dev, "failed to reset dispc\n");
-		return ret;
-	}
-
-	return 0;
-}
-
-static int dispc_init_hw(struct dispc_device *dispc)
-{
-	struct device *dev = dispc->dev;
-	int ret;
-
-	ret = pm_runtime_set_active(dev);
-	if (ret) {
-		dev_err(dev, "Failed to set DSS PM to active\n");
-		return ret;
-	}
-
-	ret = clk_prepare_enable(dispc->fclk);
-	if (ret) {
-		dev_err(dev, "Failed to enable DSS fclk\n");
-		goto err_runtime_suspend;
-	}
-
-	ret = dispc_softreset(dispc);
 	if (ret)
-		goto err_clk_disable;
-
-	clk_disable_unprepare(dispc->fclk);
-	ret = pm_runtime_set_suspended(dev);
-	if (ret) {
-		dev_err(dev, "Failed to set DSS PM to suspended\n");
-		return ret;
-	}
-
-	return 0;
-
-err_clk_disable:
-	clk_disable_unprepare(dispc->fclk);
-
-err_runtime_suspend:
-	ret = pm_runtime_set_suspended(dev);
-	if (ret) {
-		dev_err(dev, "Failed to set DSS PM to suspended\n");
-		return ret;
-	}
-
-	return ret;
+		dev_warn(dispc->dev, "failed to reset dispc\n");
 }
 
 int dispc_init(struct tidss_device *tidss)
@@ -2864,8 +2685,6 @@ int dispc_init(struct tidss_device *tidss)
 		if (r)
 			dev_warn(dev, "cannot set DMA masks to 48-bit\n");
 	}
-
-	dma_set_max_seg_size(dev, UINT_MAX);
 
 	dispc = devm_kzalloc(dev, sizeof(*dispc), GFP_KERNEL);
 	if (!dispc)
@@ -2906,6 +2725,10 @@ int dispc_init(struct tidss_device *tidss)
 		if (r)
 			return r;
 	}
+
+	/* K2G display controller does not support soft reset */
+	if (feat->subrev != DISPC_K2G)
+		dispc_softreset(dispc);
 
 	for (i = 0; i < dispc->feat->num_vps; i++) {
 		u32 gamma_size = dispc->feat->vp_feat.color.gamma_size;
@@ -2954,10 +2777,6 @@ int dispc_init(struct tidss_device *tidss)
 
 	of_property_read_u32(dispc->dev->of_node, "max-memory-bandwidth",
 			     &dispc->memory_bandwidth_limit);
-
-	r = dispc_init_hw(dispc);
-	if (r)
-		return r;
 
 	tidss->dispc = dispc;
 

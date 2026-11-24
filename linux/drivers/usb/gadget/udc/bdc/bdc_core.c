@@ -35,8 +35,8 @@ static int poll_oip(struct bdc *bdc, u32 usec)
 	u32 status;
 	int ret;
 
-	ret = readl_poll_timeout_atomic(bdc->regs + BDC_BDCSC, status,
-					(BDC_CSTS(status) != BDC_OIP), 10, usec);
+	ret = readl_poll_timeout(bdc->regs + BDC_BDCSC, status,
+				 (BDC_CSTS(status) != BDC_OIP), 10, usec);
 	if (ret)
 		dev_err(bdc->dev, "operation timedout BDCSC: 0x%08x\n", status);
 	else
@@ -583,7 +583,7 @@ disable_clk:
 	return ret;
 }
 
-static void bdc_remove(struct platform_device *pdev)
+static int bdc_remove(struct platform_device *pdev)
 {
 	struct bdc *bdc;
 
@@ -593,6 +593,7 @@ static void bdc_remove(struct platform_device *pdev)
 	bdc_hw_exit(bdc);
 	bdc_phy_exit(bdc);
 	clk_disable_unprepare(bdc->clk);
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -639,7 +640,6 @@ static const struct of_device_id bdc_of_match[] = {
 	{ .compatible = "brcm,bdc" },
 	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, bdc_of_match);
 
 static struct platform_driver bdc_driver = {
 	.driver		= {
@@ -648,7 +648,7 @@ static struct platform_driver bdc_driver = {
 		.of_match_table	= bdc_of_match,
 	},
 	.probe		= bdc_probe,
-	.remove_new	= bdc_remove,
+	.remove		= bdc_remove,
 };
 
 module_platform_driver(bdc_driver);

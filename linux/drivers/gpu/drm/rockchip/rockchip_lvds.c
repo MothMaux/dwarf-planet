@@ -17,6 +17,7 @@
 #include <linux/regmap.h>
 #include <linux/reset.h>
 
+#include <drm/display/drm_dp_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_bridge.h>
 #include <drm/drm_bridge_connector.h>
@@ -26,6 +27,7 @@
 #include <drm/drm_simple_kms_helper.h>
 
 #include "rockchip_drm_drv.h"
+#include "rockchip_drm_vop.h"
 #include "rockchip_lvds.h"
 
 #define DISPLAY_OUTPUT_RGB		0
@@ -150,7 +152,7 @@ static int rk3288_lvds_poweron(struct rockchip_lvds *lvds)
 		DRM_DEV_ERROR(lvds->dev, "failed to enable lvds pclk %d\n", ret);
 		return ret;
 	}
-	ret = pm_runtime_resume_and_get(lvds->dev);
+	ret = pm_runtime_get_sync(lvds->dev);
 	if (ret < 0) {
 		DRM_DEV_ERROR(lvds->dev, "failed to get pm runtime: %d\n", ret);
 		clk_disable(lvds->pclk);
@@ -334,20 +336,16 @@ static int px30_lvds_poweron(struct rockchip_lvds *lvds)
 {
 	int ret;
 
-	ret = pm_runtime_resume_and_get(lvds->dev);
+	ret = pm_runtime_get_sync(lvds->dev);
 	if (ret < 0) {
 		DRM_DEV_ERROR(lvds->dev, "failed to get pm runtime: %d\n", ret);
 		return ret;
 	}
 
 	/* Enable LVDS mode */
-	ret = regmap_update_bits(lvds->grf, PX30_LVDS_GRF_PD_VO_CON1,
+	return regmap_update_bits(lvds->grf, PX30_LVDS_GRF_PD_VO_CON1,
 				  PX30_LVDS_MODE_EN(1) | PX30_LVDS_P2S_EN(1),
 				  PX30_LVDS_MODE_EN(1) | PX30_LVDS_P2S_EN(1));
-	if (ret)
-		pm_runtime_put(lvds->dev);
-
-	return ret;
 }
 
 static void px30_lvds_poweroff(struct rockchip_lvds *lvds)
@@ -575,7 +573,8 @@ static int rockchip_lvds_bind(struct device *dev, struct device *master,
 		ret = -EINVAL;
 		goto err_put_port;
 	} else if (ret) {
-		dev_err_probe(dev, ret, "failed to find panel and bridge node\n");
+		DRM_DEV_ERROR(dev, "failed to find panel and bridge node\n");
+		ret = -EPROBE_DEFER;
 		goto err_put_port;
 	}
 	if (lvds->panel)
@@ -736,19 +735,21 @@ static int rockchip_lvds_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void rockchip_lvds_remove(struct platform_device *pdev)
+static int rockchip_lvds_remove(struct platform_device *pdev)
 {
 	struct rockchip_lvds *lvds = platform_get_drvdata(pdev);
 
 	component_del(&pdev->dev, &rockchip_lvds_component_ops);
 	clk_unprepare(lvds->pclk);
+
+	return 0;
 }
 
 struct platform_driver rockchip_lvds_driver = {
 	.probe = rockchip_lvds_probe,
-	.remove_new = rockchip_lvds_remove,
+	.remove = rockchip_lvds_remove,
 	.driver = {
 		   .name = "rockchip-lvds",
-		   .of_match_table = rockchip_lvds_dt_ids,
+		   .of_match_table = of_match_ptr(rockchip_lvds_dt_ids),
 	},
 };

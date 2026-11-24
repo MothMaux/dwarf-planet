@@ -14,7 +14,7 @@
 #include <linux/of_irq.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
-#include <linux/gpio/consumer.h>
+#include <linux/of_gpio.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
@@ -53,9 +53,6 @@
 #define XLNX_REQ_PWR_STATE_D0			0x00
 #define XLNX_REQ_PWR_STATE_D3			0x03
 
-/* USB 2.0 IP Register */
-#define XLNX_USB2_TRAFFIC_ROUTE_CONFIG		0x0044
-
 /* Number of retries for USB operations */
 #define DWC3_PWR_STATE_RETRIES			1000
 #define DWC3_PWR_TIMEOUT			100
@@ -77,7 +74,7 @@ struct dwc3_xlnx {
 	struct clk_bulk_data		*clks;
 	struct device			*dev;
 	void __iomem			*regs;
-	const struct dwc3_xlnx_config	*dwc3_config;
+	int				(*pltfm_init)(struct dwc3_xlnx *data);
 	struct phy			*usb3_phy;
 	struct regulator		*dwc3_pmu;
 	struct regulator_dev		*dwc3_xlnx_reg_rdev;
@@ -88,11 +85,6 @@ struct dwc3_xlnx {
 	bool				enable_d3_suspend;
 	enum usb_dr_mode		dr_mode;
 	struct regulator_desc		dwc3_xlnx_reg_desc;
-};
-
-struct dwc3_xlnx_config {
-	int				(*pltfm_init)(struct dwc3_xlnx *data);
-	bool				map_resource;
 };
 
 static const char *const usb_dr_modes[] = {
@@ -378,95 +370,35 @@ static void dwc3_xlnx_mask_phy_rst(struct dwc3_xlnx *priv_data, bool mask)
 	writel(reg, priv_data->regs + XLNX_USB_PHY_RST_EN);
 }
 
-static void dwc3_xlnx_set_coherency(struct dwc3_xlnx *priv_data, u32 coherency_offset)
-{
-	struct device		*dev = priv_data->dev;
-	u32			reg;
-
-	/*
-	 * This routes the USB DMA traffic to go through FPD path instead
-	 * of reaching DDR directly. This traffic routing is needed to
-	 * make SMMU and CCI work with USB DMA.
-	 */
-	if (of_dma_is_coherent(dev->of_node) || device_iommu_mapped(dev)) {
-		reg = readl(priv_data->regs + coherency_offset);
-		reg |= XLNX_USB_TRAFFIC_ROUTE_FPD;
-		writel(reg, priv_data->regs + coherency_offset);
-	}
-}
-
-static int dwc3_xlnx_init_versal2(struct dwc3_xlnx *priv_data)
+static int dwc3_xlnx_init_versal(struct dwc3_xlnx *priv_data)
 {
 	struct device		*dev = priv_data->dev;
 	int			ret;
 
-	priv_data->crst = devm_reset_control_get_optional_exclusive(dev, NULL);
+	priv_data->crst = devm_reset_control_get_exclusive(dev, NULL);
 	if (IS_ERR(priv_data->crst))
 		return dev_err_probe(dev, PTR_ERR(priv_data->crst),
 				     "failed to get reset signal\n");
 
-	priv_data->usb3_phy = devm_phy_optional_get(dev, "usb3-phy");
-	if (IS_ERR(priv_data->usb3_phy)) {
-		ret = PTR_ERR(priv_data->usb3_phy);
-		return dev_err_probe(dev, ret,
-				     "failed to get USB3 PHY\n");
-	}
+	dwc3_xlnx_mask_phy_rst(priv_data, false);
 
 	/* Assert and De-assert reset */
 	ret = reset_control_assert(priv_data->crst);
-	if (ret < 0)
-		return dev_err_probe(dev, ret, "failed to assert Reset\n");
-
-	ret = phy_init(priv_data->usb3_phy);
-	if (ret < 0)
-		return ret;
-
-	ret = reset_control_deassert(priv_data->crst);
-	if (ret < 0) {
-		dev_err(dev, "failed to De-assert Reset\n");
-		goto err_out_phy_exit;
-	}
-
-	ret = phy_power_on(priv_data->usb3_phy);
-	if (ret < 0)
-		goto err_out_phy_exit;
-
-	return 0;
-
-err_out_phy_exit:
-	phy_exit(priv_data->usb3_phy);
-	return ret;
-}
-
-static int dwc3_xlnx_init_versal(struct dwc3_xlnx *priv_data)
-{
-	struct device		*dev = priv_data->dev;
-	struct reset_control	*crst;
-	int			ret;
-
-	crst = devm_reset_control_get_exclusive(dev, NULL);
-	if (IS_ERR(crst))
-		return dev_err_probe(dev, PTR_ERR(crst), "failed to get reset signal\n");
-
-	dwc3_xlnx_mask_phy_rst(priv_data, false);
-
-	priv_data->crst = crst;
-
-	/* Assert and De-assert reset */
-	ret = reset_control_assert(crst);
 	if (ret < 0) {
 		dev_err_probe(dev, ret, "failed to assert Reset\n");
 		return ret;
 	}
 
-	ret = reset_control_deassert(crst);
+	/* reset hold time */
+	usleep_range(5, 10);
+
+	ret = reset_control_deassert(priv_data->crst);
 	if (ret < 0) {
 		dev_err_probe(dev, ret, "failed to De-assert Reset\n");
 		return ret;
 	}
 
 	dwc3_xlnx_mask_phy_rst(priv_data, true);
-	dwc3_xlnx_set_coherency(priv_data, XLNX_USB2_TRAFFIC_ROUTE_CONFIG);
 
 	return 0;
 }
@@ -477,6 +409,7 @@ static int dwc3_xlnx_init_zynqmp(struct dwc3_xlnx *priv_data)
 	struct reset_control	*crst, *hibrst, *apbrst;
 	struct gpio_desc	*reset_gpio;
 	int			ret = 0;
+	u32			reg;
 
 	priv_data->usb3_phy = devm_phy_optional_get(dev, "usb3-phy");
 	if (IS_ERR(priv_data->usb3_phy)) {
@@ -495,11 +428,8 @@ static int dwc3_xlnx_init_zynqmp(struct dwc3_xlnx *priv_data)
 	 * in use but the usb3-phy entry is missing from the device tree.
 	 * Therefore, skip these operations in this case.
 	 */
-	if (!priv_data->usb3_phy) {
-		/* Deselect the PIPE Clock Select bit in FPD PIPE Clock register */
-		writel(PIPE_CLK_DESELECT, priv_data->regs + XLNX_USB_FPD_PIPE_CLK);
+	if (!priv_data->usb3_phy)
 		goto skip_usb3_phy;
-	}
 
 	crst = devm_reset_control_get_exclusive(dev, "usb_crst");
 	if (IS_ERR(crst)) {
@@ -583,19 +513,31 @@ static int dwc3_xlnx_init_zynqmp(struct dwc3_xlnx *priv_data)
 
 skip_usb3_phy:
 	/* ulpi reset via gpio-modepin or gpio-framework driver */
-	reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+	reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(reset_gpio)) {
 		return dev_err_probe(dev, PTR_ERR(reset_gpio),
 				     "Failed to request reset GPIO\n");
 	}
 
 	if (reset_gpio) {
+		/* Toggle ulpi to reset the phy. */
+		gpiod_set_value_cansleep(reset_gpio, 1);
 		usleep_range(5000, 10000);
 		gpiod_set_value_cansleep(reset_gpio, 0);
 		usleep_range(5000, 10000);
 	}
 
-	dwc3_xlnx_set_coherency(priv_data, XLNX_USB_TRAFFIC_ROUTE_CONFIG);
+	/*
+	 * This routes the USB DMA traffic to go through FPD path instead
+	 * of reaching DDR directly. This traffic routing is needed to
+	 * make SMMU and CCI work with USB DMA.
+	 */
+	if (of_dma_is_coherent(dev->of_node) || device_iommu_mapped(dev)) {
+		reg = readl(priv_data->regs + XLNX_USB_TRAFFIC_ROUTE_CONFIG);
+		reg |= XLNX_USB_TRAFFIC_ROUTE_FPD;
+		writel(reg, priv_data->regs + XLNX_USB_TRAFFIC_ROUTE_CONFIG);
+	}
+
 err:
 	return ret;
 }
@@ -654,61 +596,18 @@ static irqreturn_t dwc3_xlnx_resume_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static const struct dwc3_xlnx_config zynqmp_config = {
-	.pltfm_init = dwc3_xlnx_init_zynqmp,
-	.map_resource = true,
-};
-
-static const struct dwc3_xlnx_config versal_config = {
-	.pltfm_init = dwc3_xlnx_init_versal,
-	.map_resource = true,
-};
-
-static const struct dwc3_xlnx_config versal2_config = {
-	.pltfm_init = dwc3_xlnx_init_versal2,
-};
-
 static const struct of_device_id dwc3_xlnx_of_match[] = {
 	{
 		.compatible = "xlnx,zynqmp-dwc3",
-		.data = &zynqmp_config,
+		.data = &dwc3_xlnx_init_zynqmp,
 	},
 	{
 		.compatible = "xlnx,versal-dwc3",
-		.data = &versal_config,
-	},
-	{
-		.compatible = "xlnx,versal2-mmi-dwc3",
-		.data = &versal2_config,
+		.data = &dwc3_xlnx_init_versal,
 	},
 	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, dwc3_xlnx_of_match);
-
-static int dwc3_set_swnode(struct device *dev)
-{
-	struct device_node *np = dev->of_node, *dwc3_np;
-	struct property_entry props[2];
-	int prop_idx = 0, ret = 0;
-
-	dwc3_np = of_get_compatible_child(np, "snps,dwc3");
-	if (!dwc3_np) {
-		ret = -ENODEV;
-		dev_err(dev, "failed to find dwc3 core child\n");
-		return ret;
-	}
-
-	memset(props, 0, sizeof(struct property_entry) * ARRAY_SIZE(props));
-	if (of_dma_is_coherent(dwc3_np))
-		props[prop_idx++] = PROPERTY_ENTRY_U16("snps,gsbuscfg0-reqinfo",
-						       0xffff);
-	of_node_put(dwc3_np);
-
-	if (prop_idx)
-		ret = device_create_managed_software_node(dev, props, NULL);
-
-	return ret;
-}
 
 static int dwc3_xlnx_probe(struct platform_device *pdev)
 {
@@ -726,21 +625,21 @@ static int dwc3_xlnx_probe(struct platform_device *pdev)
 	if (!priv_data)
 		return -ENOMEM;
 
+	regs = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(regs)) {
+		ret = PTR_ERR(regs);
+		dev_err_probe(dev, ret, "failed to map registers\n");
+		return ret;
+	}
+
 	match = of_match_node(dwc3_xlnx_of_match, pdev->dev.of_node);
 
 	dwc3_child_node = of_get_next_child(pdev->dev.of_node, dwc3_child_node);
 	if (!dwc3_child_node)
 		return -ENODEV;
 
-	priv_data->dwc3_config = match->data;
-	if (priv_data->dwc3_config->map_resource) {
-		regs = devm_platform_ioremap_resource(pdev, 0);
-		if (IS_ERR(regs))
-			return dev_err_probe(dev, PTR_ERR(regs),
-					     "failed to map registers\n");
-		priv_data->regs = regs;
-	}
-
+	priv_data->pltfm_init = match->data;
+	priv_data->regs = regs;
 	priv_data->dev = dev;
 
 	/* get the dr_mode from child node */
@@ -804,11 +703,7 @@ static int dwc3_xlnx_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ret = priv_data->dwc3_config->pltfm_init(priv_data);
-	if (ret)
-		goto err_clk_put;
-
-	ret = dwc3_set_swnode(dev);
+	ret = priv_data->pltfm_init(priv_data);
 	if (ret)
 		goto err_clk_put;
 
@@ -817,20 +712,15 @@ static int dwc3_xlnx_probe(struct platform_device *pdev)
 		goto err_clk_put;
 
 	pm_runtime_set_active(dev);
-	ret = devm_pm_runtime_enable(dev);
-	if (ret < 0)
-		goto err_pm_set_suspended;
-
+	pm_runtime_enable(dev);
 	pm_suspend_ignore_children(dev, false);
 	ret = pm_runtime_resume_and_get(dev);
-	if (ret < 0)
-		goto err_pm_set_suspended;
+	if (ret < 0) {
+		pm_runtime_disable(dev);
+		return ret;
+	}
 
 	return 0;
-
-err_pm_set_suspended:
-	of_platform_depopulate(dev);
-	pm_runtime_set_suspended(dev);
 
 err_clk_put:
 	clk_bulk_disable_unprepare(priv_data->num_clocks, priv_data->clks);
@@ -838,25 +728,28 @@ err_clk_put:
 	return ret;
 }
 
-static void dwc3_xlnx_remove(struct platform_device *pdev)
+static int dwc3_xlnx_remove(struct platform_device *pdev)
 {
 	struct dwc3_xlnx	*priv_data = platform_get_drvdata(pdev);
 	struct device		*dev = &pdev->dev;
 
 	of_platform_depopulate(dev);
 
-	if (priv_data->wakeup_irq > 0)
-		/* disable PME wakeup interrupt */
-		writel(XLNX_PME_DISABLE_SIG_GEN,
-		       priv_data->regs + XLNX_VERSAL_USB_PME_ENABLE);
+	/* disable PME wakeup interrupt */
+	writel(XLNX_PME_DISABLE_SIG_GEN,
+	       priv_data->regs + XLNX_VERSAL_USB_PME_ENABLE);
 
 	/* Unregister the dwc3-xilinx wakeup function from dwc3 host */
 	dwc3_host_wakeup_register(NULL);
+	devm_free_irq(dev, priv_data->wakeup_irq, priv_data);
 	clk_bulk_disable_unprepare(priv_data->num_clocks, priv_data->clks);
 	priv_data->num_clocks = 0;
 
+	pm_runtime_disable(dev);
 	pm_runtime_put_noidle(dev);
 	pm_runtime_set_suspended(dev);
+
+	return 0;
 }
 
 static int __maybe_unused dwc3_xlnx_runtime_suspend(struct device *dev)
@@ -941,7 +834,7 @@ static const struct dev_pm_ops dwc3_xlnx_dev_pm_ops = {
 
 static struct platform_driver dwc3_xlnx_driver = {
 	.probe		= dwc3_xlnx_probe,
-	.remove_new	= dwc3_xlnx_remove,
+	.remove		= dwc3_xlnx_remove,
 	.driver		= {
 		.name		= "dwc3-xilinx",
 		.of_match_table	= dwc3_xlnx_of_match,
