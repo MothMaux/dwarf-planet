@@ -273,7 +273,7 @@
 		"fi; \0" \
 	"refclk_source=internal\0" \
 	"mode=1r1t\0" \
-	"adi_loadvals_pluto=if test -n \"${ad936x_ext_refclk}\" && test ! -n \"${ad936x_skip_ext_refclk}\"; then " \
+	"adi_loadvals_sdr=if test -n \"${ad936x_ext_refclk}\" && test ! -n \"${ad936x_skip_ext_refclk}\"; then " \
 			"fdt set /clocks/clock@0 clock-frequency ${ad936x_ext_refclk}; " \
 		"fi; " \
 		"if test -n \"${ad936x_ext_refclk_override}\"; then " \
@@ -283,13 +283,13 @@
 			"setenv refclk_source internal; " \
 			"saveenv; " \
 		"fi; " \
-		"if test \"${refclk_source}\" = \"internal\" && test \"${model}\" = \"Analog Devices PlutoSDR Rev.C (Z7010/AD9363)\" ; then " \
+		"if test \"${refclk_source}\" = \"internal\"; then " \
 			"fdt rm /amba/gpio@e000a000/clock_extern_en || fdt rm /axi/gpio@e000a000/clock_extern_en; " \
 		"fi; " \
-		"if test \"${refclk_source}\" = \"external\" && test \"${model}\" = \"Analog Devices PlutoSDR Rev.C (Z7010/AD9363)\" ; then " \
+		"if test \"${refclk_source}\" = \"external\"; then " \
 			"fdt rm /amba/gpio@e000a000/clock_internal_en || fdt rm /axi/gpio@e000a000/clock_internal_en; " \
 		"fi; " \
-		"if test  \"${attr_val}\" = \"ad9361\" && test ! \"${model}\" = \"Analog Devices PlutoSDR Rev.C (Z7010/AD9363)\" ; then " \
+		"if test  \"${attr_val}\" = \"ad9361\"; then " \
 			"setenv attr_val ad9363a; " \
 			"saveenv; " \
 		"fi; " \
@@ -304,11 +304,11 @@
 		"if test -n \"${attr_name}\" && test -n \"${attr_val}\"; then " \
 			"fdt set /amba/spi@e0006000/ad9361-phy@0 ${attr_name} ${attr_val} || fdt set /axi/spi@e0006000/ad9361-phy@0 ${attr_name} ${attr_val}; " \
                 "fi; " \
-		"if test \"${mode}\" = \"1r1t\" && test \"${model}\" = \"Analog Devices PlutoSDR Rev.C (Z7010/AD9363)\"; then " \
+		"if test \"${mode}\" = \"1r1t\"; then " \
 			"fdt rm /amba/spi@e0006000/ad9361-phy@0 adi,2rx-2tx-mode-enable || fdt rm /axi/spi@e0006000/ad9361-phy@0 adi,2rx-2tx-mode-enable; " \
 			"fdt set /fpga-axi/cf-ad9361-dds-core-lpc@79024000 compatible adi,axi-ad9364-dds-6.00.a; " \
 		"fi; " \
-		"if test -n \"${cs_gpio}\" && test \"${model}\" = \"Analog Devices PlutoSDR Rev.C (Z7010/AD9363)\"; then " \
+		"if test -n \"${cs_gpio}\"; then " \
 			"fdt set /amba/axi_quad_spi@7C430000/ cs-gpios \"<0x06 ${cs_gpio} 0>\" || fdt set /axi/axi_quad_spi@7C430000/ cs-gpios \"<0x06 ${cs_gpio} 0>\"; " \
 		"fi; " \
 		"if test -n \"${attr_val}\" && test \"${attr_val}\" = \"ad9364\"; then " \
@@ -322,9 +322,7 @@
 	"adi_loadvals=fdt addr ${fit_load_address} && fdt get value fdt_choosen /configurations/${fit_config}/ fdt && " \
 		"fdt get addr fdtaddr /images/${fdt_choosen} data && fdt addr ${fdtaddr}; "\
 		"fdt get value model / model; " \
-		"if test \"${model}\" \> \"Analog Devices Pluto\"; then " \
-			"run adi_loadvals_pluto; " \
-		"fi; \0" \
+		"run adi_loadvals_sdr; \0" \
 	"qspiboot_extraenv=sf read ${extraenv_load_address} 0xFF000 0x1000 && " \
 		"env import -c ${extraenv_load_address} 0x1000 || true \0" \
 	"read_sf=sf probe 0:0 50000000 0 && run qspiboot_extraenv &&" \
@@ -370,8 +368,9 @@
 		"echo Copying Linux from SD to RAM... && " \
 		"load mmc 0 ${fit_load_address} ${kernel_image} && " \
 		"load mmc 0 ${devicetree_load_address} ${devicetree_image} && " \
-		"load mmc 0 ${ramdisk_load_address} ${ramdisk_image} && " \
-		"bootm ${fit_load_address} ${ramdisk_load_address} ${devicetree_load_address}; " \
+		"load mmc 0 ${ramdisk_load_address} ${ramdisk_image}; " \
+		"echo idk it needs an echo here && fdt addr ${devicetree_load_address}; run adi_loadvals; " \
+		"echo idk it needs an echo here && bootm ${fit_load_address} ${ramdisk_load_address} ${devicetree_load_address}; " \
 		"fi\0" \
 	"usbboot=if usb start; then " \
 			"run uenvboot; " \
