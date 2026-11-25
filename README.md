@@ -1,13 +1,23 @@
-# plutosdr-fw
-PlutoSDR Firmware for the [ADALM-PLUTO](https://wiki.analog.com/university/tools/pluto "PlutoSDR Wiki Page") Active Learning Module
+# Firmware for pluto-based SDRs
 
-Latest binary Release : [![GitHub Release](https://img.shields.io/github/release/analogdevicesinc/plutosdr-fw.svg)](https://github.com/analogdevicesinc/plutosdr-fw/releases/latest)  [![Github Releases](https://img.shields.io/github/downloads/analogdevicesinc/plutosdr-fw/total.svg)](https://github.com/analogdevicesinc/plutosdr-fw/releases/latest)
+Made to be a minimal, performance-first firmware project for SDRs
 
-Firmware License : [![Many Licenses](https://img.shields.io/badge/license-LGPL2+-blue.svg)](https://github.com/analogdevicesinc/plutosdr-fw/blob/master/LICENSE.md)  [![Many License](https://img.shields.io/badge/license-GPL2+-blue.svg)](https://github.com/analogdevicesinc/plutosdr-fw/blob/master/LICENSE.md)  [![Many License](https://img.shields.io/badge/license-BSD-blue.svg)](https://github.com/analogdevicesinc/plutosdr-fw/blob/master/LICENSE.md)  [![Many License](https://img.shields.io/badge/license-apache-blue.svg)](https://github.com/analogdevicesinc/plutosdr-fw/blob/master/LICENSE.md) and many others.
+Features:
+- CS8 mode compatible with [GobDump](https://github.com/MTalon63/GobDump)
 
-[Instructions from the Wiki: Building the image](https://wiki.analog.com/university/tools/pluto/building_the_image)
+Current changes:
+- Updated to the 0.39r tag of plutosdr-fw for linux, u-boot, and buildroot. HDL updated to 4840c81
+- Added LibreSDR Board (verified working)
+- Fixed sdboot loading environment values
 
-* Build Instructions
+Roadmap:
+- Add more boards
+- Add release files
+- Easier overclock process
+- Debloating
+- More easily switch modes for certain features
+
+# Build Instructions
 ```bash
  sudo apt-get install git build-essential fakeroot libncurses5-dev libssl-dev ccache
  sudo apt-get install dfu-util u-boot-tools device-tree-compiler mtools
@@ -21,6 +31,8 @@ Firmware License : [![Many Licenses](https://img.shields.io/badge/license-LGPL2+
 
 For errors about `xsct` when building, ensure that Vitis / Vitis Unified XX is installed and sourced. Vitis HLS is not the same.
 For improper usage errors, uninstall the apt package xsct which is a different package for x11
+
+For errors when building the hdl/projects/$target make sure that you have set the source for Vivado & added sufficient permissions for the user that executed `make`
 
 Due to incompatibility between the AMD/Xilinx GCC toolchain supplied with Vivado/Vitis and Buildroot,
 this project uses the Buildroot external toolchain infrastructure with the Arm GNU toolchain
