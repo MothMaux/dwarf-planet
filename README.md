@@ -23,22 +23,25 @@ Roadmap:
  sudo apt-get install dfu-util u-boot-tools device-tree-compiler mtools
  sudo apt-get install bc python3 cpio zip unzip rsync file wget
  git clone --recursive https://github.com/mothmaux/dwarf-planet.git
- cd plutosdr-fw
+ cd dwarf-planet
  export VIVADO_SETTINGS=/tools/Xilinx/2025.1/Vivado/settings64.sh
- make
+ make TARGET=$target
+ make sdimg TARGET=$target
 
 ```
+* Build targets
+
+    PlutoSDR : pluto (default)
+    LibreSDR : libre
+    AntSDR   : ant
+    NanoSDR  : nano
+
+* Common issues when building
 
 For errors about `xsct` when building, ensure that Vitis / Vitis Unified XX is installed and sourced. Vitis HLS is not the same.
 For improper usage errors, uninstall the apt package xsct which is a different package for x11
 
 For errors when building the hdl/projects/$target make sure that you have set the source for Vivado & added sufficient permissions for the user that executed `make`
-
-Due to incompatibility between the AMD/Xilinx GCC toolchain supplied with Vivado/Vitis and Buildroot,
-this project uses the Buildroot external toolchain infrastructure with the Arm GNU toolchain
-(arm-none-linux-gnueabihf), which is downloaded and set up automatically during the build.
-
-This toolchain is used to build: Buildroot, Linux and u-boot
 
 * Repository layout
 
@@ -50,16 +53,7 @@ This toolchain is used to build: Buildroot, Linux and u-boot
      | buildroot | Buildroot tree used to build the toolchain and root filesystem |
      | br2-external | Buildroot external tree with the ADI board files (board/adi/pluto) and defconfigs |
 
-* Build targets
 
-    PlutoSDR : pluto (default)
-    LibreSDR : libre
-    AntSDR   : ant
-    NanoSDR  : nano
-    
-```bash
- make TARGET=libre
-```
 
  * Updating your local repository 
  ```bash 
@@ -138,7 +132,7 @@ This toolchain is used to build: Buildroot, Linux and u-boot
      | zynq-pluto-sdr-revc.dtb | Device Tree Blob for Rev.C|
  
 * To add a board layout:
-add target to list in ~/makefile
+add target to list in ./makefile
 
 add defconfigs in 
 
