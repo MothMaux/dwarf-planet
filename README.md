@@ -4,6 +4,7 @@ Made to be a minimal, performance-first firmware project for SDRs
 
 Features:
 - CS8 mode compatible with [GobDump](https://github.com/MTalon63/GobDump)
+- Overclocking
 
 Current changes:
 - Updated to the 0.39r tag of plutosdr-fw for linux, u-boot, and buildroot. HDL updated to 4840c81
@@ -13,7 +14,6 @@ Current changes:
 Roadmap:
 - Add more boards
 - Add release files
-- Easier overclock process
 - Debloating
 - More easily switch modes for certain features
 
@@ -27,12 +27,16 @@ Roadmap:
  export VIVADO_SETTINGS=/tools/Xilinx/2025.1/Vivado/settings64.sh
  make TARGET=$target
  make sdimg TARGET=$target
+ # Optional if you want to make overclocks, creates an overclocked bin and records address offsets.
+ make sdimg_oc TARGET=$target CPU=40 MEM=28
 
 ```
 * Build targets
 
     PlutoSDR : pluto (default)
     LibreSDR : libre
+    Fishball : fishball7010
+             : fishball7020
     AntSDR   : ant
     NanoSDR  : nano
 
@@ -42,6 +46,16 @@ For errors about `xsct` when building, ensure that Vitis / Vitis Unified XX is i
 For improper usage errors, uninstall the apt package xsct which is a different package for x11
 
 For errors when building the hdl/projects/$target make sure that you have set the source for Vivado & added sufficient permissions for the user that executed `make`
+
+* Overclocking
+Releases are yet to come, but will include all needed files for overclocking. 
+```bash
+cd ./build_sdimg
+bash ./overclock.sh 40 28
+# replace with your chosen CLK multipliers
+cp ./overclocks/FSBL_40_28 ./BOOT.bin
+cp ./* /your/sd/card/
+```
 
 * Repository layout
 
@@ -54,49 +68,6 @@ For errors when building the hdl/projects/$target make sure that you have set th
      | br2-external | Buildroot external tree with the ADI board files (board/adi/pluto) and defconfigs |
 
 
-
- * Updating your local repository 
- ```bash 
-      git pull --recurse-submodules
-  ```
-   
-* Build Artifacts
- ```bash
-      michael@HAL9000:~/devel/plutosdr-fw$ ls -AGhl build
-      total 868M
-      -rw-rw-r-- 1 michael   69 Aug  3 15:11 boot.bif
-      -rw-rw-r-- 1 michael 625K Aug  3 15:11 boot.bin
-      -rw-rw-r-- 1 michael 625K Aug  3 15:11 boot.dfu
-      -rw-rw-r-- 1 michael 754K Aug  3 15:11 boot.frm
-      -rw-rw-r-- 1 michael 778M Aug  3 15:12 legal-info-v0.39.tar.gz
-      -rw-rw-r-- 1 michael 822K Aug  3 15:10 LICENSE.html
-      -rw-rw-r-- 1 michael  14M Aug  3 15:11 pluto.dfu
-      -rw-rw-r-- 1 michael  14M Aug  3 15:11 pluto.frm
-      -rw-rw-r-- 1 michael   33 Aug  3 15:11 pluto.frm.md5
-      -rw-rw-r-- 1 michael  14M Aug  3 15:11 pluto.itb
-      -rw-rw-r-- 1 michael  28M Aug  3 15:11 plutosdr-fw-v0.39.zip
-      -rw-rw-r-- 1 michael 682K Aug  3 15:11 plutosdr-jtag-bootstrap-v0.39.zip
-      -rw-rw-r-- 1 michael 441K Aug  3 15:10 ps7_init.c
-      -rw-rw-r-- 1 michael 442K Aug  3 15:10 ps7_init_gpl.c
-      -rw-rw-r-- 1 michael 4,2K Aug  3 15:10 ps7_init_gpl.h
-      -rw-rw-r-- 1 michael 3,6K Aug  3 15:10 ps7_init.h
-      -rw-rw-r-- 1 michael 2,4M Aug  3 15:10 ps7_init.html
-      -rw-rw-r-- 1 michael  31K Aug  3 15:10 ps7_init.tcl
-      -rw-r--r-- 1 michael 8,3M Aug  3 15:10 rootfs.cpio.gz
-      drwxrwxr-x 2 michael 4,0K Aug  3 15:12 sbom
-      drwxrwxr-x 6 michael 4,0K Aug  3 15:11 sdk
-      -rw-rw-r-- 1 michael 943K Aug  3 15:10 system_top.bit
-      -rw-rw-r-- 1 michael 737K Aug  3 15:10 system_top.xsa
-      -rwxrwxr-x 1 michael 602K Aug  3 15:11 u-boot.elf
-      -rw-rw---- 1 michael 128K Aug  3 15:11 uboot-env.bin
-      -rw-rw---- 1 michael 129K Aug  3 15:11 uboot-env.dfu
-      -rw-rw-r-- 1 michael 6,6K Aug  3 15:11 uboot-env.txt
-      -rwxrwxr-x 1 michael 4,7M Aug  3 15:09 zImage
-      -rw-rw-r-- 1 michael  22K Aug  3 15:10 zynq-pluto-sdr.dtb
-      -rw-rw-r-- 1 michael  22K Aug  3 15:10 zynq-pluto-sdr-revb.dtb
-      -rw-rw-r-- 1 michael  24K Aug  3 15:10 zynq-pluto-sdr-revc.dtb
-
- ```
  
  * Main targets
  
